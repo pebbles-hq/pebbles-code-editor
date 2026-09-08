@@ -1,0 +1,17 @@
+[package]
+name = "demo"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+
+[dependencies]
+pebbles = { git = "https://github.com/pebbles-hq/pebbles" }
+pebbles-code-editor = { path = "../.." }
+
+# Headless render (SHOT=<w>:<h>:<out.rgba>) so the editor can be screenshotted without a
+# display — rasterizes through vello_hybrid, the framework's default backend.
+vello = { version = "0.10", default-features = true }
+vello_hybrid = "0.2"
+wgpu = "29"
+pollster = "1"

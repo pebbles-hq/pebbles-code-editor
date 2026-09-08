@@ -1,0 +1,24 @@
+# pebbles-code-editor — a reusable, embeddable code editor widget for the Pebbles GUI
+# framework. Syntax highlighting (pluggable languages), a line-number gutter, current-
+# line highlight, selection + caret, and swappable themes. Built to be the foundation
+# an IDE can grow on. Depends on the `pebbles` framework by git.
+[workspace]
+members = [".", "examples/demo"]
+
+[package]
+name = "pebbles-code-editor"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+description = "An embeddable, syntax-highlighting code editor widget for the Pebbles GUI framework."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/pebbles-hq/pebbles-code-editor"
+
+[dependencies]
+pebbles = { git = "https://github.com/pebbles-hq/pebbles" }
+
+[profile.dev]
+opt-level = 0
+
+[profile.dev.package."*"]
+opt-level = 2
