@@ -4,9 +4,9 @@ An embeddable, syntax-highlighting **code editor** widget for the
 [Pebbles](https://github.com/pebbles-hq/pebbles) GUI framework — built to be the
 foundation an IDE or code-first tool can grow on.
 
-Like every serious editor (CodeMirror, Monaco, AvaloniaEdit), it's a **custom editing
-engine** — it owns the buffer, cursor, selection, layout, and input rather than reusing
-the framework's text field. Code is monospace, so it renders on a fixed grid, which
+It's a **custom editing engine** — it owns the buffer, cursor, selection, layout, and
+input rather than reusing the framework's text field. Code is monospace, so it renders
+on a fixed grid, which
 keeps caret placement and click hit-testing exact and cheap.
 
 ![demo](docs/demo.png)
@@ -41,7 +41,7 @@ fn view() -> impl IntoWidget {
   and a status bar (filename · language · line/col).
 - **Themes** (`EditorTheme`) — `dark` and `light` bundled, or build your own.
 
-## Configurable (CodeMirror-style)
+## Configurable
 
 Every knob is a builder on `code_editor(...)`:
 
@@ -92,7 +92,7 @@ SHOT=1100:760:/tmp/editor.rgba cargo run -p demo
 ## Status & roadmap
 
 The editing engine, highlighting, gutter, selection, caret, and mouse are working today.
-Known limitations and what's next, toward CodeMirror-grade:
+Known limitations and what's next:
 
 - **Undo / redo** and IME composition.
 - **Caret blink** and viewport scroll-to-caret on keyboard navigation.

@@ -10,8 +10,9 @@ name = "pebbles-code-editor"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.90"
-description = "An embeddable, syntax-highlighting code editor widget for the Pebbles GUI framework."
-license = "MIT OR Apache-2.0"
+description = "Embeddable, syntax-highlighting code editor widget for the Pebbles GUI framework — a custom editing engine with pluggable languages, a gutter, selection, and swappable themes. Part of the Pebbles ecosystem."
+authors = ["Reyco Seguma"]
+license = "Apache-2.0"
 repository = "https://github.com/pebbles-hq/pebbles-code-editor"
 
 [dependencies]

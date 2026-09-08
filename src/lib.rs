@@ -4,9 +4,9 @@
 //! [Pebbles](https://github.com/pebbles-hq/pebbles) GUI framework — the foundation to
 //! build an IDE on.
 //!
-//! Like every serious editor (CodeMirror, Monaco, AvaloniaEdit), this is a **custom
-//! editing engine**, not the framework's text field: it owns the buffer, cursor,
-//! selection, layout, and input. Because code is monospace it renders on a fixed grid
+//! This is a **custom editing engine**, not the framework's text field: it owns the
+//! buffer, cursor, selection, layout, and input. Because code is monospace it renders
+//! on a fixed grid
 //! (caret x = column × advance, line y = row × line-height), which keeps caret placement
 //! and click hit-testing exact and cheap.
 //!
