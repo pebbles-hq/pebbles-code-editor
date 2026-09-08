@@ -294,14 +294,15 @@ fn render_editor(p: &Props) -> AnyWidget {
         click_area.into_widget()
     };
 
-    let scroller = scroll_view(body);
+    // With a fixed height the editor scrolls within a viewport; without one it grows to
+    // its content (for inline, read-only snippets embedded in a page).
     let code_area: AnyWidget = match p.height {
         Some(h) => container()
             .height(h)
             .decoration(BoxDecoration::new().color(theme.background))
-            .child(scroller)
+            .child(scroll_view(body))
             .into_widget(),
-        None => container().decoration(BoxDecoration::new().color(theme.background)).child(scroller).into_widget(),
+        None => container().decoration(BoxDecoration::new().color(theme.background)).child(body).into_widget(),
     };
 
     // ---- chrome ----
