@@ -20,6 +20,10 @@ pub struct EditorTheme {
     pub gutter_active_fg: Color,
     /// The current-line highlight band.
     pub current_line: Color,
+    /// The text caret.
+    pub caret: Color,
+    /// The selection highlight.
+    pub selection: Color,
     /// Default text (identifiers, whitespace, unclassified tokens).
     pub foreground: Color,
     /// Per-token colors.
@@ -64,6 +68,8 @@ impl EditorTheme {
             gutter_fg: c(0x44, 0x4C, 0x5C),
             gutter_active_fg: c(0x9A, 0xA4, 0xB8),
             current_line: Color::from_rgba8(0xFF, 0xFF, 0xFF, 0x0C),
+            caret: c(0x8A, 0xB4, 0xF8),
+            selection: Color::from_rgba8(0x3D, 0x59, 0x8F, 0x66),
             foreground: c(0xD7, 0xDC, 0xE6),
             keyword: c(0xC5, 0x92, 0xF0),   // violet
             type_: c(0x6C, 0xD1, 0xC0),     // teal
@@ -88,6 +94,8 @@ impl EditorTheme {
             gutter_fg: c(0xB6, 0xBD, 0xC9),
             gutter_active_fg: c(0x5A, 0x63, 0x72),
             current_line: Color::from_rgba8(0x00, 0x00, 0x00, 0x08),
+            caret: c(0x24, 0x5F, 0xC2),
+            selection: Color::from_rgba8(0x2F, 0x62, 0xE0, 0x33),
             foreground: c(0x24, 0x29, 0x33),
             keyword: c(0x8A, 0x3F, 0xC8),
             type_: c(0x0F, 0x86, 0x8E),

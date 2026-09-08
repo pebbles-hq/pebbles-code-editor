@@ -4,6 +4,11 @@ An embeddable, syntax-highlighting **code editor** widget for the
 [Pebbles](https://github.com/pebbles-hq/pebbles) GUI framework — built to be the
 foundation an IDE or code-first tool can grow on.
 
+Like every serious editor (CodeMirror, Monaco, AvaloniaEdit), it's a **custom editing
+engine** — it owns the buffer, cursor, selection, layout, and input rather than reusing
+the framework's text field. Code is monospace, so it renders on a fixed grid, which
+keeps caret placement and click hit-testing exact and cheap.
+
 ![demo](docs/demo.png)
 
 ```rust
@@ -16,24 +21,27 @@ fn view() -> impl IntoWidget {
         .language(Box::new(Rust))
         .theme(EditorTheme::dark())
         .title("main.rs")
+        .autofocus()
         .height(420.0)
 }
 ```
 
-## What's here (v0.1)
+## Features
 
-- **Syntax highlighting** via a pluggable [`Language`] layer. **Rust** and **JSON** are
+- **Real editing** — type, backspace / delete, word-delete (Ctrl+Backspace/Delete),
+  Enter with **auto-indent**, arrows, word / line / document motions, **Shift-select**,
+  Ctrl+A, and **Copy / Cut / Paste**. The buffer is the `Signal<String>` you pass in.
+- **Mouse** — click to place the caret, drag to select.
+- **Syntax highlighting** via a pluggable [`Language`] layer — **Rust** and **JSON**
   bundled; add a grammar by implementing one trait method.
-- **Line-number gutter** and editor chrome (a status bar with the filename, language,
-  and line count).
-- **Themes** (`EditorTheme`) — `dark` and `light` bundled, or build your own by filling
-  the struct (an IDE would expose a picker over these).
-- **Monospace, grid-aligned, scrollable** rendering. The buffer lives in the `Signal`
-  you pass in, so programmatic edits re-render live.
+- **Gutter** with an active-line marker, **current-line highlight**, selection, caret,
+  and a status bar (filename · language · line/col).
+- **Themes** (`EditorTheme`) — `dark` and `light` bundled, or build your own.
+- Read-only mode (`.read_only(true)`) — still navigable, selectable, copyable.
 
 ## Extending it — add a language
 
-A highlighter is just a function from source to tagged byte ranges:
+A highlighter is a function from source to tagged byte ranges:
 
 ```rust
 use pebbles_code_editor::lang::{Language, Token, TokenKind};
@@ -49,7 +57,7 @@ impl Language for Toml {
 ```
 
 The editor maps each [`TokenKind`] to a color through the active theme, so a new
-language is highlighted the moment you return its tokens. The bundled scanners are
+language highlights the moment you return its tokens. The bundled scanners are
 hand-written, dependency-free, and **panic-free on any input** (an editor is full of
 half-typed, invalid source).
 
@@ -61,20 +69,18 @@ cargo run -p demo
 SHOT=1100:760:/tmp/editor.rgba cargo run -p demo
 ```
 
-## Roadmap — toward CodeMirror-grade
+## Status & roadmap
 
-v0.1 is the **highlighted render pane** every editor is built around, plus the
-pluggable-language + theme system. The next milestones:
+The editing engine, highlighting, gutter, selection, caret, and mouse are working today.
+Known limitations and what's next, toward CodeMirror-grade:
 
-1. **Live in-place editing** (caret, selection, keystrokes over the *highlighted* text).
-   This needs a small enhancement in the framework's text engine: the editable
-   (`RenderTextField`) currently paints a single color, so a highlighted overlay can't
-   align to it. The fix is to let the editable paint **styled runs** — then this widget
-   feeds it the same tokens it colors with today and editing + highlighting become one
-   layer. (Tracked upstream in `pebbles`.)
-2. Current-line highlight, bracket matching, active-line gutter.
-3. Search / replace, code folding, multiple selections.
-4. A completion / diagnostics surface an LSP client can drive.
+- **Undo / redo** and IME composition.
+- **Caret blink** and viewport scroll-to-caret on keyboard navigation.
+- Horizontal scrolling for very long lines (they currently extend past the viewport).
+- Bracket matching, code folding, search / replace, multiple selections.
+- A completion / diagnostics surface an LSP client can drive.
+- Glyph-accurate metrics (v1 uses a monospace advance ratio; fine for mono fonts, and
+  the one spot to refine for proportional or ligature-heavy fonts).
 
 ## License
 

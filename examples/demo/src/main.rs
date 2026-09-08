@@ -50,7 +50,7 @@ fn app() -> AnyWidget {
             column(children![
                 text("Pebbles Code Editor").size(22.0).bold().color(c.foreground),
                 gap_h(4.0),
-                text("Syntax highlighting · line-number gutter · pluggable languages · themes")
+                text("Syntax highlighting · line-number gutter · real editing · pluggable languages")
                     .size(13.5)
                     .color(c.muted_foreground),
                 gap_h(20.0),
@@ -58,6 +58,7 @@ fn app() -> AnyWidget {
                     .language(Box::new(lang::Rust))
                     .theme(EditorTheme::dark())
                     .title("main.rs")
+                    .autofocus()
                     .height(430.0),
                 gap_h(18.0),
                 code_editor(json)
