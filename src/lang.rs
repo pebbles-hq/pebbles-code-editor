@@ -275,6 +275,277 @@ impl Language for Rust {
 }
 
 // ---------------------------------------------------------------------------
+// C-family (JavaScript, TypeScript, Go, C/C++, Java, …) — one parameterized scanner
+// ---------------------------------------------------------------------------
+
+/// The vocabulary that distinguishes one C-family language from another.
+pub struct Grammar {
+    pub name: &'static str,
+    pub keywords: &'static [&'static str],
+    pub types: &'static [&'static str],
+    pub constants: &'static [&'static str],
+    /// `true` if `#` starts a line comment (unused for C-family; see [`Python`]).
+    pub hash_comments: bool,
+}
+
+/// A C-family highlighter driven by a [`Grammar`]. Shared by JS/TS/Go/C/Java and easy
+/// to instantiate for any curly-brace language.
+pub struct CLike(pub &'static Grammar);
+
+impl Language for CLike {
+    fn name(&self) -> &str {
+        self.0.name
+    }
+    fn highlight(&self, src: &str) -> Vec<Token> {
+        let g = self.0;
+        let mut out = Vec::new();
+        let mut sc = Scan::new(src);
+        while !sc.done() {
+            let b = sc.peek();
+            let start = sc.pos;
+            match b {
+                b' ' | b'\t' | b'\r' | b'\n' => sc.bump(),
+                b'#' if g.hash_comments => {
+                    while !sc.done() && sc.peek() != b'\n' {
+                        sc.bump();
+                    }
+                    out.push(Token::new(start, sc.pos - start, TokenKind::Comment));
+                }
+                b'/' if sc.peek2() == b'/' => {
+                    while !sc.done() && sc.peek() != b'\n' {
+                        sc.bump();
+                    }
+                    out.push(Token::new(start, sc.pos - start, TokenKind::Comment));
+                }
+                b'/' if sc.peek2() == b'*' => {
+                    sc.bump();
+                    sc.bump();
+                    while !sc.done() && !(sc.peek() == b'*' && sc.peek2() == b'/') {
+                        sc.bump();
+                    }
+                    sc.bump();
+                    sc.bump();
+                    out.push(Token::new(start, sc.pos - start, TokenKind::Comment));
+                }
+                b'"' | b'\'' | b'`' => {
+                    let q = b;
+                    sc.bump();
+                    while !sc.done() {
+                        let c = sc.peek();
+                        if c == b'\\' {
+                            sc.bump();
+                            sc.bump();
+                            continue;
+                        }
+                        sc.bump();
+                        if c == q {
+                            break;
+                        }
+                    }
+                    out.push(Token::new(start, sc.pos - start, TokenKind::Str));
+                }
+                b'0'..=b'9' => {
+                    while !sc.done()
+                        && (sc.peek().is_ascii_alphanumeric() || sc.peek() == b'.' || sc.peek() == b'_')
+                    {
+                        sc.bump();
+                    }
+                    out.push(Token::new(start, sc.pos - start, TokenKind::Number));
+                }
+                _ if is_ident_start(b) => {
+                    while is_ident_continue(sc.peek()) {
+                        sc.bump();
+                    }
+                    let word = &src[start..sc.pos];
+                    let kind = if g.keywords.contains(&word) {
+                        TokenKind::Keyword
+                    } else if g.constants.contains(&word) {
+                        TokenKind::Constant
+                    } else if g.types.contains(&word) || word.chars().next().is_some_and(|c| c.is_uppercase()) {
+                        TokenKind::Type
+                    } else if sc.peek() == b'(' {
+                        TokenKind::Function
+                    } else {
+                        TokenKind::Plain
+                    };
+                    if kind != TokenKind::Plain {
+                        out.push(Token::new(start, sc.pos - start, kind));
+                    }
+                }
+                _ if b.is_ascii_punctuation() => {
+                    while !sc.done() && sc.peek().is_ascii_punctuation() && !matches!(sc.peek(), b'"' | b'\'' | b'`') {
+                        sc.bump();
+                    }
+                    out.push(Token::new(start, sc.pos - start, TokenKind::Punctuation));
+                }
+                _ => sc.bump(),
+            }
+            if sc.pos == start {
+                sc.bump();
+            }
+        }
+        out
+    }
+}
+
+macro_rules! grammar {
+    ($fname:ident, $name:literal, kw = [$($kw:literal),* $(,)?], ty = [$($ty:literal),* $(,)?], c = [$($cn:literal),* $(,)?], hash = $hash:literal) => {
+        #[doc = concat!("A ", $name, " highlighter.")]
+        pub fn $fname() -> CLike {
+            static G: Grammar = Grammar {
+                name: $name,
+                keywords: &[$($kw),*],
+                types: &[$($ty),*],
+                constants: &[$($cn),*],
+                hash_comments: $hash,
+            };
+            CLike(&G)
+        }
+    };
+}
+
+grammar!(javascript, "JavaScript",
+    kw = ["const","let","var","function","return","if","else","for","while","do","switch","case","break","continue","new","class","extends","super","this","typeof","instanceof","in","of","try","catch","finally","throw","async","await","yield","delete","void","export","import","from","as","default","static","get","set"],
+    ty = [], c = ["true","false","null","undefined","NaN","Infinity"], hash = false);
+
+grammar!(typescript, "TypeScript",
+    kw = ["const","let","var","function","return","if","else","for","while","do","switch","case","break","continue","new","class","extends","implements","interface","enum","type","super","this","typeof","instanceof","keyof","in","of","try","catch","finally","throw","async","await","yield","export","import","from","as","default","public","private","protected","readonly","static","abstract","declare","namespace","get","set"],
+    ty = ["string","number","boolean","any","void","unknown","never","object","symbol","bigint"],
+    c = ["true","false","null","undefined"], hash = false);
+
+grammar!(go, "Go",
+    kw = ["package","import","func","var","const","type","struct","interface","map","chan","go","defer","return","if","else","for","range","switch","case","default","break","continue","fallthrough","select","goto"],
+    ty = ["int","int8","int16","int32","int64","uint","uint8","uint16","uint32","uint64","float32","float64","string","bool","byte","rune","error","any"],
+    c = ["true","false","nil","iota"], hash = false);
+
+grammar!(c_lang, "C",
+    kw = ["auto","break","case","char","const","continue","default","do","double","else","enum","extern","float","for","goto","if","inline","int","long","register","return","short","signed","sizeof","static","struct","switch","typedef","union","unsigned","void","volatile","while"],
+    ty = ["size_t","uint8_t","uint16_t","uint32_t","uint64_t","int8_t","int16_t","int32_t","int64_t","bool","FILE"],
+    c = ["NULL","true","false"], hash = false);
+
+grammar!(java, "Java",
+    kw = ["public","private","protected","class","interface","enum","extends","implements","import","package","static","final","abstract","void","new","return","if","else","for","while","do","switch","case","break","continue","try","catch","finally","throw","throws","this","super","synchronized","volatile","transient","instanceof"],
+    ty = ["int","long","short","byte","char","boolean","float","double","String","Object","void","var"],
+    c = ["true","false","null"], hash = false);
+
+// ---------------------------------------------------------------------------
+// Python
+// ---------------------------------------------------------------------------
+
+/// A Python highlighter.
+pub struct Python;
+
+const PY_KEYWORDS: &[&str] = &[
+    "def", "class", "return", "if", "elif", "else", "for", "while", "break", "continue", "pass", "import",
+    "from", "as", "with", "try", "except", "finally", "raise", "yield", "lambda", "global", "nonlocal", "del",
+    "assert", "async", "await", "in", "is", "not", "and", "or", "match", "case",
+];
+const PY_CONSTS: &[&str] = &["True", "False", "None", "self", "cls"];
+
+impl Language for Python {
+    fn name(&self) -> &str {
+        "Python"
+    }
+    fn highlight(&self, src: &str) -> Vec<Token> {
+        let mut out = Vec::new();
+        let mut sc = Scan::new(src);
+        while !sc.done() {
+            let b = sc.peek();
+            let start = sc.pos;
+            match b {
+                b' ' | b'\t' | b'\r' | b'\n' => sc.bump(),
+                b'#' => {
+                    while !sc.done() && sc.peek() != b'\n' {
+                        sc.bump();
+                    }
+                    out.push(Token::new(start, sc.pos - start, TokenKind::Comment));
+                }
+                b'@' => {
+                    sc.bump();
+                    while is_ident_continue(sc.peek()) {
+                        sc.bump();
+                    }
+                    out.push(Token::new(start, sc.pos - start, TokenKind::Attribute));
+                }
+                b'"' | b'\'' => {
+                    let q = b;
+                    let triple = sc.peek2() == q && (sc.pos + 2 < sc.s.len() && sc.s[sc.pos + 2] == q);
+                    if triple {
+                        sc.bump();
+                        sc.bump();
+                        sc.bump();
+                        while !sc.done()
+                            && !(sc.peek() == q
+                                && sc.peek2() == q
+                                && sc.pos + 2 < sc.s.len()
+                                && sc.s[sc.pos + 2] == q)
+                        {
+                            sc.bump();
+                        }
+                        sc.bump();
+                        sc.bump();
+                        sc.bump();
+                    } else {
+                        sc.bump();
+                        while !sc.done() {
+                            let c = sc.peek();
+                            if c == b'\\' {
+                                sc.bump();
+                                sc.bump();
+                                continue;
+                            }
+                            sc.bump();
+                            if c == q {
+                                break;
+                            }
+                        }
+                    }
+                    out.push(Token::new(start, sc.pos - start, TokenKind::Str));
+                }
+                b'0'..=b'9' => {
+                    while !sc.done() && (sc.peek().is_ascii_alphanumeric() || sc.peek() == b'.' || sc.peek() == b'_')
+                    {
+                        sc.bump();
+                    }
+                    out.push(Token::new(start, sc.pos - start, TokenKind::Number));
+                }
+                _ if is_ident_start(b) => {
+                    while is_ident_continue(sc.peek()) {
+                        sc.bump();
+                    }
+                    let word = &src[start..sc.pos];
+                    let kind = if PY_KEYWORDS.contains(&word) {
+                        TokenKind::Keyword
+                    } else if PY_CONSTS.contains(&word) {
+                        TokenKind::Constant
+                    } else if word.chars().next().is_some_and(|c| c.is_uppercase()) {
+                        TokenKind::Type
+                    } else if sc.peek() == b'(' {
+                        TokenKind::Function
+                    } else {
+                        TokenKind::Plain
+                    };
+                    if kind != TokenKind::Plain {
+                        out.push(Token::new(start, sc.pos - start, kind));
+                    }
+                }
+                _ if b.is_ascii_punctuation() => {
+                    while !sc.done() && sc.peek().is_ascii_punctuation() && !matches!(sc.peek(), b'"' | b'\'') {
+                        sc.bump();
+                    }
+                    out.push(Token::new(start, sc.pos - start, TokenKind::Punctuation));
+                }
+                _ => sc.bump(),
+            }
+            if sc.pos == start {
+                sc.bump();
+            }
+        }
+        out
+    }
+}
+
+// ---------------------------------------------------------------------------
 // JSON
 // ---------------------------------------------------------------------------
 

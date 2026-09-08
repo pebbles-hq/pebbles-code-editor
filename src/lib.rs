@@ -54,6 +54,10 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         gutter: true,
         read_only: false,
         autofocus: false,
+        current_line: true,
+        context_menu: true,
+        tab_size: 4,
+        insert_spaces: true,
         title: None,
     }
 }
@@ -69,6 +73,10 @@ pub struct CodeEditor {
     gutter: bool,
     read_only: bool,
     autofocus: bool,
+    current_line: bool,
+    context_menu: bool,
+    tab_size: usize,
+    insert_spaces: bool,
     title: Option<String>,
 }
 
@@ -108,6 +116,26 @@ impl CodeEditor {
         self.autofocus = true;
         self
     }
+    /// Highlight the line the caret is on (default true).
+    pub fn current_line(mut self, on: bool) -> Self {
+        self.current_line = on;
+        self
+    }
+    /// Show the right-click context menu (Cut/Copy/Paste/Select All) — default true.
+    pub fn context_menu(mut self, on: bool) -> Self {
+        self.context_menu = on;
+        self
+    }
+    /// Indent width in columns (default 4).
+    pub fn tab_size(mut self, n: usize) -> Self {
+        self.tab_size = n.max(1);
+        self
+    }
+    /// Indent with spaces (default) vs. a tab character.
+    pub fn insert_spaces(mut self, spaces: bool) -> Self {
+        self.insert_spaces = spaces;
+        self
+    }
     /// A filename / label shown in the status bar (also enables the status bar).
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
@@ -135,6 +163,10 @@ struct Props {
     gutter: bool,
     read_only: bool,
     autofocus: bool,
+    current_line: bool,
+    context_menu: bool,
+    tab_size: usize,
+    insert_spaces: bool,
     title: Option<String>,
 }
 
@@ -150,6 +182,10 @@ impl From<CodeEditor> for Props {
             gutter: e.gutter,
             read_only: e.read_only,
             autofocus: e.autofocus,
+            current_line: e.current_line,
+            context_menu: e.context_menu,
+            tab_size: e.tab_size,
+            insert_spaces: e.insert_spaces,
             title: e.title,
         }
     }
@@ -169,10 +205,11 @@ fn render_editor(p: &Props) -> AnyWidget {
 
     // Register the key handler (semantic edit commands from the framework).
     let read_only = p.read_only;
-    let tab = "    "; // 4 spaces
-    focus.register_editor(Rc::new(move |k: KeyInput| {
-        apply_key(k, code, caret, anchor, goal, read_only, tab);
-    }));
+    let indent_unit: String = if p.insert_spaces { " ".repeat(p.tab_size) } else { "\t".to_string() };
+    {
+        let t = indent_unit.clone();
+        focus.register_editor(Rc::new(move |k: KeyInput| apply_key(k, code, caret, anchor, goal, read_only, &t)));
+    }
 
     // ---- read model ----
     let src = code.get();
@@ -197,7 +234,7 @@ fn render_editor(p: &Props) -> AnyWidget {
     let mut layers: Vec<AnyWidget> = Vec::new();
 
     // current-line band (only when there's no selection)
-    if !has_sel {
+    if p.current_line && !has_sel {
         layers.push(band(pad_t + cl as f64 * line_px, line_px, theme.current_line));
     }
 
@@ -292,6 +329,20 @@ fn render_editor(p: &Props) -> AnyWidget {
             .into_widget()
     } else {
         click_area.into_widget()
+    };
+
+    // Right-click menu (configurable via `.context_menu(false)`), driving the same edit
+    // commands as the keyboard.
+    let body: AnyWidget = if p.context_menu {
+        context_menu(body)
+            .item(menu_item("Cut").on_select(move || apply_key(KeyInput::Cut, code, caret, anchor, goal, read_only, "")))
+            .item(menu_item("Copy").on_select(move || apply_key(KeyInput::Copy, code, caret, anchor, goal, read_only, "")))
+            .item(menu_item("Paste").on_select(move || apply_key(KeyInput::Paste, code, caret, anchor, goal, read_only, "")))
+            .separator()
+            .item(menu_item("Select All").on_select(move || apply_key(KeyInput::SelectAll, code, caret, anchor, goal, read_only, "")))
+            .into_widget()
+    } else {
+        body
     };
 
     // With a fixed height the editor scrolls within a viewport; without one it grows to
@@ -414,9 +465,15 @@ fn apply_key(
     match k {
         KeyInput::Insert(s) if !read_only => splice(&s),
         KeyInput::Enter if !read_only => {
-            // Auto-indent: carry the current line's leading whitespace.
+            // Auto-indent: carry the current line's leading whitespace, and add one
+            // level after an opening bracket or a `:` (smart indent).
             let ls = line_start(&src, lo);
-            let indent: String = src[ls..].chars().take_while(|ch| *ch == ' ' || *ch == '\t').collect();
+            let cur = &src[ls..lo];
+            let mut indent: String = cur.chars().take_while(|ch| *ch == ' ' || *ch == '\t').collect();
+            let trimmed = cur.trim_end();
+            if trimmed.ends_with(['{', '(', '[', ':']) {
+                indent.push_str(tab);
+            }
             splice(&format!("\n{indent}"));
         }
         KeyInput::Backspace if !read_only => {

@@ -29,15 +29,35 @@ fn view() -> impl IntoWidget {
 ## Features
 
 - **Real editing** — type, backspace / delete, word-delete (Ctrl+Backspace/Delete),
-  Enter with **auto-indent**, arrows, word / line / document motions, **Shift-select**,
-  Ctrl+A, and **Copy / Cut / Paste**. The buffer is the `Signal<String>` you pass in.
+  Enter with **smart auto-indent**, arrows, word / line / document motions,
+  **Shift-select**, Ctrl+A, and **Copy / Cut / Paste**. The buffer is the
+  `Signal<String>` you pass in.
 - **Mouse** — click to place the caret, drag to select.
-- **Syntax highlighting** via a pluggable [`Language`] layer — **Rust** and **JSON**
-  bundled; add a grammar by implementing one trait method.
+- **Right-click menu** — Cut / Copy / Paste / Select All (toggle with `.context_menu`).
+- **Syntax highlighting** via a pluggable [`Language`] layer. Bundled: **Rust,
+  TypeScript, JavaScript, Python, Go, C, Java, JSON** (plus `Plain`). Add any grammar
+  by implementing one trait method.
 - **Gutter** with an active-line marker, **current-line highlight**, selection, caret,
   and a status bar (filename · language · line/col).
 - **Themes** (`EditorTheme`) — `dark` and `light` bundled, or build your own.
-- Read-only mode (`.read_only(true)`) — still navigable, selectable, copyable.
+
+## Configurable (CodeMirror-style)
+
+Every knob is a builder on `code_editor(...)`:
+
+| Builder | Default | What it does |
+|---|---|---|
+| `.language(Box::new(..))` | Plain | the highlighter |
+| `.theme(EditorTheme)` | dark | colors |
+| `.font_size(px)` | 13.5 | glyph size |
+| `.tab_size(n)` / `.insert_spaces(bool)` | 4 / true | indent unit |
+| `.gutter(bool)` | true | line-number column |
+| `.current_line(bool)` | true | caret-line highlight |
+| `.context_menu(bool)` | true | right-click menu |
+| `.read_only(bool)` | false | navigable/selectable but not editable |
+| `.autofocus()` | off | grab focus + show caret on mount |
+| `.height(px)` | grow | fixed viewport (scrolls) vs. grow-to-content |
+| `.title(name)` | none | filename in the status bar |
 
 ## Extending it — add a language
 
