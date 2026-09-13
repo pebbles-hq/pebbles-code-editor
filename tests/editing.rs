@@ -1219,3 +1219,25 @@ fn folding_collapses_and_expands() {
     ui.layout(&mut env, Size::new(600.0, 400.0));
     assert!(ui.element_count() > folded, "unfolding restored the lines");
 }
+
+#[test]
+fn extension_edit_filter_transforms_typing() {
+    use pebbles_code_editor::{Edit, extension};
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::new());
+    // A filter that upper-cases every inserted character.
+    let ext = extension("shout")
+        .filter_edit(|_snap, e| Some(Edit { insert: e.insert.to_uppercase(), from: e.from, to: e.to }));
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(View::new(white(), code_editor(code).extension(ext).autofocus()).into_widget());
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    for ch in "abc".chars() {
+        key(&mut ui, &mut env, KeyInput::Insert(ch.to_string()));
+    }
+    assert_eq!(code.get(), "ABC", "the edit filter upper-cased typed text");
+}

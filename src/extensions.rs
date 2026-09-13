@@ -193,6 +193,9 @@ type FocusFn = Rc<dyn Fn(bool)>;
 type ClickFn = Rc<dyn Fn(&Snapshot, usize)>;
 /// A theme transform: takes the current theme and returns a (possibly) modified one.
 type ThemeFn = Rc<dyn Fn(crate::theme::EditorTheme) -> crate::theme::EditorTheme>;
+/// A transaction filter: given a snapshot + the proposed single-caret insert edit, return the
+/// edit to apply (possibly transformed) or `None` to veto it.
+type EditFilterFn = Rc<dyn Fn(&Snapshot, &crate::collab::Edit) -> Option<crate::collab::Edit>>;
 
 /// A configurable keybinding: a chord (framework grammar, e.g. `"Mod+K"`, `"Ctrl+Shift+P"`)
 /// bound to a [`Command`] id. The editor registers it while focused.
@@ -214,6 +217,7 @@ pub struct Extension {
     pub(crate) keys: Vec<KeyBinding>,
     pub(crate) config: Option<ConfigPatch>,
     pub(crate) theme: Option<ThemeFn>,
+    pub(crate) edit_filter: Option<EditFilterFn>,
     pub(crate) on_change: Option<HookFn>,
     pub(crate) on_selection: Option<HookFn>,
     pub(crate) on_focus: Option<FocusFn>,
@@ -256,6 +260,16 @@ impl Extension {
     /// Declare read-only byte ranges — edits overlapping them are vetoed.
     pub fn read_only_ranges(mut self, f: impl Fn(&Snapshot) -> Vec<(usize, usize)> + 'static) -> Self {
         self.read_only = Some(Rc::new(f));
+        self
+    }
+    /// A transaction filter for single-caret typing: given the proposed [`Edit`](crate::Edit),
+    /// return it (optionally transformed — e.g. expand a tab to spaces, upper-case) or `None` to
+    /// veto. Applies to a single caret's `Insert`; multi-cursor edits bypass it.
+    pub fn filter_edit(
+        mut self,
+        f: impl Fn(&Snapshot, &crate::collab::Edit) -> Option<crate::collab::Edit> + 'static,
+    ) -> Self {
+        self.edit_filter = Some(Rc::new(f));
         self
     }
     /// Add a command (runnable from the palette, or bound to a key via [`keybinding`](Self::keybinding)).

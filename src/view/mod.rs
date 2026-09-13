@@ -422,6 +422,50 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     return;
                 }
             }
+            // Transaction filter: let extensions transform or veto a single-caret insert (e.g.
+            // expand tabs, upper-case on type). Multi-cursor edits bypass it.
+            if let KeyInput::Insert(text) = &k
+                && ro_exts.iter().any(|e| e.edit_filter.is_some())
+            {
+                let st = state.peek();
+                let sels = st.selection.clamped(st.text().len());
+                if sels.ranges().len() == 1 {
+                    let src = st.text();
+                    let pr = sels.primary();
+                    let (a, b) = (pr.min(), pr.max());
+                    let snap = Snapshot { text: &src, caret: pr.head, selection: (a, b) };
+                    let mut edit = crate::collab::Edit { from: a, to: b, insert: text.clone() };
+                    let mut vetoed = false;
+                    for e in ro_exts.iter().filter_map(|e| e.edit_filter.as_ref()) {
+                        match e(&snap, &edit) {
+                            Some(new) => edit = new,
+                            None => {
+                                vetoed = true;
+                                break;
+                            }
+                        }
+                    }
+                    if vetoed {
+                        return;
+                    }
+                    if edit.from != a || edit.to != b || &edit.insert != text {
+                        // The filter changed the edit — apply it directly (one undo step).
+                        let caret = edit.from + edit.insert.len();
+                        dispatch(
+                            state,
+                            history,
+                            code,
+                            Transaction::change_and_select(
+                                ChangeSet::replace(edit.from, edit.to, edit.insert),
+                                Selections::single(Selection::caret(caret)),
+                            ),
+                            Coalesce::Never,
+                        );
+                        goal.set(col_of(&state.peek().text(), state.peek().primary().head));
+                        return;
+                    }
+                }
+            }
             apply_key(k, state, history, code, goal, read_only, &cfg);
             if let Some(pv) = &provider {
                 if follow == 1 {
