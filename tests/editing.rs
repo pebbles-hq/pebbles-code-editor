@@ -890,3 +890,96 @@ fn extension_keybinding_runs_a_command() {
     assert!(consumed, "the editor consumed the bound chord");
     assert_eq!(code.get(), "abc!", "the keybinding ran its command");
 }
+
+// ---------------------------------------------------------------------------
+// Theming & styling (§8)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn theme_extension_composes_and_renders() {
+    use pebbles_code_editor::{EditorTheme, HighlightStyle, extension};
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from("fn main() {}\n// note"));
+    // A theme plugin: swap the syntax palette to light and make comments underlined.
+    let ext = extension("theme-plugin").theme(|mut t: EditorTheme| {
+        t.syntax = HighlightStyle::light();
+        t.syntax.comment = t.syntax.comment.underline();
+        t
+    });
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(
+        View::new(
+            white(),
+            code_editor(code)
+                .language(Box::new(pebbles_code_editor::lang::Rust))
+                .extension(ext)
+                .autofocus(),
+        )
+        .into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    assert!(ui.element_count() > 0, "theme-extension editor rendered without panicking");
+}
+
+#[test]
+fn font_and_spacing_config_render() {
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from("let x = 1;"));
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(
+        View::new(
+            white(),
+            code_editor(code)
+                .font_family("Fira Code")
+                .line_height(2.0)
+                .letter_spacing(1.5)
+                .autofocus(),
+        )
+        .into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    assert!(ui.element_count() > 0, "font/line-height/letter-spacing editor rendered");
+}
+
+#[test]
+fn letter_spacing_widens_the_hit_grid() {
+    use pebbles_code_editor::extension;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    pebbles::core::keyboard::set_modifiers(false, false, false, false);
+    let code = create_root_signal(String::from("abcdef"));
+    let hit: Rc<RefCell<Option<usize>>> = Rc::new(RefCell::new(None));
+    let hit_c = hit.clone();
+    let ext = extension("click").on_click(move |_s, b| *hit_c.borrow_mut() = Some(b));
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    // letter_spacing widens each cell: advance = 13.5*0.6 + 2.0 = 10.1 (vs 8.1 without).
+    ui.mount_root(
+        View::new(
+            white(),
+            code_editor(code).gutter(false).letter_spacing(2.0).extension(ext).autofocus(),
+        )
+        .into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    // Click at x for column 3 on the WIDENED grid; a non-spaced grid would land elsewhere.
+    let adv = 13.5 * 0.6 + 2.0;
+    let pos = Offset::new(14.0 + 3.0 * adv, 10.0 + 13.5 * 1.6 / 2.0);
+    click(&mut ui, &mut env, pos);
+    assert_eq!(*hit.borrow(), Some(3), "hit-testing used the letter-spaced advance");
+}

@@ -5,7 +5,6 @@
 
 use pebbles::prelude::*;
 
-use crate::MONO;
 use crate::brackets::{DEFAULT_BRACKETS, find_bracket_match};
 use crate::geometry::{col_of, line_char_len, line_end, line_of, line_start_of};
 use crate::highlight::{slice_tokens, to_spans};
@@ -34,10 +33,10 @@ pub(crate) fn build(f: &Frame) -> Vec<AnyWidget> {
 /// The underline color for a diagnostic severity (mapped from the theme palette).
 pub(crate) fn severity_color(theme: &EditorTheme, sev: Severity) -> Color {
     match sev {
-        Severity::Error => theme.constant,
-        Severity::Warning => theme.number,
-        Severity::Info => theme.function,
-        Severity::Hint => theme.comment,
+        Severity::Error => theme.diag_error,
+        Severity::Warning => theme.diag_warning,
+        Severity::Info => theme.diag_info,
+        Severity::Hint => theme.diag_hint,
     }
 }
 
@@ -145,6 +144,7 @@ fn word_occurrences(f: &Frame, layers: &mut Vec<AnyWidget>) {
 
 /// Selection rectangles — one set per non-empty range (multi-cursor), clipped to the window.
 fn selection(f: &Frame, layers: &mut Vec<AnyWidget>) {
+    let color = if f.focused { f.theme.selection } else { f.theme.selection_inactive };
     for r in f.sels.ranges() {
         let (lo, hi) = (r.min(), r.max());
         if lo == hi {
@@ -166,7 +166,7 @@ fn selection(f: &Frame, layers: &mut Vec<AnyWidget>) {
                     container()
                         .width(w)
                         .height(f.line_px)
-                        .decoration(BoxDecoration::new().color(f.theme.selection)),
+                        .decoration(BoxDecoration::new().color(color)),
                 )
                 .left(x)
                 .top(f.pad_t + line as f64 * f.line_px)
@@ -210,12 +210,16 @@ fn code_text(f: &Frame, layers: &mut Vec<AnyWidget>) {
     let slice_end = line_end(f.src, line_start_of(f.src, f.last_line));
     let visible_src = &f.src[slice_start..slice_end];
     let vis_tokens = slice_tokens(f.tokens, slice_start, slice_end);
-    let spans = to_spans(visible_src, &vis_tokens, f.theme, f.fs);
+    let spans = to_spans(visible_src, &vis_tokens, f.theme, f.fs, f.font_family);
     layers.push(
-        Positioned::new(text_rich(spans).line_height(f.lh as f32))
-            .left(f.pad_l)
-            .top(f.pad_t + f.first_line as f64 * f.line_px)
-            .into_widget(),
+        Positioned::new(
+            text_rich(spans)
+                .line_height(f.lh as f32)
+                .letter_spacing(f.letter_spacing as f32),
+        )
+        .left(f.pad_l)
+        .top(f.pad_t + f.first_line as f64 * f.line_px)
+        .into_widget(),
     );
 }
 
@@ -241,10 +245,11 @@ fn whitespace(f: &Frame, layers: &mut Vec<AnyWidget>) {
             text_rich(vec![
                 span(marks)
                     .size(f.fs as f32)
-                    .font_family(MONO)
+                    .font_family(f.font_family)
                     .color(f.theme.whitespace),
             ])
-            .line_height(f.lh as f32),
+            .line_height(f.lh as f32)
+            .letter_spacing(f.letter_spacing as f32),
         )
         .left(f.pad_l)
         .top(f.pad_t + f.first_line as f64 * f.line_px)
@@ -257,7 +262,7 @@ fn whitespace(f: &Frame, layers: &mut Vec<AnyWidget>) {
                 text("¶".to_string())
                     .size((f.fs * 0.9) as f32)
                     .line_height(f.lh as f32)
-                    .font_family(MONO)
+                    .font_family(f.font_family)
                     .color(f.theme.whitespace),
             )
             .left(x)
@@ -316,8 +321,8 @@ fn inlay_hints(f: &Frame, layers: &mut Vec<AnyWidget>) {
                 text(h.label.clone())
                     .size((f.fs * 0.85) as f32)
                     .line_height(f.lh as f32)
-                    .font_family(MONO)
-                    .color(f.theme.comment),
+                    .font_family(f.font_family)
+                    .color(f.theme.muted),
             )
             .left(f.pad_l + col as f64 * f.advance)
             .top(f.pad_t + line as f64 * f.line_px)

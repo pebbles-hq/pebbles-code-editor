@@ -24,6 +24,8 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         theme: EditorTheme::dark(),
         font_size: 13.5,
         line_height: 1.6,
+        font_family: None,
+        letter_spacing: 0.0,
         height: None,
         gutter: true,
         read_only: false,
@@ -60,6 +62,8 @@ pub struct CodeEditor {
     theme: EditorTheme,
     font_size: f64,
     line_height: f64,
+    font_family: Option<String>,
+    letter_spacing: f64,
     height: Option<f64>,
     gutter: bool,
     read_only: bool,
@@ -102,6 +106,24 @@ impl CodeEditor {
     /// Font size in logical px (default 13.5).
     pub fn font_size(mut self, px: f64) -> Self {
         self.font_size = px;
+        self
+    }
+    /// Line height as a multiple of the font size (default 1.6).
+    pub fn line_height(mut self, factor: f64) -> Self {
+        self.line_height = factor.max(1.0);
+        self
+    }
+    /// The monospace font family for code text (default: JetBrains Mono). Use any installed
+    /// monospace family; pair it with [`advance_ratio`](Self::advance_ratio) so the caret grid
+    /// matches the font's real glyph advance.
+    pub fn font_family(mut self, family: impl Into<String>) -> Self {
+        self.font_family = Some(family.into());
+        self
+    }
+    /// Extra spacing between glyphs in logical px (default 0). Folded into the grid advance so
+    /// caret/click/selection stay exact.
+    pub fn letter_spacing(mut self, px: f64) -> Self {
+        self.letter_spacing = px;
         self
     }
     /// The editor's viewport height; it scrolls within. Unset = grows to content.
@@ -267,6 +289,8 @@ pub(crate) struct Props {
     pub(crate) theme: EditorTheme,
     pub(crate) fs: f64,
     pub(crate) lh: f64,
+    pub(crate) font_family: String,
+    pub(crate) letter_spacing: f64,
     pub(crate) height: Option<f64>,
     pub(crate) gutter: bool,
     pub(crate) read_only: bool,
@@ -325,12 +349,20 @@ impl From<CodeEditor> for Props {
                 auto_close = v;
             }
         }
+        // Fold extension theme transforms over the builder theme (applied in order) — this is
+        // "theme = an extension": a plugin can fully replace or partially compose the theme.
+        let mut theme = e.theme;
+        for tx in e.extensions.iter().filter_map(|x| x.theme.as_ref()) {
+            theme = tx(theme);
+        }
         Props {
             code: e.code,
             language: e.language,
-            theme: e.theme,
+            theme,
             fs: e.font_size,
             lh: e.line_height,
+            font_family: e.font_family.unwrap_or_else(|| crate::MONO.to_string()),
+            letter_spacing: e.letter_spacing,
             height: e.height,
             gutter: e.gutter,
             read_only: e.read_only,

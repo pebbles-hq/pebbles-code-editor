@@ -1,13 +1,133 @@
-//! Editor color themes. A [`EditorTheme`] carries the chrome colors (background,
-//! gutter, current-line, caret, selection) plus a color per [`TokenKind`]. Two are
-//! bundled ([`EditorTheme::dark`], [`EditorTheme::light`]); build your own by filling
-//! the struct — an IDE would expose a theme picker over these.
+//! Editor theming & styling. A [`EditorTheme`] carries the **chrome** slots (backgrounds,
+//! gutter, caret, selection, borders, scrollbar, diagnostics, …) and a [`HighlightStyle`]
+//! — the syntax palette, one [`TokenStyle`] (color + bold/italic/underline) per
+//! [`TokenKind`]. The two are separable: swap `theme.syntax` alone to re-color code without
+//! touching the UI chrome. Two of each are bundled ([`EditorTheme::dark`]/[`light`],
+//! [`HighlightStyle::dark`]/[`light`]); build your own by filling the struct, or compose one
+//! over a base with an extension's `theme` transform.
 
 use pebbles::prelude::Color;
 
 use crate::lang::TokenKind;
 
-/// A complete editor color scheme.
+/// The visual style of one syntax token: a color plus optional weight/slant/underline.
+/// This is what makes styling "not just colors" — a theme can render comments italic,
+/// keywords bold, or deprecated identifiers underlined.
+#[derive(Clone, Copy, Debug)]
+pub struct TokenStyle {
+    pub color: Color,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+}
+
+impl TokenStyle {
+    /// A plain colored token (no weight/slant/underline).
+    pub const fn color(color: Color) -> Self {
+        TokenStyle { color, bold: false, italic: false, underline: false }
+    }
+    /// Render this token bold.
+    pub fn bold(mut self) -> Self {
+        self.bold = true;
+        self
+    }
+    /// Render this token italic.
+    pub fn italic(mut self) -> Self {
+        self.italic = true;
+        self
+    }
+    /// Underline this token.
+    pub fn underline(mut self) -> Self {
+        self.underline = true;
+        self
+    }
+}
+
+/// The syntax palette: a [`TokenStyle`] per [`TokenKind`]. Independent of the UI chrome in
+/// [`EditorTheme`], so an IDE can offer a "syntax theme" picker separate from light/dark.
+#[derive(Clone)]
+pub struct HighlightStyle {
+    pub keyword: TokenStyle,
+    pub type_: TokenStyle,
+    pub string: TokenStyle,
+    pub number: TokenStyle,
+    pub comment: TokenStyle,
+    pub function: TokenStyle,
+    pub macro_: TokenStyle,
+    pub attribute: TokenStyle,
+    pub constant: TokenStyle,
+    pub punctuation: TokenStyle,
+    pub property: TokenStyle,
+    /// Identifiers / whitespace / unclassified tokens.
+    pub plain: TokenStyle,
+}
+
+impl HighlightStyle {
+    /// The full style for a token kind.
+    pub fn style(&self, kind: TokenKind) -> TokenStyle {
+        match kind {
+            TokenKind::Keyword => self.keyword,
+            TokenKind::Type => self.type_,
+            TokenKind::Str => self.string,
+            TokenKind::Number => self.number,
+            TokenKind::Comment => self.comment,
+            TokenKind::Function => self.function,
+            TokenKind::Macro => self.macro_,
+            TokenKind::Attribute => self.attribute,
+            TokenKind::Constant => self.constant,
+            TokenKind::Punctuation => self.punctuation,
+            TokenKind::Property => self.property,
+            TokenKind::Plain => self.plain,
+        }
+    }
+    /// Just the color for a token kind.
+    pub fn color(&self, kind: TokenKind) -> Color {
+        self.style(kind).color
+    }
+
+    /// The dark syntax palette (comments italic).
+    pub fn dark() -> Self {
+        let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
+        let s = TokenStyle::color;
+        HighlightStyle {
+            keyword: s(c(0xC5, 0x92, 0xF0)).bold(), // violet, bold
+            type_: s(c(0x6C, 0xD1, 0xC0)),          // teal
+            string: s(c(0x9E, 0xD8, 0x7A)),         // green
+            number: s(c(0xE6, 0xB4, 0x73)),         // amber
+            comment: s(c(0x5D, 0x67, 0x7A)).italic(), // muted slate, italic
+            function: s(c(0x76, 0xB2, 0xF0)),       // blue
+            macro_: s(c(0x6C, 0xD1, 0xC0)),         // teal
+            attribute: s(c(0xE6, 0xB4, 0x73)),      // amber
+            constant: s(c(0xE9, 0x8A, 0x8A)),       // soft red
+            punctuation: s(c(0x9A, 0xA4, 0xB8)),
+            property: s(c(0x76, 0xB2, 0xF0)),
+            plain: s(c(0xD7, 0xDC, 0xE6)),
+        }
+    }
+
+    /// The light syntax palette (comments italic).
+    pub fn light() -> Self {
+        let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
+        let s = TokenStyle::color;
+        HighlightStyle {
+            keyword: s(c(0x8A, 0x3F, 0xC8)).bold(),
+            type_: s(c(0x0F, 0x86, 0x8E)),
+            string: s(c(0x3E, 0x8A, 0x3E)),
+            number: s(c(0xB0, 0x6A, 0x14)),
+            comment: s(c(0x9A, 0xA1, 0xAD)).italic(),
+            function: s(c(0x24, 0x5F, 0xC2)),
+            macro_: s(c(0x0F, 0x86, 0x8E)),
+            attribute: s(c(0xB0, 0x6A, 0x14)),
+            constant: s(c(0xC0, 0x3A, 0x4B)),
+            punctuation: s(c(0x5A, 0x63, 0x72)),
+            property: s(c(0x24, 0x5F, 0xC2)),
+            plain: s(c(0x24, 0x29, 0x33)),
+        }
+    }
+}
+
+/// A complete editor color scheme: chrome slots + a swappable [`HighlightStyle`]. Every
+/// visual surface has a slot, so an editor built on this is fully stylable.
 #[derive(Clone)]
 pub struct EditorTheme {
     /// The code area background.
@@ -22,8 +142,10 @@ pub struct EditorTheme {
     pub current_line: Color,
     /// The text caret.
     pub caret: Color,
-    /// The selection highlight.
+    /// The selection highlight (editor focused).
     pub selection: Color,
+    /// The selection highlight when the editor is not focused.
+    pub selection_inactive: Color,
     /// Indent-guide vertical lines (and their brighter active variant on the caret's block).
     pub indent_guide: Color,
     pub indent_guide_active: Color,
@@ -33,100 +155,145 @@ pub struct EditorTheme {
     pub ruler: Color,
     /// Highlight box drawn around a bracket and its match.
     pub matching_bracket: Color,
-    /// Default text (identifiers, whitespace, unclassified tokens).
+    /// Default text (identifiers, unclassified tokens) — mirrors `syntax.plain.color`.
     pub foreground: Color,
-    /// Per-token colors.
-    pub keyword: Color,
-    pub type_: Color,
-    pub string: Color,
-    pub number: Color,
-    pub comment: Color,
-    pub function: Color,
-    pub macro_: Color,
-    pub attribute: Color,
-    pub constant: Color,
-    pub punctuation: Color,
-    pub property: Color,
+    /// Borders on floating surfaces (find bar, completion, palette, tooltip, cards).
+    pub border: Color,
+    /// Background of floating surfaces (find bar, completion, palette, tooltip).
+    pub overlay_bg: Color,
+    /// Secondary / de-emphasized text (completion detail, "no matches", inlay hints).
+    pub muted: Color,
+    /// UI accent (selected-item marks, completion kind icon).
+    pub accent: Color,
+    /// Search-match highlight (all matches) and the current match (stronger).
+    pub search_match: Color,
+    pub search_match_current: Color,
+    /// Scrollbar thumb (idle) and hovered/active.
+    pub scrollbar: Color,
+    pub scrollbar_active: Color,
+    /// Diagnostic underline + gutter-dot colors by severity.
+    pub diag_error: Color,
+    pub diag_warning: Color,
+    pub diag_info: Color,
+    pub diag_hint: Color,
+    /// The syntax palette (swappable independently of the chrome above).
+    pub syntax: HighlightStyle,
 }
 
 impl EditorTheme {
-    /// The color for a token kind.
+    /// The color for a token kind (delegates to [`syntax`](Self::syntax)).
     pub fn color(&self, kind: TokenKind) -> Color {
-        match kind {
-            TokenKind::Keyword => self.keyword,
-            TokenKind::Type => self.type_,
-            TokenKind::Str => self.string,
-            TokenKind::Number => self.number,
-            TokenKind::Comment => self.comment,
-            TokenKind::Function => self.function,
-            TokenKind::Macro => self.macro_,
-            TokenKind::Attribute => self.attribute,
-            TokenKind::Constant => self.constant,
-            TokenKind::Punctuation => self.punctuation,
-            TokenKind::Property => self.property,
-            TokenKind::Plain => self.foreground,
-        }
+        self.syntax.color(kind)
+    }
+    /// The full style for a token kind (delegates to [`syntax`](Self::syntax)).
+    pub fn style(&self, kind: TokenKind) -> TokenStyle {
+        self.syntax.style(kind)
     }
 
     /// A calm dark theme (the default) — warm-neutral background, high-legibility hues.
     pub fn dark() -> Self {
         let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
+        let a = Color::from_rgba8;
         EditorTheme {
             background: c(0x0F, 0x14, 0x1F),
             gutter_bg: c(0x0F, 0x14, 0x1F),
             gutter_fg: c(0x44, 0x4C, 0x5C),
             gutter_active_fg: c(0x9A, 0xA4, 0xB8),
-            current_line: Color::from_rgba8(0xFF, 0xFF, 0xFF, 0x0C),
+            current_line: a(0xFF, 0xFF, 0xFF, 0x0C),
             caret: c(0x8A, 0xB4, 0xF8),
-            selection: Color::from_rgba8(0x3D, 0x59, 0x8F, 0x66),
-            indent_guide: Color::from_rgba8(0xFF, 0xFF, 0xFF, 0x12),
-            indent_guide_active: Color::from_rgba8(0xFF, 0xFF, 0xFF, 0x30),
-            whitespace: Color::from_rgba8(0xFF, 0xFF, 0xFF, 0x24),
-            ruler: Color::from_rgba8(0xFF, 0xFF, 0xFF, 0x10),
-            matching_bracket: Color::from_rgba8(0x8A, 0xB4, 0xF8, 0x4D),
+            selection: a(0x3D, 0x59, 0x8F, 0x66),
+            selection_inactive: a(0x3D, 0x59, 0x8F, 0x33),
+            indent_guide: a(0xFF, 0xFF, 0xFF, 0x12),
+            indent_guide_active: a(0xFF, 0xFF, 0xFF, 0x30),
+            whitespace: a(0xFF, 0xFF, 0xFF, 0x24),
+            ruler: a(0xFF, 0xFF, 0xFF, 0x10),
+            matching_bracket: a(0x8A, 0xB4, 0xF8, 0x4D),
             foreground: c(0xD7, 0xDC, 0xE6),
-            keyword: c(0xC5, 0x92, 0xF0),   // violet
-            type_: c(0x6C, 0xD1, 0xC0),     // teal
-            string: c(0x9E, 0xD8, 0x7A),    // green
-            number: c(0xE6, 0xB4, 0x73),    // amber
-            comment: c(0x5D, 0x67, 0x7A),   // muted slate
-            function: c(0x76, 0xB2, 0xF0),  // blue
-            macro_: c(0x6C, 0xD1, 0xC0),    // teal
-            attribute: c(0xE6, 0xB4, 0x73), // amber
-            constant: c(0xE9, 0x8A, 0x8A),  // soft red
-            punctuation: c(0x9A, 0xA4, 0xB8),
-            property: c(0x76, 0xB2, 0xF0),
+            border: a(0x9A, 0xA4, 0xB8, 0x50),
+            overlay_bg: c(0x18, 0x1F, 0x2E),
+            muted: c(0x5D, 0x67, 0x7A),
+            accent: c(0x76, 0xB2, 0xF0),
+            search_match: a(0xE6, 0xB4, 0x73, 0x47),
+            search_match_current: a(0xE6, 0xB4, 0x73, 0x8C),
+            scrollbar: a(0xFF, 0xFF, 0xFF, 0x1E),
+            scrollbar_active: a(0xFF, 0xFF, 0xFF, 0x3C),
+            diag_error: c(0xE9, 0x8A, 0x8A),
+            diag_warning: c(0xE6, 0xB4, 0x73),
+            diag_info: c(0x76, 0xB2, 0xF0),
+            diag_hint: c(0x5D, 0x67, 0x7A),
+            syntax: HighlightStyle::dark(),
         }
     }
 
     /// A clean light theme.
     pub fn light() -> Self {
         let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
+        let a = Color::from_rgba8;
         EditorTheme {
             background: c(0xFF, 0xFF, 0xFF),
             gutter_bg: c(0xFB, 0xFB, 0xFC),
             gutter_fg: c(0xB6, 0xBD, 0xC9),
             gutter_active_fg: c(0x5A, 0x63, 0x72),
-            current_line: Color::from_rgba8(0x00, 0x00, 0x00, 0x08),
+            current_line: a(0x00, 0x00, 0x00, 0x08),
             caret: c(0x24, 0x5F, 0xC2),
-            selection: Color::from_rgba8(0x2F, 0x62, 0xE0, 0x33),
-            indent_guide: Color::from_rgba8(0x00, 0x00, 0x00, 0x12),
-            indent_guide_active: Color::from_rgba8(0x00, 0x00, 0x00, 0x2E),
-            whitespace: Color::from_rgba8(0x00, 0x00, 0x00, 0x24),
-            ruler: Color::from_rgba8(0x00, 0x00, 0x00, 0x0E),
-            matching_bracket: Color::from_rgba8(0x24, 0x5F, 0xC2, 0x3D),
+            selection: a(0x2F, 0x62, 0xE0, 0x33),
+            selection_inactive: a(0x2F, 0x62, 0xE0, 0x1A),
+            indent_guide: a(0x00, 0x00, 0x00, 0x12),
+            indent_guide_active: a(0x00, 0x00, 0x00, 0x2E),
+            whitespace: a(0x00, 0x00, 0x00, 0x24),
+            ruler: a(0x00, 0x00, 0x00, 0x0E),
+            matching_bracket: a(0x24, 0x5F, 0xC2, 0x3D),
             foreground: c(0x24, 0x29, 0x33),
-            keyword: c(0x8A, 0x3F, 0xC8),
-            type_: c(0x0F, 0x86, 0x8E),
-            string: c(0x3E, 0x8A, 0x3E),
-            number: c(0xB0, 0x6A, 0x14),
-            comment: c(0x9A, 0xA1, 0xAD),
-            function: c(0x24, 0x5F, 0xC2),
-            macro_: c(0x0F, 0x86, 0x8E),
-            attribute: c(0xB0, 0x6A, 0x14),
-            constant: c(0xC0, 0x3A, 0x4B),
-            punctuation: c(0x5A, 0x63, 0x72),
-            property: c(0x24, 0x5F, 0xC2),
+            border: a(0x5A, 0x63, 0x72, 0x40),
+            overlay_bg: c(0xFF, 0xFF, 0xFF),
+            muted: c(0x9A, 0xA1, 0xAD),
+            accent: c(0x24, 0x5F, 0xC2),
+            search_match: a(0xB0, 0x6A, 0x14, 0x33),
+            search_match_current: a(0xB0, 0x6A, 0x14, 0x66),
+            scrollbar: a(0x00, 0x00, 0x00, 0x22),
+            scrollbar_active: a(0x00, 0x00, 0x00, 0x44),
+            diag_error: c(0xC0, 0x3A, 0x4B),
+            diag_warning: c(0xB0, 0x6A, 0x14),
+            diag_info: c(0x24, 0x5F, 0xC2),
+            diag_hint: c(0x9A, 0xA1, 0xAD),
+            syntax: HighlightStyle::light(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lang::TokenKind;
+
+    #[test]
+    fn token_style_builders_compose() {
+        let s = TokenStyle::color(Color::from_rgba8(1, 2, 3, 255)).bold().italic().underline();
+        assert!(s.bold && s.italic && s.underline);
+    }
+
+    #[test]
+    fn dark_syntax_carries_weight_and_slant() {
+        let h = HighlightStyle::dark();
+        assert!(h.style(TokenKind::Keyword).bold, "keywords are bold");
+        assert!(h.style(TokenKind::Comment).italic, "comments are italic");
+        assert!(!h.style(TokenKind::Plain).bold, "plain text is neither");
+    }
+
+    #[test]
+    fn theme_delegates_to_syntax() {
+        let t = EditorTheme::dark();
+        assert_eq!(t.color(TokenKind::Keyword), t.syntax.color(TokenKind::Keyword));
+        assert_eq!(t.style(TokenKind::Comment).italic, t.syntax.comment.italic);
+    }
+
+    #[test]
+    fn syntax_swaps_independently_of_chrome() {
+        // Dark chrome + light syntax palette: the two are separable.
+        let mut t = EditorTheme::dark();
+        let dark_bg = t.background;
+        t.syntax = HighlightStyle::light();
+        assert_eq!(t.color(TokenKind::Keyword), HighlightStyle::light().color(TokenKind::Keyword));
+        assert_eq!(t.background, dark_bg, "swapping syntax left the chrome untouched");
     }
 }

@@ -8,7 +8,6 @@ use pebbles::prelude::*;
 use crate::geometry::{line_end, line_start_of};
 use crate::highlight::{slice_tokens, to_spans};
 use crate::view::Frame;
-use crate::view::chrome::with_alpha;
 
 /// Overlay the pinned scope headers on top of `scroller` (or return it unchanged when sticky
 /// scroll is off or there are no scrolled-off ancestors).
@@ -21,20 +20,30 @@ pub(crate) fn overlay(f: &Frame, scroller: AnyWidget, scroll_top: Signal<f64>) -
     for &ln in &lines {
         let ls = line_start_of(f.src, ln);
         let le = line_end(f.src, ls);
-        let spans = to_spans(&f.src[ls..le], &slice_tokens(f.tokens, ls, le), f.theme, f.fs);
+        let spans = to_spans(
+            &f.src[ls..le],
+            &slice_tokens(f.tokens, ls, le),
+            f.theme,
+            f.fs,
+            f.font_family,
+        );
         rows.push(
             container()
                 .height(f.line_px)
                 .decoration(BoxDecoration::new().color(f.theme.background))
                 .padding(EdgeInsets::only(f.pad_l, 0.0, 0.0, 0.0))
-                .child(text_rich(spans).line_height(f.lh as f32))
+                .child(
+                    text_rich(spans)
+                        .line_height(f.lh as f32)
+                        .letter_spacing(f.letter_spacing as f32),
+                )
                 .into_widget(),
         );
     }
     rows.push(
         container()
             .height(1.0)
-            .decoration(BoxDecoration::new().color(with_alpha(f.theme.punctuation, 0.35)))
+            .decoration(BoxDecoration::new().color(f.theme.border))
             .into_widget(),
     );
     let sticky_h = lines.len() as f64 * f.line_px + 1.0;

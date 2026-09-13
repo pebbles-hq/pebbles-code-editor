@@ -7,7 +7,6 @@ use std::collections::HashMap;
 
 use pebbles::prelude::*;
 
-use crate::MONO;
 use crate::geometry::line_of;
 use crate::view::Frame;
 use crate::view::overlays::severity_color;
@@ -58,7 +57,7 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
                         text((n + 1).to_string())
                             .size(f.fs as f32)
                             .line_height(f.lh as f32)
-                            .font_family(MONO)
+                            .font_family(f.font_family)
                             .color(if active {
                                 f.theme.gutter_active_fg
                             } else {

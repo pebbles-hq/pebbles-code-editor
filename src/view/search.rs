@@ -14,7 +14,6 @@ use crate::edit::{Change, ChangeSet, Coalesce, EditorState, History, Selection, 
 use crate::geometry::{col_of, line_of};
 use crate::search::Options;
 use crate::view::Frame;
-use crate::view::chrome::with_alpha;
 
 /// The reactive find/replace state (all `Copy` signals), owned by `view::render_editor`.
 #[derive(Clone, Copy)]
@@ -44,8 +43,8 @@ impl State {
 /// fill so it stands out.
 pub(crate) fn match_layers(f: &Frame, matches: &[(usize, usize)], current: usize) -> Vec<AnyWidget> {
     let mut layers = Vec::new();
-    let others = with_alpha(f.theme.number, 0.28);
-    let cur = with_alpha(f.theme.number, 0.55);
+    let others = f.theme.search_match;
+    let cur = f.theme.search_match_current;
     for (i, &(lo, hi)) in matches.iter().enumerate() {
         let (la, ca) = (line_of(f.src, lo), col_of(f.src, lo));
         let (lb, cb) = (line_of(f.src, hi), col_of(f.src, hi));
@@ -226,9 +225,9 @@ pub(crate) fn bar(
         .width(if st.open.peek() == 2 { 460.0 } else { 380.0 })
         .decoration(
             BoxDecoration::new()
-                .color(theme.gutter_bg)
+                .color(theme.overlay_bg)
                 .radius(BorderRadius::all(8.0))
-                .border(Border::new(with_alpha(theme.punctuation, 0.5), 1.0)),
+                .border(Border::new(theme.border, 1.0)),
         )
         .padding(EdgeInsets::all(8.0))
         .child(column(rows).main_axis_size(MainAxisSize::Min));

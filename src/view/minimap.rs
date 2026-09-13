@@ -28,7 +28,8 @@ pub(crate) fn panel(f: &Frame, scroll: ScrollHandle, scroll_top: Signal<f64>) ->
     let cur_top = scroll_top.get();
     let ch = f.content_h;
     let ink = with_alpha(f.theme.foreground, 0.45);
-    let vp = with_alpha(f.theme.gutter_active_fg, 0.16);
+    // The viewport indicator is the minimap's scrollbar-thumb equivalent.
+    let vp = f.theme.scrollbar;
     let painter = move |cv: &mut Canvas<'_>| {
         let size = cv.size();
         let (mm_w, mm_h) = (size.width, size.height);

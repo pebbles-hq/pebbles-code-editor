@@ -23,7 +23,6 @@ use pebbles::prelude::*;
 use pebbles::render::ScrollHandle;
 use ropey::Rope;
 
-use crate::MONO;
 use crate::brackets::DEFAULT_BRACKETS;
 use crate::commands::{EditCfg, apply_key, dispatch};
 use crate::config::Props;
@@ -34,7 +33,7 @@ use crate::highlight::merge_tokens;
 use crate::lang::Token;
 use crate::theme::EditorTheme;
 
-use chrome::{status_bar, with_alpha};
+use chrome::status_bar;
 
 /// The per-frame read-model shared by the view builders: geometry, the resolved document
 /// snapshot, the selections, and the virtualized visible-line window. Pure values computed
@@ -53,6 +52,9 @@ pub(crate) struct Frame<'a> {
     // grid geometry
     pub(crate) fs: f64,
     pub(crate) lh: f64,
+    /// The configured monospace family + extra letter spacing (folded into `advance`).
+    pub(crate) font_family: &'a str,
+    pub(crate) letter_spacing: f64,
     pub(crate) line_px: f64,
     pub(crate) advance: f64,
     pub(crate) pad_l: f64,
@@ -63,6 +65,8 @@ pub(crate) struct Frame<'a> {
     pub(crate) first_line: usize,
     pub(crate) last_line: usize,
     pub(crate) caret_on: bool,
+    /// Whether the editor currently holds keyboard focus (drives active vs inactive selection).
+    pub(crate) focused: bool,
     /// Highlight other occurrences of the selected word (off while the find bar is open).
     pub(crate) highlight_word_matches: bool,
     /// Gutter markers contributed by extensions (rendered as colored dots).
@@ -397,7 +401,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let fs = p.fs;
     let lh = p.lh;
     let line_px = fs * lh;
-    let advance = fs * p.advance_ratio;
+    // Letter spacing widens every cell; fold it into the advance so caret/click/selection math
+    // stays exact and matches the rendered text (which gets the same letter_spacing).
+    let advance = fs * p.advance_ratio + p.letter_spacing;
     let pad_l = 14.0;
     let pad_t = 10.0;
     let theme = &p.theme;
@@ -536,6 +542,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         cl,
         fs,
         lh,
+        font_family: &p.font_family,
+        letter_spacing: p.letter_spacing,
         line_px,
         advance,
         pad_l,
@@ -545,6 +553,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         first_line,
         last_line,
         caret_on,
+        focused,
         highlight_word_matches: find.open.get() == 0,
         ext_gutter_marks: &ext_gutter_marks,
     };
@@ -583,7 +592,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             let tip = chrome::tooltip(
                 text(h.contents)
                     .size((fs * 0.92) as f32)
-                    .font_family(MONO)
+                    .font_family(&p.font_family)
                     .color(theme.foreground)
                     .into_widget(),
                 theme,
@@ -601,7 +610,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         let tip = chrome::tooltip(
             text(sig.label.clone())
                 .size((fs * 0.92) as f32)
-                .font_family(MONO)
+                .font_family(&p.font_family)
                 .color(theme.foreground)
                 .into_widget(),
             theme,
@@ -830,7 +839,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     };
 
     // ---- chrome: optional title/status bar above the code area, all inside a bordered card ----
-    let border = with_alpha(theme.punctuation, 0.35);
+    let border = theme.border;
     let lang_name = p
         .language
         .as_ref()

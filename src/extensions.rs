@@ -191,6 +191,8 @@ type HookFn = Rc<dyn Fn(&Snapshot)>;
 type FocusFn = Rc<dyn Fn(bool)>;
 /// A per-plugin pointer handler: `(snapshot, byte_offset_of_the_click)`.
 type ClickFn = Rc<dyn Fn(&Snapshot, usize)>;
+/// A theme transform: takes the current theme and returns a (possibly) modified one.
+type ThemeFn = Rc<dyn Fn(crate::theme::EditorTheme) -> crate::theme::EditorTheme>;
 
 /// A configurable keybinding: a chord (framework grammar, e.g. `"Mod+K"`, `"Ctrl+Shift+P"`)
 /// bound to a [`Command`] id. The editor registers it while focused.
@@ -211,6 +213,7 @@ pub struct Extension {
     pub(crate) commands: Vec<Command>,
     pub(crate) keys: Vec<KeyBinding>,
     pub(crate) config: Option<ConfigPatch>,
+    pub(crate) theme: Option<ThemeFn>,
     pub(crate) on_change: Option<HookFn>,
     pub(crate) on_selection: Option<HookFn>,
     pub(crate) on_focus: Option<FocusFn>,
@@ -273,6 +276,17 @@ impl Extension {
     /// Contribute a mergeable [`ConfigPatch`] — the plugin's preferred editor settings.
     pub fn config(mut self, patch: ConfigPatch) -> Self {
         self.config = Some(patch);
+        self
+    }
+    /// Contribute a theme transform — "theme as an extension". The closure receives the
+    /// current [`EditorTheme`](crate::EditorTheme) and returns a modified one; transforms from
+    /// several extensions compose in order. Return a fresh theme to fully replace it, or tweak
+    /// a few slots (e.g. `t.syntax.comment = t.syntax.comment.italic()`) to compose over it.
+    pub fn theme(
+        mut self,
+        f: impl Fn(crate::theme::EditorTheme) -> crate::theme::EditorTheme + 'static,
+    ) -> Self {
+        self.theme = Some(Rc::new(f));
         self
     }
     /// Fire after the document changes.

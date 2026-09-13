@@ -59,9 +59,9 @@ pub(crate) fn tooltip(body: AnyWidget, theme: &EditorTheme) -> impl IntoWidget {
     container()
         .decoration(
             BoxDecoration::new()
-                .color(theme.gutter_bg)
+                .color(theme.overlay_bg)
                 .radius(BorderRadius::all(8.0))
-                .border(Border::new(with_alpha(theme.punctuation, 0.5), 1.0)),
+                .border(Border::new(theme.border, 1.0)),
         )
         .padding(EdgeInsets::symmetric(10.0, 7.0))
         .clip()

@@ -8,7 +8,6 @@ use crate::MONO;
 use crate::extensions::{Command, Decoration, EditContext};
 use crate::geometry::{col_of, line_char_len, line_of};
 use crate::view::Frame;
-use crate::view::chrome::with_alpha;
 
 /// Build overlay layers for `decos`, clipped to the visible window (line backgrounds first,
 /// then backgrounds, then underlines).
@@ -169,7 +168,7 @@ pub(crate) fn palette(
         rows.push(
             text("no matching commands")
                 .size(12.5)
-                .color(theme.comment)
+                .color(theme.muted)
                 .into_widget(),
         );
     }
@@ -178,9 +177,9 @@ pub(crate) fn palette(
         .width(520.0)
         .decoration(
             BoxDecoration::new()
-                .color(theme.gutter_bg)
+                .color(theme.overlay_bg)
                 .radius(BorderRadius::all(10.0))
-                .border(Border::new(with_alpha(theme.punctuation, 0.5), 1.0)),
+                .border(Border::new(theme.border, 1.0)),
         )
         .padding(EdgeInsets::all(10.0))
         .child(column(rows).main_axis_size(MainAxisSize::Min));

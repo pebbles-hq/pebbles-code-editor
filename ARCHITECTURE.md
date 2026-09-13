@@ -60,7 +60,10 @@ src/
   config.rs      The `code_editor()` builder + fluent `CodeEditor` config, and the resolved
                  `Props` the view consumes. The crate's front door.
 
-  theme.rs       `EditorTheme` — every color slot, plus the bundled dark/light themes.
+  theme.rs       `EditorTheme` (every chrome slot) + a separable `HighlightStyle` (a
+                 `TokenStyle` = color + bold/italic/underline per `TokenKind`); bundled
+                 dark/light for both. Compose one over a base via an extension `theme`
+                 transform.
 
   # ── the view (rendering) ────────────────────────────────────────────────
   view/

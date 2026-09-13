@@ -8,7 +8,6 @@ use std::rc::Rc;
 
 use pebbles::prelude::*;
 
-use crate::MONO;
 use crate::commands::dispatch;
 use crate::edit::{ChangeSet, Coalesce, EditorState, History, Selection, Selections, Transaction};
 use crate::geometry::{col_of, is_word, line_of, prev_char};
@@ -190,13 +189,13 @@ pub(crate) fn popup(s: &Session, f: &crate::view::Frame) -> AnyWidget {
         let mut cells: Vec<AnyWidget> = vec![
             text(kind_glyph(it.kind).to_string())
                 .size((fs * 0.85) as f32)
-                .font_family(MONO)
-                .color(theme.function)
+                .font_family(f.font_family)
+                .color(theme.accent)
                 .into_widget(),
             gap_w(6.0).into_widget(),
             text(it.label.clone())
                 .size(fs as f32)
-                .font_family(MONO)
+                .font_family(f.font_family)
                 .color(theme.foreground)
                 .into_widget(),
         ];
@@ -206,8 +205,8 @@ pub(crate) fn popup(s: &Session, f: &crate::view::Frame) -> AnyWidget {
             cells.push(
                 text(d.clone())
                     .size((fs * 0.85) as f32)
-                    .font_family(MONO)
-                    .color(theme.comment)
+                    .font_family(f.font_family)
+                    .color(theme.muted)
                     .into_widget(),
             );
         }
@@ -224,9 +223,9 @@ pub(crate) fn popup(s: &Session, f: &crate::view::Frame) -> AnyWidget {
         .width(340.0)
         .decoration(
             BoxDecoration::new()
-                .color(theme.gutter_bg)
+                .color(theme.overlay_bg)
                 .radius(BorderRadius::all(8.0))
-                .border(Border::new(crate::view::chrome::with_alpha(theme.punctuation, 0.5), 1.0)),
+                .border(Border::new(theme.border, 1.0)),
         )
         .clip()
         .child(column(rows).main_axis_size(MainAxisSize::Min));

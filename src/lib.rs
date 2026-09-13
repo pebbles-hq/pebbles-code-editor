@@ -60,7 +60,7 @@ pub use providers::{
     Diagnostic, Diagnostics, FormatProvider, Hover, HoverProvider, InlayHint, InlayHints, Severity,
     SignatureHelp, SignatureProvider,
 };
-pub use theme::EditorTheme;
+pub use theme::{EditorTheme, HighlightStyle, TokenStyle};
 
 /// The monospace family used for all editor text.
 pub(crate) const MONO: &str = "JetBrains Mono";

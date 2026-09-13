@@ -6,6 +6,9 @@
 //!   Shift+Alt-drag for a column selection, double/triple-click for word/line, Esc collapses.
 //! - Rendering: virtualization, minimap, sticky scroll, indent guides, whitespace, rulers,
 //!   horizontal scroll, bracket matching, caret blink (toggle the switches).
+//! - Theming: light/dark chrome, a syntax palette with bold keywords + italic comments,
+//!   "Relaxed spacing" (line-height + letter-spacing), and theme-as-extension (the Plugins
+//!   toggle bolds strings + recolors the caret by composing over the base theme).
 //! - Search: Ctrl+F find (incremental, regex/case/whole-word), Ctrl+H replace / replace-all,
 //!   match highlighting, and other-occurrence highlighting when you select a word.
 //! - Language: highlighting, auto-close, comment toggle (Ctrl+/), smart indent.
@@ -294,7 +297,14 @@ fn sample_extensions() -> Vec<Extension> {
         // Report focus + clicks to stdout so the event hooks are observable when you run it.
         .on_focus(|has| println!("[plugin] editor focus: {has}"))
         .on_click(|_snap, byte| println!("[plugin] clicked at byte {byte}"));
-    vec![highlight, bookmarks, guard, commands]
+    // "Theme as an extension": compose over the base theme (bolder strings, brighter caret)
+    // without replacing it — demonstrates §8 theming-via-extension.
+    let theming = extension("accent-tweaks").theme(|mut t| {
+        t.syntax.string = t.syntax.string.bold();
+        t.caret = Color::from_rgba8(0xFF, 0xC0, 0x66, 0xFF);
+        t
+    });
+    vec![highlight, bookmarks, guard, commands, theming]
 }
 
 // ---------------------------------------------------------------------------
@@ -314,6 +324,7 @@ fn app() -> AnyWidget {
     let ruler = create_signal(false);
     let light = create_signal(false);
     let plugins = create_signal(true);
+    let relaxed = create_signal(false);
 
     // Provider data derived reactively from the current text.
     let diagnostics = create_signal(compute_diagnostics(&code.peek()));
@@ -392,6 +403,8 @@ fn app() -> AnyWidget {
                     sw(light, "Light theme"),
                     gap_w(14.0),
                     sw(plugins, "Plugins"),
+                    gap_w(14.0),
+                    sw(relaxed, "Relaxed spacing"),
                 ])
                 .cross_axis_alignment(CrossAxisAlignment::Center)
                 .main_axis_size(MainAxisSize::Min),
@@ -402,6 +415,8 @@ fn app() -> AnyWidget {
                     .theme(if light.get() { EditorTheme::light() } else { EditorTheme::dark() })
                     .title(title)
                     .height(editor_h)
+                    .line_height(if relaxed.get() { 2.0 } else { 1.6 })
+                    .letter_spacing(if relaxed.get() { 1.2 } else { 0.0 })
                     .autofocus()
                     .minimap(minimap.get())
                     .sticky_scroll(sticky.get())

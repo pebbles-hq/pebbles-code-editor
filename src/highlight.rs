@@ -4,23 +4,34 @@
 
 use pebbles::prelude::{TextSpan, span};
 
-use crate::MONO;
 use crate::lang::{Token, TokenKind};
 use crate::theme::EditorTheme;
 
-/// Build themed rich-text spans for `src`, coloring each `tokens` run by its kind and the
-/// gaps between them as plain text.
-pub(crate) fn to_spans(src: &str, tokens: &[Token], theme: &EditorTheme, fs: f64) -> Vec<TextSpan> {
+/// Build themed rich-text spans for `src`, styling each `tokens` run by its kind (color +
+/// bold/italic/underline from the theme) and the gaps between them as plain text.
+pub(crate) fn to_spans(
+    src: &str,
+    tokens: &[Token],
+    theme: &EditorTheme,
+    fs: f64,
+    font_family: &str,
+) -> Vec<TextSpan> {
     let mut spans = Vec::new();
     let mut cursor = 0usize;
     let push = |text: &str, kind: TokenKind, spans: &mut Vec<TextSpan>| {
         if !text.is_empty() {
-            spans.push(
-                span(text.to_string())
-                    .color(theme.color(kind))
-                    .size(fs as f32)
-                    .font_family(MONO),
-            );
+            let st = theme.style(kind);
+            let mut sp = span(text.to_string()).color(st.color).size(fs as f32).font_family(font_family);
+            if st.bold {
+                sp = sp.bold();
+            }
+            if st.italic {
+                sp = sp.italic();
+            }
+            if st.underline {
+                sp = sp.underline();
+            }
+            spans.push(sp);
         }
     };
     for t in tokens {
