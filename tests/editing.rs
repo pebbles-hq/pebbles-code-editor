@@ -33,6 +33,47 @@ fn key(ui: &mut Ui, env: &mut TextEnv, k: KeyInput) {
     ui.layout(env, Size::new(600.0, 400.0));
 }
 
+/// Like [`harness`] but with the gutter off, so click x-coordinates are just
+/// `pad_l + col * advance` (no gutter width to account for) — for mouse tests.
+fn mouse_harness(initial: &str) -> (Ui, TextEnv, Signal<String>) {
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    pebbles::core::keyboard::set_modifiers(false, false, false, false);
+    let code = create_root_signal(String::from(initial));
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(View::new(white(), code_editor(code).gutter(false).autofocus()).into_widget());
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    (ui, env, code)
+}
+
+/// The monospace grid geometry (mirrors the editor's defaults: fs 13.5, lh 1.6).
+const ADV: f64 = 13.5 * 0.6;
+const LINE: f64 = 13.5 * 1.6;
+/// Window offset of column `col` on line `line` (with the gutter off).
+fn at(line: usize, col: usize) -> Offset {
+    Offset::new(14.0 + col as f64 * ADV, 10.0 + line as f64 * LINE + LINE / 2.0)
+}
+
+fn click(ui: &mut Ui, env: &mut TextEnv, pos: Offset) {
+    ui.dispatch_pointer_down(pos);
+    ui.rebuild_if_dirty();
+    ui.layout(env, Size::new(600.0, 400.0));
+}
+
+fn drag(ui: &mut Ui, env: &mut TextEnv, from: Offset, to: Offset) {
+    if let Some(target) = ui.pan_target_at(from) {
+        ui.dispatch_pan_start(target, from);
+        ui.dispatch_pan_update(target, to);
+        ui.dispatch_pan_end(target, to);
+    }
+    ui.rebuild_if_dirty();
+    ui.layout(env, Size::new(600.0, 400.0));
+}
+
 #[test]
 fn typing_inserts_into_the_bound_signal() {
     let (mut ui, mut env, code) = harness("");
@@ -134,4 +175,65 @@ fn indent_then_undo_is_one_step() {
     assert_eq!(code.get(), "    a\n    b");
     key(&mut ui, &mut env, KeyInput::Undo);
     assert_eq!(code.get(), "a\nb");
+}
+
+#[test]
+fn alt_click_adds_a_cursor_and_types_at_both() {
+    let (mut ui, mut env, code) = mouse_harness("abc");
+    click(&mut ui, &mut env, at(0, 0)); // caret at start
+    // Alt-click at the end adds a second caret.
+    pebbles::core::keyboard::set_modifiers(false, false, true, false);
+    click(&mut ui, &mut env, at(0, 3));
+    pebbles::core::keyboard::set_modifiers(false, false, false, false);
+    // Typing inserts at both carets.
+    key(&mut ui, &mut env, KeyInput::Insert("X".to_string()));
+    assert_eq!(code.get(), "XabcX");
+}
+
+#[test]
+fn escape_collapses_multiple_cursors() {
+    let (mut ui, mut env, code) = mouse_harness("abc");
+    click(&mut ui, &mut env, at(0, 0));
+    pebbles::core::keyboard::set_modifiers(false, false, true, false);
+    click(&mut ui, &mut env, at(0, 3));
+    pebbles::core::keyboard::set_modifiers(false, false, false, false);
+    // Escape drops back to a single caret, so typing inserts once.
+    key(&mut ui, &mut env, KeyInput::Escape);
+    key(&mut ui, &mut env, KeyInput::Insert("X".to_string()));
+    assert_eq!(code.get(), "abcX");
+}
+
+#[test]
+fn double_click_selects_the_word() {
+    let (mut ui, mut env, code) = mouse_harness("foo bar baz");
+    // Double-click inside "bar" selects the whole word; typing replaces it.
+    ui.dispatch_double_tap(at(0, 5));
+    ui.rebuild_if_dirty();
+    ui.layout(&mut env, Size::new(600.0, 400.0));
+    key(&mut ui, &mut env, KeyInput::Insert("XY".to_string()));
+    assert_eq!(code.get(), "foo XY baz");
+}
+
+#[test]
+fn multi_cursor_backspace_deletes_at_each() {
+    let (mut ui, mut env, code) = mouse_harness("ab\ncd");
+    // Caret after "ab", alt-click after "cd" → two carets at line ends.
+    click(&mut ui, &mut env, at(0, 2));
+    pebbles::core::keyboard::set_modifiers(false, false, true, false);
+    click(&mut ui, &mut env, at(1, 2));
+    pebbles::core::keyboard::set_modifiers(false, false, false, false);
+    key(&mut ui, &mut env, KeyInput::Backspace);
+    assert_eq!(code.get(), "a\nc");
+}
+
+#[test]
+fn shift_alt_drag_makes_a_column_of_carets() {
+    let (mut ui, mut env, code) = mouse_harness("abc\ndef\nghi");
+    // Shift+Alt drag straight down column 1 → a caret on each of the three lines.
+    pebbles::core::keyboard::set_modifiers(true, false, true, false);
+    drag(&mut ui, &mut env, at(0, 1), at(2, 1));
+    pebbles::core::keyboard::set_modifiers(false, false, false, false);
+    // Typing inserts at every column caret.
+    key(&mut ui, &mut env, KeyInput::Insert("X".to_string()));
+    assert_eq!(code.get(), "aXbc\ndXef\ngXhi");
 }

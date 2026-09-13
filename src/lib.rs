@@ -11,10 +11,15 @@
 //! and click hit-testing exact and cheap.
 //!
 //! - **Real editing** — type, backspace/delete, word-delete, Enter (auto-indent), Tab,
-//!   arrows + word/line/doc motions, Shift-select, Ctrl+A, and Copy/Cut/Paste.
+//!   arrows + word/line/doc motions, Shift-select, Ctrl+A, and Copy/Cut/Paste — all built
+//!   on an invertible [`ChangeSet`]/[`Transaction`] model with undo/redo.
+//! - **Multiple cursors & selections** — a [`Selections`] set (sorted, merged, with a
+//!   primary): Alt-click adds a caret, Shift+Alt-drag makes a rectangular (column)
+//!   selection, double-click selects a word, Esc collapses; every edit and motion applies
+//!   to all cursors at once.
 //! - **Syntax highlighting** via a pluggable [`Language`] layer (Rust + JSON bundled).
 //! - **Line-number gutter** with an active-line marker, **current-line highlight**,
-//!   selection, and a caret.
+//!   selection, and a blinking caret.
 //! - Swappable **themes** ([`EditorTheme`]).
 //!
 //! ```ignore
@@ -31,7 +36,7 @@ pub mod edit;
 pub mod lang;
 mod theme;
 
-pub use edit::{ChangeSet, EditorState, History, Selection, Transaction};
+pub use edit::{ChangeSet, EditorState, History, Selection, Selections, Transaction};
 pub use lang::{Language, Token, TokenKind};
 pub use theme::EditorTheme;
 
@@ -205,6 +210,8 @@ fn render_editor(p: &Props) -> AnyWidget {
     let state = create_signal(EditorState::new(&code.peek()));
     let history = create_signal(Rc::new(RefCell::new(History::new())));
     let goal = create_signal(0usize); // preserved column for Up/Down
+    let blink_stamp = create_signal(0.0_f64); // loop time of the last edit/move — caret solid then
+    let drag_anchor = create_signal::<Option<Offset>>(None); // pointer-down pos for column select
     let focus = create_focus();
 
     // Two-way binding: if the caller replaces `code` from the outside (e.g. loads a file),
@@ -253,23 +260,32 @@ fn render_editor(p: &Props) -> AnyWidget {
     let pad_t = 10.0;
     let theme = &p.theme;
 
-    let (car_a, car_c) = (
-        st.selection.anchor.min(src.len()),
-        st.selection.head.min(src.len()),
-    );
-    let (lo, hi) = (car_a.min(car_c), car_a.max(car_c));
-    let has_sel = lo != hi;
-    let cl = line_of(&src, car_c);
-    let cc = col_of(&src, car_c);
+    // All cursors/selections; the primary drives the current-line band + status line.
+    let sels = st.selection.clamped(src.len());
+    let primary = sels.primary();
+    let (pcc, has_primary_sel) = (primary.head, !primary.is_empty());
+    let cl = line_of(&src, pcc);
+    let cc = col_of(&src, pcc);
     let line_count = src.split('\n').count().max(1);
     let content_h = line_count as f64 * line_px + pad_t * 2.0;
     let focused = focus.is_focused();
 
+    // Caret blink: a 0.5s phase that ticks ONLY while focused, reset to solid on any edit
+    // or caret move (the `blink_stamp` effect below), so the caret is steady while you work.
+    let blink_loop = create_loop_while(focused, 0.5);
+    // Reset the blink phase to "solid" on any state change (edit, caret move, click).
+    create_effect(move || {
+        let _ = state.get();
+        blink_stamp.set(blink_loop.peek());
+    });
+    let caret_on =
+        focused && (blink_loop.get() - blink_stamp.get()).rem_euclid(1.0) < 0.5;
+
     // ---- overlay layers on the monospace grid ----
     let mut layers: Vec<AnyWidget> = Vec::new();
 
-    // current-line band (only when there's no selection)
-    if p.current_line && !has_sel {
+    // current-line band (primary caret's line, only when the primary has no selection)
+    if p.current_line && !has_primary_sel {
         layers.push(band(
             pad_t + cl as f64 * line_px,
             line_px,
@@ -277,8 +293,12 @@ fn render_editor(p: &Props) -> AnyWidget {
         ));
     }
 
-    // selection rects
-    if has_sel {
+    // selection rects — one set per non-empty range (multi-cursor).
+    for r in sels.ranges() {
+        let (lo, hi) = (r.min(), r.max());
+        if lo == hi {
+            continue;
+        }
         let (la, ca) = (line_of(&src, lo), col_of(&src, lo));
         let (lb, cb) = (line_of(&src, hi), col_of(&src, hi));
         for line in la..=lb {
@@ -318,49 +338,110 @@ fn render_editor(p: &Props) -> AnyWidget {
             .into_widget(),
     );
 
-    // caret
-    if focused {
-        layers.push(
-            Positioned::new(
-                container()
-                    .width(2.0)
-                    .height(fs * 1.15)
-                    .decoration(BoxDecoration::new().color(theme.caret)),
-            )
-            .left(pad_l + cc as f64 * advance)
-            .top(pad_t + cl as f64 * line_px + (line_px - fs * 1.15) / 2.0)
-            .into_widget(),
-        );
+    // carets — one per range's head (multi-cursor); all blink in phase.
+    if caret_on {
+        for r in sels.ranges() {
+            let l = line_of(&src, r.head);
+            let col = col_of(&src, r.head);
+            layers.push(
+                Positioned::new(
+                    container()
+                        .width(2.0)
+                        .height(fs * 1.15)
+                        .decoration(BoxDecoration::new().color(theme.caret)),
+                )
+                .left(pad_l + col as f64 * advance)
+                .top(pad_t + l as f64 * line_px + (line_px - fs * 1.15) / 2.0)
+                .into_widget(),
+            );
+        }
     }
 
     let grid = stack(layers)
         .fit(StackFit::Expand)
         .alignment(Alignment::TOP_LEFT);
 
-    // ---- mouse: click to place caret, drag to select ----
-    let hit = move |pos: Offset, extend: bool| {
+    // ---- mouse: click to place caret, drag to select, Alt-click to add a cursor ----
+    // `add` (Alt) appends a new caret; `extend` (Shift / drag) grows the primary selection;
+    // a plain click collapses to a single caret.
+    let hit = move |pos: Offset, extend: bool, add: bool| {
         let cur = state.peek();
         let text = cur.text();
         let b = pos_to_byte(&text, pos, pad_l, pad_t, advance, line_px);
-        let anchor = if extend {
-            cur.selection.anchor.min(text.len())
+        let next = if add {
+            cur.selection.pushed(Selection::caret(b))
+        } else if extend {
+            let anchor = cur.selection.primary().anchor.min(text.len());
+            Selections::single(Selection::range(anchor, b))
         } else {
-            b
+            Selections::single(Selection::caret(b))
         };
         state.set(EditorState {
             doc: cur.doc.clone(),
-            selection: Selection::range(anchor, b),
+            selection: next,
         });
         goal.set(col_of(&text, b));
         // A click/drag ends any typing run, so the next keystroke starts a new undo step.
         history.peek().borrow_mut().break_group();
     };
+    // Double-click selects the word under the pointer (new single selection).
+    let word_select = move |pos: Offset| {
+        let cur = state.peek();
+        let text = cur.text();
+        let b = pos_to_byte(&text, pos, pad_l, pad_t, advance, line_px);
+        let (s, e) = word_at(&text, b);
+        state.set(EditorState {
+            doc: cur.doc.clone(),
+            selection: Selections::single(Selection::range(s, e)),
+        });
+        goal.set(col_of(&text, e));
+        history.peek().borrow_mut().break_group();
+    };
+    // Column (rectangular) selection: Shift+Alt+drag makes one caret/range per row across
+    // the dragged rectangle — a caret per line if the two edges share a column.
+    let column_select = move |from: Offset, to: Offset| {
+        let cur = state.peek();
+        let text = cur.text();
+        let (la, ca) = pos_to_grid(&text, from, pad_l, pad_t, advance, line_px);
+        let (lb, cb) = pos_to_grid(&text, to, pad_l, pad_t, advance, line_px);
+        let (l0, l1) = (la.min(lb), la.max(lb));
+        let rows: Vec<Selection> = (l0..=l1)
+            .map(|line| Selection::range(byte_at(&text, line, ca), byte_at(&text, line, cb)))
+            .collect();
+        // Primary follows the moving edge (the row the pointer is on).
+        let pi = if lb >= la { rows.len() - 1 } else { 0 };
+        state.set(EditorState {
+            doc: cur.doc.clone(),
+            selection: Selections::new(rows, pi),
+        });
+        goal.set(cb);
+        history.peek().borrow_mut().break_group();
+    };
     let click_area = GestureDetector::new(container().height(content_h).child(grid))
         .on_pointer_down(action_event(move |e| {
             focus.request_focus();
-            hit(e.position, false);
+            let alt = pebbles::core::keyboard::alt_held();
+            let shift = pebbles::core::keyboard::shift_held();
+            drag_anchor.set(Some(e.position)); // remember where a drag begins
+            if shift && alt {
+                // Shift+Alt starts a column drag — don't place/add a caret on the press.
+            } else {
+                // Alt-click adds a caret; Shift-click extends; a plain click collapses.
+                hit(e.position, shift, alt);
+            }
         }))
-        .on_pan_update(action_event(move |e| hit(e.position, true)));
+        .on_pan_start(action_event(move |e| drag_anchor.set(Some(e.position))))
+        .on_pan_update(action_event(move |e| {
+            let alt = pebbles::core::keyboard::alt_held();
+            let shift = pebbles::core::keyboard::shift_held();
+            if shift && alt {
+                let from = drag_anchor.peek().unwrap_or(e.position);
+                column_select(from, e.position);
+            } else {
+                hit(e.position, true, false);
+            }
+        }))
+        .on_double_tap(action_event(move |e| word_select(e.position)));
 
     // ---- gutter ----
     let body: AnyWidget = if p.gutter {
@@ -586,7 +667,7 @@ fn dispatch(
         history
             .peek()
             .borrow_mut()
-            .record(inverse, coalesce, next.selection.head);
+            .record(inverse, coalesce, next.primary().head);
         code.set(next.text());
     }
     state.set(next);
@@ -604,32 +685,61 @@ fn apply_key(
     let st = state.peek();
     let src = st.text();
     let len = src.len();
-    let (a, c) = (st.selection.anchor.min(len), st.selection.head.min(len));
-    let (lo, hi) = (a.min(c), a.max(c));
+    // Every cursor/selection; edits and motions apply to all of them (multi-cursor).
+    let sels = st.selection.clamped(len);
+    let ranges: Vec<Selection> = sels.ranges().to_vec();
+    let primary_idx = sels.primary_index();
+    let primary = sels.primary();
+    let is_multi = sels.is_multi();
+    let last = ranges.len().saturating_sub(1);
 
-    // Replace [lo,hi) with `ins`, caret after it, dispatched as one transaction.
-    let replace = |ins: &str, coalesce: Coalesce| {
-        let caret = lo + ins.len();
+    // Core edit: apply `f(range) -> (from, to, insert)` to EVERY range as one atomic
+    // transaction, leaving a caret after each inserted text. `f` sees the pre-edit
+    // document (`src`); the accumulated `delta` keeps each caret correct as earlier
+    // edits shift later offsets.
+    let edit_ranges = |f: &dyn Fn(Selection) -> (usize, usize, String), coalesce: Coalesce| {
+        let mut changes: Vec<Change> = Vec::with_capacity(ranges.len());
+        let mut carets: Vec<Selection> = Vec::with_capacity(ranges.len());
+        let mut delta: isize = 0;
+        for &r in &ranges {
+            let (from, to, ins) = f(r);
+            let (from, to) = (from.min(to), from.max(to));
+            let caret = (from as isize + delta + ins.len() as isize).max(0) as usize;
+            delta += ins.len() as isize - (to as isize - from as isize);
+            changes.push(Change {
+                from,
+                to,
+                insert: ins,
+            });
+            carets.push(Selection::caret(caret));
+        }
+        let pi = primary_idx.min(carets.len().saturating_sub(1));
         let tx = Transaction::change_and_select(
-            ChangeSet::replace(lo, hi, ins),
-            Selection::caret(caret),
+            ChangeSet::from_changes(changes),
+            Selections::new(carets, pi),
         );
         dispatch(state, history, code, tx, coalesce);
-        goal.set(col_of(&state.peek().text(), caret));
+        goal.set(col_of(&state.peek().text(), state.peek().primary().head));
     };
-    // A caret / selection move (edits nothing, records no history).
-    let select = |anchor: usize, head: usize| {
+    // Replace every selection (or insert at every caret) with `ins`.
+    let replace = |ins: &str, coalesce: Coalesce| {
+        edit_ranges(&|r: Selection| (r.min(), r.max(), ins.to_string()), coalesce);
+    };
+    // Move all cursors (edits nothing, records no history); ends any typing run.
+    let select_many = |next: Selections| {
         state.set(EditorState {
             doc: state.peek().doc.clone(),
-            selection: Selection::range(anchor, head),
+            selection: next,
         });
+        history.peek().borrow_mut().break_group();
     };
 
     match k {
         KeyInput::Insert(s) if !read_only => {
-            // Single-character typing coalesces into one undo step; a newline or a
-            // selection-replacement starts a fresh one.
-            let coalesce = if lo == hi && s != "\n" && s.chars().count() == 1 {
+            // A single character at a single empty caret coalesces into one undo step; a
+            // newline, a selection-replacement, or multi-cursor typing starts a fresh one.
+            let coalesce = if !is_multi && primary.is_empty() && s != "\n" && s.chars().count() == 1
+            {
                 Coalesce::Typing
             } else {
                 Coalesce::Never
@@ -637,107 +747,161 @@ fn apply_key(
             replace(&s, coalesce);
         }
         KeyInput::Enter if !read_only => {
-            // Auto-indent: carry the current line's leading whitespace, and add one level
+            // Auto-indent per caret: carry that line's leading whitespace, and add one level
             // after an opening bracket or a `:` (smart indent).
-            let ls = line_start(&src, lo);
-            let cur = &src[ls..lo];
-            let mut indent: String = cur
-                .chars()
-                .take_while(|ch| *ch == ' ' || *ch == '\t')
-                .collect();
-            if cur.trim_end().ends_with(['{', '(', '[', ':']) {
-                indent.push_str(tab);
-            }
-            replace(&format!("\n{indent}"), Coalesce::Never);
+            edit_ranges(
+                &|r| {
+                    let at = r.min();
+                    let ls = line_start(&src, at);
+                    let cur = &src[ls..at];
+                    let mut indent: String = cur
+                        .chars()
+                        .take_while(|ch| *ch == ' ' || *ch == '\t')
+                        .collect();
+                    if cur.trim_end().ends_with(['{', '(', '[', ':']) {
+                        indent.push_str(tab);
+                    }
+                    (r.min(), r.max(), format!("\n{indent}"))
+                },
+                Coalesce::Never,
+            );
         }
         KeyInput::Backspace if !read_only => {
-            if lo != hi {
-                replace("", Coalesce::Never);
-            } else if lo > 0 {
-                let p = prev_char(&src, lo);
-                let tx =
-                    Transaction::change_and_select(ChangeSet::delete(p, lo), Selection::caret(p));
-                dispatch(state, history, code, tx, Coalesce::Deleting);
-                goal.set(col_of(&state.peek().text(), p));
-            }
+            // Delete each selection, or the char before each bare caret.
+            edit_ranges(
+                &|r| {
+                    if r.is_empty() {
+                        (prev_char(&src, r.head), r.head, String::new())
+                    } else {
+                        (r.min(), r.max(), String::new())
+                    }
+                },
+                Coalesce::Deleting,
+            );
         }
         KeyInput::Delete if !read_only => {
-            if lo != hi {
-                replace("", Coalesce::Never);
-            } else if hi < len {
-                let n = next_char(&src, hi);
-                let tx =
-                    Transaction::change_and_select(ChangeSet::delete(hi, n), Selection::caret(hi));
-                dispatch(state, history, code, tx, Coalesce::Never);
-            }
+            edit_ranges(
+                &|r| {
+                    if r.is_empty() {
+                        (r.head, next_char(&src, r.head), String::new())
+                    } else {
+                        (r.min(), r.max(), String::new())
+                    }
+                },
+                Coalesce::Never,
+            );
         }
         KeyInput::DeleteWordBack if !read_only => {
-            let start = if lo != hi { lo } else { prev_word(&src, lo) };
-            let tx = Transaction::change_and_select(
-                ChangeSet::delete(start, hi),
-                Selection::caret(start),
+            edit_ranges(
+                &|r| {
+                    let start = if r.is_empty() {
+                        prev_word(&src, r.head)
+                    } else {
+                        r.min()
+                    };
+                    (start, r.max(), String::new())
+                },
+                Coalesce::Never,
             );
-            dispatch(state, history, code, tx, Coalesce::Never);
-            goal.set(col_of(&state.peek().text(), start));
         }
         KeyInput::DeleteWordForward if !read_only => {
-            let end = if lo != hi { hi } else { next_word(&src, hi) };
-            let tx =
-                Transaction::change_and_select(ChangeSet::delete(lo, end), Selection::caret(lo));
-            dispatch(state, history, code, tx, Coalesce::Never);
-            goal.set(col_of(&state.peek().text(), lo));
+            edit_ranges(
+                &|r| {
+                    let end = if r.is_empty() {
+                        next_word(&src, r.head)
+                    } else {
+                        r.max()
+                    };
+                    (r.min(), end, String::new())
+                },
+                Coalesce::Never,
+            );
         }
         KeyInput::Move { motion, extend } => {
-            let target = match motion {
-                Motion::Left => prev_char(&src, c),
-                Motion::Right => next_char(&src, c),
-                Motion::WordLeft => prev_word(&src, c),
-                Motion::WordRight => next_word(&src, c),
-                Motion::LineStart => line_start(&src, c),
-                Motion::LineEnd => line_end(&src, c),
-                Motion::DocStart => 0,
-                Motion::DocEnd => len,
-                Motion::Up => {
-                    let l = line_of(&src, c);
-                    if l == 0 {
-                        0
-                    } else {
-                        byte_at(&src, l - 1, goal.peek())
-                    }
-                }
-                Motion::Down => byte_at(&src, line_of(&src, c) + 1, goal.peek()),
-            };
-            let anchor = if extend { a } else { target };
-            select(anchor, target);
-            if !matches!(motion, Motion::Up | Motion::Down) {
-                goal.set(col_of(&src, target));
+            // Move every caret. Up/Down keep a goal column: the shared `goal` for a single
+            // caret, each caret's own column when there are several.
+            let moved: Vec<Selection> = ranges
+                .iter()
+                .map(|&r| {
+                    let col = if is_multi { col_of(&src, r.head) } else { goal.peek() };
+                    let target = match motion {
+                        Motion::Left => prev_char(&src, r.head),
+                        Motion::Right => next_char(&src, r.head),
+                        Motion::WordLeft => prev_word(&src, r.head),
+                        Motion::WordRight => next_word(&src, r.head),
+                        Motion::LineStart => line_start(&src, r.head),
+                        Motion::LineEnd => line_end(&src, r.head),
+                        Motion::DocStart => 0,
+                        Motion::DocEnd => len,
+                        Motion::Up => {
+                            let l = line_of(&src, r.head);
+                            if l == 0 { 0 } else { byte_at(&src, l - 1, col) }
+                        }
+                        Motion::Down => byte_at(&src, line_of(&src, r.head) + 1, col),
+                    };
+                    let anchor = if extend { r.anchor } else { target };
+                    Selection::range(anchor, target)
+                })
+                .collect();
+            select_many(Selections::new(moved, primary_idx.min(last)));
+            if !is_multi && !matches!(motion, Motion::Up | Motion::Down) {
+                goal.set(col_of(&src, state.peek().primary().head));
             }
-            // Moving the caret ends any typing run.
-            history.peek().borrow_mut().break_group();
         }
-        KeyInput::SelectAll => select(0, len),
+        KeyInput::SelectAll => select_many(Selections::single(Selection::range(0, len))),
+        KeyInput::Escape => {
+            // Collapse multiple cursors / any selection down to the primary caret.
+            if is_multi || !primary.is_empty() {
+                select_many(Selections::single(Selection::caret(primary.head)));
+            }
+        }
         KeyInput::Copy => {
-            if lo != hi {
-                pebbles::core::clipboard::write(&src[lo..hi]);
+            // Join each non-empty selection's text with newlines (multi-cursor copy).
+            let parts: Vec<String> = ranges
+                .iter()
+                .filter(|r| !r.is_empty())
+                .map(|r| src[r.min()..r.max()].to_string())
+                .collect();
+            if !parts.is_empty() {
+                pebbles::core::clipboard::write(&parts.join("\n"));
             }
         }
         KeyInput::Cut if !read_only => {
-            if lo != hi {
-                pebbles::core::clipboard::write(&src[lo..hi]);
+            let parts: Vec<String> = ranges
+                .iter()
+                .filter(|r| !r.is_empty())
+                .map(|r| src[r.min()..r.max()].to_string())
+                .collect();
+            if !parts.is_empty() {
+                pebbles::core::clipboard::write(&parts.join("\n"));
                 replace("", Coalesce::Never);
             }
         }
         KeyInput::Paste if !read_only => {
             let p = pebbles::core::clipboard::read();
             if !p.is_empty() {
-                replace(&p, Coalesce::Never);
+                let lines: Vec<&str> = p.split('\n').collect();
+                if is_multi && lines.len() == ranges.len() {
+                    // One clipboard line per cursor (as CodeMirror/VS Code do).
+                    let idx = std::cell::Cell::new(0usize);
+                    edit_ranges(
+                        &|r| {
+                            let i = idx.get();
+                            idx.set(i + 1);
+                            (r.min(), r.max(), lines[i].to_string())
+                        },
+                        Coalesce::Never,
+                    );
+                } else {
+                    replace(&p, Coalesce::Never);
+                }
             }
         }
         KeyInput::Undo if !read_only => {
             let restored = history.peek().borrow_mut().undo(&state.peek());
             if let Some(next) = restored {
                 code.set(next.text());
-                goal.set(col_of(&next.text(), next.selection.head));
+                goal.set(col_of(&next.text(), next.primary().head));
                 state.set(next);
             }
         }
@@ -745,18 +909,21 @@ fn apply_key(
             let restored = history.peek().borrow_mut().redo(&state.peek());
             if let Some(next) = restored {
                 code.set(next.text());
-                goal.set(col_of(&next.text(), next.selection.head));
+                goal.set(col_of(&next.text(), next.primary().head));
                 state.set(next);
             }
         }
         KeyInput::Indent if !read_only => {
-            let (l0, l1) = (line_of(&src, lo), line_of(&src, hi));
-            if l0 == l1 {
-                // No line span: insert one indent level at the caret (replacing any selection).
+            // A selection spanning lines block-indents each touched line; otherwise insert
+            // one indent level at each caret / replace each selection.
+            let spans_lines = ranges
+                .iter()
+                .any(|r| line_of(&src, r.min()) != line_of(&src, r.max()));
+            if !spans_lines {
                 replace(tab, Coalesce::Never);
             } else {
-                // Indent every line the selection touches; the selection maps through.
-                let changes: Vec<Change> = (l0..=l1)
+                let changes: Vec<Change> = touched_lines(&src, &ranges)
+                    .into_iter()
                     .map(|line| {
                         let ls = line_start_of(&src, line);
                         Change {
@@ -777,14 +944,13 @@ fn apply_key(
         }
         KeyInput::Outdent if !read_only => {
             // Remove up to one indent level of leading whitespace from each touched line.
-            let (l0, l1) = (line_of(&src, lo), line_of(&src, hi));
             let unit_w = if tab == "\t" {
                 1
             } else {
                 tab.chars().count().max(1)
             };
             let mut changes: Vec<Change> = Vec::new();
-            for line in l0..=l1 {
+            for line in touched_lines(&src, &ranges) {
                 let ls = line_start_of(&src, line);
                 let le = line_end(&src, ls);
                 let mut n = 0usize;
@@ -820,6 +986,17 @@ fn apply_key(
             let _ = tab;
         }
     }
+}
+
+/// The sorted, de-duplicated set of line numbers any selection in `ranges` touches.
+fn touched_lines(src: &str, ranges: &[Selection]) -> Vec<usize> {
+    let mut lines = std::collections::BTreeSet::new();
+    for r in ranges {
+        for l in line_of(src, r.min())..=line_of(src, r.max()) {
+            lines.insert(l);
+        }
+    }
+    lines.into_iter().collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -933,6 +1110,35 @@ fn prev_word(src: &str, byte: usize) -> usize {
     }
     b
 }
+/// The byte range of the word under `byte` (for double-click). If `byte` isn't on/adjacent
+/// to a word character, selects just the single character there.
+fn word_at(src: &str, byte: usize) -> (usize, usize) {
+    let b = byte.min(src.len());
+    let on_word = src[b..].chars().next().is_some_and(is_word)
+        || (b > 0 && src[prev_char(src, b)..b].chars().next().is_some_and(is_word));
+    if on_word {
+        let mut s = b;
+        while s > 0 {
+            let p = prev_char(src, s);
+            if src[p..s].chars().next().is_some_and(is_word) {
+                s = p;
+            } else {
+                break;
+            }
+        }
+        let mut e = b;
+        while e < src.len() {
+            if src[e..].chars().next().is_some_and(is_word) {
+                e = next_char(src, e);
+            } else {
+                break;
+            }
+        }
+        (s, e)
+    } else {
+        (b, next_char(src, b))
+    }
+}
 fn next_word(src: &str, byte: usize) -> usize {
     let mut b = byte.min(src.len());
     while b < src.len() && src[b..].chars().next().is_some_and(|ch| ch.is_whitespace()) {
@@ -948,6 +1154,20 @@ fn next_word(src: &str, byte: usize) -> usize {
     }
     b
 }
+/// Map a pointer position to a `(line, col)` grid cell, clamped to the document's lines.
+fn pos_to_grid(
+    src: &str,
+    pos: Offset,
+    pad_l: f64,
+    pad_t: f64,
+    advance: f64,
+    line_px: f64,
+) -> (usize, usize) {
+    let line = (((pos.y - pad_t) / line_px).floor()).max(0.0) as usize;
+    let col = (((pos.x - pad_l) / advance).round()).max(0.0) as usize;
+    let last = src.split('\n').count().saturating_sub(1);
+    (line.min(last), col)
+}
 fn pos_to_byte(
     src: &str,
     pos: Offset,
@@ -956,8 +1176,6 @@ fn pos_to_byte(
     advance: f64,
     line_px: f64,
 ) -> usize {
-    let line = (((pos.y - pad_t) / line_px).floor()).max(0.0) as usize;
-    let col = (((pos.x - pad_l) / advance).round()).max(0.0) as usize;
-    let last = src.split('\n').count().saturating_sub(1);
-    byte_at(src, line.min(last), col)
+    let (line, col) = pos_to_grid(src, pos, pad_l, pad_t, advance, line_px);
+    byte_at(src, line, col)
 }

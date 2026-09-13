@@ -223,23 +223,140 @@ impl ChangeSet {
     }
 }
 
+/// One or more [`Selection`] ranges with a designated **primary** — the multi-cursor model.
+/// Ranges are kept sorted by position and non-overlapping (overlapping/touching ranges, and
+/// duplicate carets, merge). A single caret is the common case (`Selections::single`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Selections {
+    ranges: Vec<Selection>,
+    primary: usize,
+}
+
+impl Selections {
+    /// A single selection/caret.
+    pub fn single(sel: Selection) -> Self {
+        Selections { ranges: vec![sel], primary: 0 }
+    }
+
+    /// Build from ranges with `primary` the index of the main one, normalizing (sort + merge
+    /// overlaps). Empty input degenerates to a caret at 0.
+    pub fn new(ranges: Vec<Selection>, primary: usize) -> Self {
+        if ranges.is_empty() {
+            return Selections::single(Selection::caret(0));
+        }
+        let marker = ranges[primary.min(ranges.len() - 1)];
+        let mut sorted = ranges;
+        sorted.sort_by_key(|s| (s.min(), s.max()));
+        let mut merged: Vec<Selection> = Vec::with_capacity(sorted.len());
+        for r in sorted {
+            match merged.last_mut() {
+                Some(last) if r.min() <= last.max() => {
+                    // Overlapping/touching → union into one forward range.
+                    *last = Selection::range(last.min().min(r.min()), last.max().max(r.max()));
+                }
+                _ => merged.push(r),
+            }
+        }
+        // The primary is whichever merged range now contains the old primary's head.
+        let ph = marker.head;
+        let primary = merged
+            .iter()
+            .position(|s| s.min() <= ph && ph <= s.max())
+            .unwrap_or(merged.len() - 1);
+        Selections { ranges: merged, primary }
+    }
+
+    /// The primary (main) selection — the one status/current-line/autoscroll follow.
+    pub fn primary(&self) -> Selection {
+        self.ranges[self.primary]
+    }
+
+    /// The index of the primary range within [`ranges`](Self::ranges).
+    pub fn primary_index(&self) -> usize {
+        self.primary
+    }
+
+    /// All selection ranges, sorted by position.
+    pub fn ranges(&self) -> &[Selection] {
+        &self.ranges
+    }
+
+    /// The number of ranges (cursors).
+    pub fn len(&self) -> usize {
+        self.ranges.len()
+    }
+
+    /// Whether there is exactly one caret with no selected text.
+    pub fn is_empty(&self) -> bool {
+        self.ranges.len() == 1 && self.ranges[0].is_empty()
+    }
+
+    /// Whether there is more than one cursor.
+    pub fn is_multi(&self) -> bool {
+        self.ranges.len() > 1
+    }
+
+    /// Add `sel` as the new primary range (merging overlaps).
+    pub fn pushed(&self, sel: Selection) -> Selections {
+        let mut r = self.ranges.clone();
+        r.push(sel);
+        let n = r.len();
+        Selections::new(r, n - 1)
+    }
+
+    /// Collapse to just the primary caret (Escape / a plain click).
+    pub fn collapsed(&self) -> Selections {
+        Selections::single(self.primary())
+    }
+
+    /// Map every range forward through a change set (carets survive an edit).
+    pub fn mapped(&self, cs: &ChangeSet) -> Selections {
+        let ranges = self
+            .ranges
+            .iter()
+            .map(|s| Selection {
+                anchor: cs.map(s.anchor, Assoc::After),
+                head: cs.map(s.head, Assoc::After),
+            })
+            .collect();
+        Selections::new(ranges, self.primary)
+    }
+
+    /// Clamp every range into `0..=len`.
+    pub fn clamped(&self, len: usize) -> Selections {
+        let ranges = self.ranges.iter().map(|s| s.clamped(len)).collect();
+        Selections::new(ranges, self.primary)
+    }
+}
+
+impl From<Selection> for Selections {
+    fn from(s: Selection) -> Self {
+        Selections::single(s)
+    }
+}
+
 /// The editor's document + selection. Treated as immutable: [`EditorState::apply`] returns a
 /// new state rather than mutating in place.
 #[derive(Clone)]
 pub struct EditorState {
     /// The document rope.
     pub doc: Rope,
-    /// The current caret / selection.
-    pub selection: Selection,
+    /// The current caret(s) / selection(s).
+    pub selection: Selections,
 }
 
 impl EditorState {
-    /// A fresh state holding `text` with the caret at the start.
+    /// A fresh state holding `text` with a single caret at the start.
     pub fn new(text: &str) -> Self {
         EditorState {
             doc: Rope::from_str(text),
-            selection: Selection::caret(0),
+            selection: Selections::single(Selection::caret(0)),
         }
+    }
+
+    /// The primary caret / selection (the common single-cursor accessor).
+    pub fn primary(&self) -> Selection {
+        self.selection.primary()
     }
 
     /// The document as a `String` (O(n) — used for rendering / plain-text output).
@@ -268,16 +385,14 @@ impl EditorState {
         // The selection after: an explicit one from the tx, else map the old one through.
         let selection = tx
             .selection
-            .unwrap_or_else(|| Selection {
-                anchor: tx.changes.map(self.selection.anchor, Assoc::After),
-                head: tx.changes.map(self.selection.head, Assoc::After),
-            })
+            .clone()
+            .unwrap_or_else(|| self.selection.mapped(&tx.changes))
             .clamped(len);
 
         let next = EditorState { doc, selection };
         let inverse = Transaction {
             changes: inverse_changes,
-            selection: Some(self.selection),
+            selection: Some(self.selection.clone()),
         };
         (next, inverse)
     }
@@ -289,8 +404,8 @@ impl EditorState {
 pub struct Transaction {
     /// The edit.
     pub changes: ChangeSet,
-    /// Where to put the selection afterward; `None` maps the old selection through the change.
-    pub selection: Option<Selection>,
+    /// Where to put the selection(s) afterward; `None` maps the old selection through.
+    pub selection: Option<Selections>,
 }
 
 impl Transaction {
@@ -301,18 +416,19 @@ impl Transaction {
             selection: None,
         }
     }
-    /// A transaction from a change set with an explicit resulting selection.
-    pub fn change_and_select(changes: ChangeSet, selection: Selection) -> Self {
+    /// A transaction from a change set with an explicit resulting selection (a single
+    /// [`Selection`] or a [`Selections`] set).
+    pub fn change_and_select(changes: ChangeSet, selection: impl Into<Selections>) -> Self {
         Transaction {
             changes,
-            selection: Some(selection),
+            selection: Some(selection.into()),
         }
     }
-    /// A selection-only transaction (moves the caret, edits nothing).
-    pub fn select(selection: Selection) -> Self {
+    /// A selection-only transaction (moves the caret(s), edits nothing).
+    pub fn select(selection: impl Into<Selections>) -> Self {
         Transaction {
             changes: ChangeSet::new(),
-            selection: Some(selection),
+            selection: Some(selection.into()),
         }
     }
     /// Whether this transaction edits the document (vs. a pure selection change).
@@ -390,7 +506,7 @@ impl History {
         self.redo.push(Revision {
             inverse: redo_inverse,
             kind: Coalesce::Never,
-            caret_after: next.selection.head,
+            caret_after: next.primary().head,
         });
         Some(next)
     }
@@ -402,7 +518,7 @@ impl History {
         self.undo.push(Revision {
             inverse: undo_inverse,
             kind: Coalesce::Never,
-            caret_after: next.selection.head,
+            caret_after: next.primary().head,
         });
         Some(next)
     }
@@ -520,7 +636,7 @@ mod tests {
         let (next, inv) = st.apply(&tx);
         assert_eq!(s(&next), "pub fn main() {}");
         // caret (was 0) mapped After the insert → 4
-        assert_eq!(next.selection.head, 4);
+        assert_eq!(next.primary().head, 4);
         // inverse restores
         let (back, _) = next.apply(&inv);
         assert_eq!(s(&back), "fn main() {}");
@@ -536,7 +652,7 @@ mod tests {
                 Selection::caret(i + 1),
             );
             let (next, inv) = st.apply(&tx);
-            hist.record(inv, Coalesce::Typing, next.selection.head);
+            hist.record(inv, Coalesce::Typing, next.primary().head);
             st = next;
         }
         assert_eq!(s(&st), "abc");
@@ -545,7 +661,7 @@ mod tests {
         assert_eq!(s(&st), "");
         st = hist.redo(&st).unwrap();
         assert_eq!(s(&st), "abc");
-        assert_eq!(st.selection.head, 3);
+        assert_eq!(st.primary().head, 3);
     }
 
     #[test]
@@ -559,13 +675,13 @@ mod tests {
                 Selection::caret(i + 1),
             );
             let (n, inv) = st.apply(&tx);
-            hist.record(inv, Coalesce::Typing, n.selection.head);
+            hist.record(inv, Coalesce::Typing, n.primary().head);
             st = n;
         }
         // backspace once (own group)
         let tx = Transaction::change_and_select(ChangeSet::delete(1, 2), Selection::caret(1));
         let (n, inv) = st.apply(&tx);
-        hist.record(inv, Coalesce::Deleting, n.selection.head);
+        hist.record(inv, Coalesce::Deleting, n.primary().head);
         st = n;
         assert_eq!(s(&st), "h");
         // undo the delete → "hi"; undo the typing → ""
@@ -606,5 +722,82 @@ mod tests {
         assert_eq!(s(&next), "héllo 🌍");
         let (back, _) = next.apply(&inv);
         assert_eq!(s(&back), "héllo");
+    }
+
+    #[test]
+    fn selections_sort_and_merge() {
+        // Out-of-order ranges are sorted; overlapping/touching ones merge.
+        let sels = Selections::new(
+            vec![
+                Selection::range(10, 6), // 6..10
+                Selection::caret(2),
+                Selection::range(4, 8), // overlaps 6..10 → merges to 2? no: 4..8 & 6..10 → 4..10
+            ],
+            0,
+        );
+        assert_eq!(sels.len(), 2);
+        assert_eq!(sels.ranges()[0], Selection::caret(2));
+        assert_eq!((sels.ranges()[1].min(), sels.ranges()[1].max()), (4, 10));
+    }
+
+    #[test]
+    fn selections_primary_tracks_through_merge() {
+        // The primary was the range at head 8; after merge it points at the merged range.
+        let sels = Selections::new(
+            vec![Selection::caret(0), Selection::range(8, 4), Selection::range(6, 9)],
+            1, // primary = the (8,4) range, head at 8
+        );
+        assert_eq!(sels.len(), 2);
+        assert!(sels.primary().min() <= 8 && sels.primary().max() >= 8);
+    }
+
+    #[test]
+    fn selections_pushed_and_collapsed() {
+        let one = Selections::single(Selection::caret(0));
+        let two = one.pushed(Selection::caret(5));
+        assert_eq!(two.len(), 2);
+        assert!(two.is_multi());
+        // The newly pushed range becomes primary.
+        assert_eq!(two.primary().head, 5);
+    }
+
+    #[test]
+    fn selections_map_across_edit() {
+        // Two carets at 2 and 6; insert "xx" at 0 shifts both right by 2.
+        let sels = Selections::new(vec![Selection::caret(2), Selection::caret(6)], 0);
+        let cs = ChangeSet::insert(0, "xx");
+        let mapped = sels.mapped(&cs);
+        assert_eq!(mapped.ranges()[0].head, 4);
+        assert_eq!(mapped.ranges()[1].head, 8);
+    }
+
+    #[test]
+    fn multi_cursor_edit_round_trips() {
+        // Two carets (at 0 and after "b"); a two-change set inserts "X" at both.
+        let st = EditorState {
+            doc: Rope::from_str("ab"),
+            selection: Selections::new(vec![Selection::caret(0), Selection::caret(1)], 0),
+        };
+        let cs = ChangeSet::from_changes(vec![
+            Change { from: 0, to: 0, insert: "X".into() },
+            Change { from: 1, to: 1, insert: "X".into() },
+        ]);
+        let tx = Transaction::change_and_select(
+            cs,
+            Selections::new(vec![Selection::caret(1), Selection::caret(3)], 0),
+        );
+        let (next, inv) = st.apply(&tx);
+        assert_eq!(s(&next), "XaXb");
+        // Inverse restores the document and the original multi-cursor selection.
+        let (back, _) = next.apply(&inv);
+        assert_eq!(s(&back), "ab");
+        assert_eq!(back.selection.len(), 2);
+    }
+
+    #[test]
+    fn selections_clamped_to_doc() {
+        let sels = Selections::new(vec![Selection::range(2, 20)], 0);
+        let c = sels.clamped(5);
+        assert_eq!((c.primary().min(), c.primary().max()), (2, 5));
     }
 }
