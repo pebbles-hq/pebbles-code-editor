@@ -53,7 +53,8 @@ use crate::edit::{Change, Coalesce};
 
 /// The monospace family used for all editor text.
 const MONO: &str = "JetBrains Mono";
-/// Advance width of one glyph, as a fraction of the font size (JetBrains Mono ≈ 0.6).
+/// Default advance width of one glyph, as a fraction of the font size (JetBrains Mono ≈ 0.6).
+/// Configurable via [`CodeEditor::advance_ratio`] so metrics are exact for any monospace font.
 const ADVANCE_RATIO: f64 = 0.6;
 
 /// Build a code editor bound to `code`. Configure fluently, then drop it into any tree.
@@ -72,6 +73,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         context_menu: true,
         tab_size: 4,
         insert_spaces: true,
+        advance_ratio: ADVANCE_RATIO,
         indent_guides: false,
         render_whitespace: false,
         rulers: Vec::new(),
@@ -96,6 +98,7 @@ pub struct CodeEditor {
     context_menu: bool,
     tab_size: usize,
     insert_spaces: bool,
+    advance_ratio: f64,
     indent_guides: bool,
     render_whitespace: bool,
     rulers: Vec<usize>,
@@ -160,6 +163,13 @@ impl CodeEditor {
         self.insert_spaces = spaces;
         self
     }
+    /// Glyph advance as a fraction of the font size — set this to your monospace font's
+    /// real advance ratio (default ≈ 0.6, JetBrains Mono) so caret/click/selection math is
+    /// exact. Programming ligature fonts keep the cell width, so ligatures stay exact too.
+    pub fn advance_ratio(mut self, ratio: f64) -> Self {
+        self.advance_ratio = ratio.max(0.1);
+        self
+    }
     /// Draw faint vertical indent guides at each indentation level (default off).
     pub fn indent_guides(mut self, on: bool) -> Self {
         self.indent_guides = on;
@@ -218,6 +228,7 @@ struct Props {
     context_menu: bool,
     tab_size: usize,
     insert_spaces: bool,
+    advance_ratio: f64,
     indent_guides: bool,
     render_whitespace: bool,
     rulers: Vec<usize>,
@@ -242,6 +253,7 @@ impl From<CodeEditor> for Props {
             context_menu: e.context_menu,
             tab_size: e.tab_size,
             insert_spaces: e.insert_spaces,
+            advance_ratio: e.advance_ratio,
             indent_guides: e.indent_guides,
             render_whitespace: e.render_whitespace,
             rulers: e.rulers,
@@ -310,7 +322,7 @@ fn render_editor(p: &Props) -> AnyWidget {
     let fs = p.fs;
     let lh = p.lh;
     let line_px = fs * lh;
-    let advance = fs * ADVANCE_RATIO;
+    let advance = fs * p.advance_ratio;
     let pad_l = 14.0;
     let pad_t = 10.0;
     let theme = &p.theme;
