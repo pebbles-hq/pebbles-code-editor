@@ -57,6 +57,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         on_scroll: None,
         initial_scroll: 0.0,
         selection_handles: false,
+        folds: None,
     }
 }
 
@@ -100,6 +101,7 @@ pub struct CodeEditor {
     on_scroll: Option<ScrollHook>,
     initial_scroll: f64,
     selection_handles: bool,
+    folds: Option<Signal<std::collections::BTreeSet<usize>>>,
 }
 
 /// Fired after each change with the minimal [`Edit`] delta; `remote` is true when the change
@@ -318,6 +320,13 @@ impl CodeEditor {
         self.selection_handles = on;
         self
     }
+    /// Bind fold state to a caller-owned signal (the set of folded head lines) — so folds
+    /// persist and restore across mounts (e.g. per file/tab). Without it the editor keeps its
+    /// own internal fold state.
+    pub fn folds(mut self, folds: Signal<std::collections::BTreeSet<usize>>) -> Self {
+        self.folds = Some(folds);
+        self
+    }
 }
 
 impl IntoWidget for CodeEditor {
@@ -369,6 +378,7 @@ pub(crate) struct Props {
     pub(crate) on_scroll: Option<ScrollHook>,
     pub(crate) initial_scroll: f64,
     pub(crate) selection_handles: bool,
+    pub(crate) folds: Option<Signal<std::collections::BTreeSet<usize>>>,
 }
 
 impl From<CodeEditor> for Props {
@@ -446,6 +456,7 @@ impl From<CodeEditor> for Props {
             on_scroll: e.on_scroll,
             initial_scroll: e.initial_scroll,
             selection_handles: e.selection_handles,
+            folds: e.folds,
         }
     }
 }

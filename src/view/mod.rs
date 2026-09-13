@@ -119,7 +119,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let hover_pos = create_signal::<Option<Offset>>(None); // pointer pos for hover tooltip
     let sig_help = create_signal::<Option<crate::providers::SignatureHelp>>(None); // signature help
     let preedit = create_signal(String::new()); // IME composition (preedit) text, shown at caret
-    let folds = create_signal::<std::collections::BTreeSet<usize>>(std::collections::BTreeSet::new()); // folded head lines
+    // Fold state: use the caller-bound signal (persists across mounts / tabs) if given, else a
+    // private one. `create_signal` runs unconditionally so the hook order never churns.
+    let internal_folds = create_signal::<std::collections::BTreeSet<usize>>(std::collections::BTreeSet::new());
+    let folds = p.folds.unwrap_or(internal_folds);
     // Find/replace state.
     let find = search::State {
         open: create_signal(0u8),

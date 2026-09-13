@@ -73,6 +73,7 @@ pub fn pane(ws: Workspace, s: Settings, height: f64) -> AnyWidget {
         .a11y_label(format!("{} editor", f.path))
         .initial_scroll(scroll.peek())
         .on_scroll(move |px| scroll.set(px))
+        .folds(f.folds)
         .theme(if s.light.get() { EditorTheme::light() } else { EditorTheme::dark() })
         .height(height.max(120.0))
         .font_size(s.font_size.get())

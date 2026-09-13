@@ -20,6 +20,8 @@ pub struct FileEntry {
     pub inlays: Signal<Vec<InlayHint>>,
     /// Persisted scroll offset, so switching away and back to a tab restores the view (§10).
     pub scroll: Signal<f64>,
+    /// Persisted fold state (folded head lines), restored on tab switch (§10 view state).
+    pub folds: Signal<std::collections::BTreeSet<usize>>,
 }
 
 /// The immutable project file set (content mutates through each entry's signal).
