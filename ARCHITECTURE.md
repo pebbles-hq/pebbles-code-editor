@@ -51,9 +51,10 @@ src/
 
   # ── extensibility / plugins (public API) ───────────────────────────────
   extensions.rs  The plugin model: the composable `Extension` (decorations, gutter markers,
-                 read-only ranges, commands, change/selection hooks), the `Snapshot` handed
-                 to callbacks, and the `EditContext` a `Command` uses to read/mutate. Data +
-                 builders only; the view renders the contributions and the palette.
+                 read-only ranges, commands, keybindings, a mergeable `ConfigPatch`, and
+                 change/selection/focus/click hooks), the `Snapshot` handed to callbacks, and
+                 the `EditContext` a `Command` uses to read/mutate. Data + builders only; the
+                 view renders the contributions, registers the keymap, and shows the palette.
 
   # ── configuration (public API) ─────────────────────────────────────────
   config.rs      The `code_editor()` builder + fluent `CodeEditor` config, and the resolved

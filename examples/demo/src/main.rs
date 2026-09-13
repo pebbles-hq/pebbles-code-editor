@@ -13,8 +13,10 @@
 //!   signature help (type `(`), diagnostics (TODO/FIXME/unwrap), inlay hints, go-to-def (F12),
 //!   format (Shift+Alt+F).
 //! - Extensions/plugins (toggle "Plugins"): decorations (TODO highlight), gutter markers
-//!   (TODO bookmark dot), a read-only region (line 1 is locked), and a command palette
-//!   (Ctrl+P → "Uppercase Selection" / "Wrap Selection in println!").
+//!   (TODO bookmark dot), a read-only region (line 1 is locked), a command palette (Ctrl+P →
+//!   "Uppercase Selection" / "Wrap Selection in println!"), a configurable keybinding (Ctrl+U
+//!   → uppercase), a config facet (2-space indent), and focus/click event hooks (logged to
+//!   stdout).
 //!
 //! Run it: `cargo run -p demo`
 //! Headless screenshot: `SHOT=1200:820:/tmp/editor.rgba cargo run -p demo`
@@ -23,7 +25,7 @@ use std::rc::Rc;
 
 use pebbles::prelude::*;
 use pebbles_code_editor::{
-    Command, CompletionContext, CompletionItem, CompletionKind, CompletionProvider,
+    Command, CompletionContext, CompletionItem, CompletionKind, CompletionProvider, ConfigPatch,
     DefinitionProvider, Decoration, Diagnostic, EditorTheme, Extension, FormatProvider, GutterMark,
     Hover, HoverProvider, InlayHint, Severity, SignatureHelp, SignatureProvider, code_editor,
     extension, lang, lang::Language,
@@ -263,7 +265,8 @@ fn sample_extensions() -> Vec<Extension> {
         let end = snap.text.find('\n').unwrap_or(snap.text.len());
         vec![(0, end)]
     });
-    // Two commands for the palette (Ctrl+P): uppercase the selection, wrap it in println!.
+    // Two commands (Ctrl+P palette): uppercase the selection, wrap it in println!.
+    // "Uppercase" is also bound to a key (Ctrl+U) — the configurable-keymap surface.
     let commands = extension("edit-commands")
         .command(Command::new("edit.upper", "Uppercase Selection", |ctx| {
             let (a, b) = ctx.selection();
@@ -280,7 +283,17 @@ fn sample_extensions() -> Vec<Extension> {
                 let inner = ctx.text()[a..b].to_string();
                 ctx.replace(a, b, format!("println!(\"{{}}\", {inner});"));
             },
-        ));
+        ))
+        .keybinding("Ctrl+U", "edit.upper")
+        // A config facet: this plugin prefers a 2-space indent (mergeable settings).
+        .config(ConfigPatch {
+            tab_size: Some(2),
+            insert_spaces: Some(true),
+            ..Default::default()
+        })
+        // Report focus + clicks to stdout so the event hooks are observable when you run it.
+        .on_focus(|has| println!("[plugin] editor focus: {has}"))
+        .on_click(|_snap, byte| println!("[plugin] clicked at byte {byte}"));
     vec![highlight, bookmarks, guard, commands]
 }
 
@@ -409,7 +422,8 @@ fn app() -> AnyWidget {
                     "Ctrl+F find · Ctrl+H replace · Ctrl+Space complete · Tab/Enter accept · \
                      Ctrl+/ comment · Ctrl+D add-next · Alt+click multi-cursor · Shift+Alt+drag column · \
                      dbl/triple-click word/line · F12 go-to-def · Shift+Alt+F format · hover for docs · ( for signature · \
-                     Ctrl+P command palette · plugins: TODO highlight + gutter bookmark, line 1 read-only",
+                     Ctrl+P command palette · Ctrl+U uppercase (plugin keybind) · \
+                     plugins: TODO highlight + gutter bookmark, line 1 read-only, 2-space indent",
                 )
                 .size(11.5)
                 .color(c.muted_foreground),

@@ -792,3 +792,101 @@ fn extension_on_change_hook_fires() {
     key(&mut ui, &mut env, KeyInput::Insert("a".to_string()));
     assert!(*seen.borrow() > base, "on_change fired after an edit");
 }
+
+#[test]
+fn extension_config_facet_overrides_tab_size() {
+    use pebbles_code_editor::{ConfigPatch, extension};
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::new());
+    // A plugin that prefers a 2-space indent (default is 4).
+    let ext = extension("two-space").config(ConfigPatch {
+        tab_size: Some(2),
+        insert_spaces: Some(true),
+        ..Default::default()
+    });
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(View::new(white(), code_editor(code).extension(ext).autofocus()).into_widget());
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    key(&mut ui, &mut env, KeyInput::Indent);
+    assert_eq!(code.get(), "  ", "the config facet set a 2-space indent");
+}
+
+#[test]
+fn extension_focus_hook_fires() {
+    use pebbles_code_editor::extension;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from("x"));
+    let last: Rc<RefCell<Option<bool>>> = Rc::new(RefCell::new(None));
+    let last_c = last.clone();
+    let ext = extension("focus-watch").on_focus(move |has| *last_c.borrow_mut() = Some(has));
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(View::new(white(), code_editor(code).extension(ext).autofocus()).into_widget());
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    assert_eq!(*last.borrow(), Some(true), "on_focus fired with focus gained");
+}
+
+#[test]
+fn extension_pointer_handler_reports_byte() {
+    use pebbles_code_editor::extension;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    pebbles::core::keyboard::set_modifiers(false, false, false, false);
+    let code = create_root_signal(String::from("abcdef"));
+    let hit: Rc<RefCell<Option<usize>>> = Rc::new(RefCell::new(None));
+    let hit_c = hit.clone();
+    let ext = extension("click-watch").on_click(move |_snap, byte| *hit_c.borrow_mut() = Some(byte));
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(
+        View::new(white(), code_editor(code).gutter(false).extension(ext).autofocus()).into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    // Click at column 3 on line 0.
+    click(&mut ui, &mut env, at(0, 3));
+    assert_eq!(*hit.borrow(), Some(3), "on_click reported the byte under the pointer");
+}
+
+#[test]
+fn extension_keybinding_runs_a_command() {
+    use pebbles::core::shortcuts::{Mods, ShortcutKey};
+    use pebbles_code_editor::{Command, extension};
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from("abc"));
+    // A command bound to Ctrl+B that appends "!" at the caret.
+    let ext = extension("bang")
+        .command(Command::new("edit.bang", "Insert Bang", |ctx| ctx.insert("!")))
+        .keybinding("Ctrl+B", "edit.bang");
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(View::new(white(), code_editor(code).extension(ext).autofocus()).into_widget());
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    // Caret to the end, then fire the bound chord through the shortcut registry.
+    key(&mut ui, &mut env, KeyInput::Move { motion: Motion::DocEnd, extend: false });
+    let mods = Mods { shift: false, ctrl: true, alt: false, meta: false };
+    let consumed = pebbles::core::shortcuts::dispatch(ui.window_id(), mods, ShortcutKey::Char('b'));
+    ui.rebuild_if_dirty();
+    ui.layout(&mut env, Size::new(600.0, 400.0));
+    assert!(consumed, "the editor consumed the bound chord");
+    assert_eq!(code.get(), "abc!", "the keybinding ran its command");
+}

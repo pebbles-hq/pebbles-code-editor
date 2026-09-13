@@ -297,6 +297,34 @@ pub(crate) struct Props {
 
 impl From<CodeEditor> for Props {
     fn from(e: CodeEditor) -> Self {
+        // Merge extension config facets over the builder values (applied in order — a later
+        // `Some` wins), so a plugin can ship its preferred defaults without wiring every knob.
+        let mut tab_size = e.tab_size;
+        let mut insert_spaces = e.insert_spaces;
+        let mut indent_guides = e.indent_guides;
+        let mut render_whitespace = e.render_whitespace;
+        let mut match_brackets = e.match_brackets;
+        let mut auto_close = e.auto_close;
+        for patch in e.extensions.iter().filter_map(|x| x.config) {
+            if let Some(v) = patch.tab_size {
+                tab_size = v.max(1);
+            }
+            if let Some(v) = patch.insert_spaces {
+                insert_spaces = v;
+            }
+            if let Some(v) = patch.indent_guides {
+                indent_guides = v;
+            }
+            if let Some(v) = patch.render_whitespace {
+                render_whitespace = v;
+            }
+            if let Some(v) = patch.match_brackets {
+                match_brackets = v;
+            }
+            if let Some(v) = patch.auto_close {
+                auto_close = v;
+            }
+        }
         Props {
             code: e.code,
             language: e.language,
@@ -309,16 +337,16 @@ impl From<CodeEditor> for Props {
             autofocus: e.autofocus,
             current_line: e.current_line,
             context_menu: e.context_menu,
-            tab_size: e.tab_size,
-            insert_spaces: e.insert_spaces,
+            tab_size,
+            insert_spaces,
             advance_ratio: e.advance_ratio,
-            indent_guides: e.indent_guides,
-            render_whitespace: e.render_whitespace,
+            indent_guides,
+            render_whitespace,
             rulers: e.rulers,
             minimap: e.minimap,
             sticky_scroll: e.sticky_scroll,
-            auto_close: e.auto_close,
-            match_brackets: e.match_brackets,
+            auto_close,
+            match_brackets,
             semantic: e.semantic,
             completion: e.completion,
             hover: e.hover,

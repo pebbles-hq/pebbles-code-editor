@@ -364,6 +364,33 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         });
     }
 
+    // Extension focus hook: fire on_focus(true/false) as the editor gains/loses focus.
+    if p.extensions.iter().any(|e| e.on_focus.is_some()) {
+        let focus_exts = p.extensions.clone();
+        create_effect(move || {
+            let has = focus.is_focused();
+            for e in &focus_exts {
+                if let Some(f) = &e.on_focus {
+                    f(has);
+                }
+            }
+        });
+    }
+
+    // Extension keymap: bind each extension keybinding to its command while the editor is
+    // focused (declined otherwise, so it falls through to other handlers / page scroll).
+    for kb in p.extensions.iter().flat_map(|e| e.keys.iter()).cloned() {
+        let key_exts = p.extensions.clone();
+        create_shortcut_if(&kb.chord.clone(), move || {
+            if !focus.is_focused() {
+                return false;
+            }
+            let ctx = crate::extensions::EditContext { state, history, code, goal };
+            crate::extensions::run_command_by_id(&key_exts, &kb.command, &ctx);
+            true
+        });
+    }
+
     // ---- read model ----
     let st = state.get();
     let src = st.text();
@@ -670,6 +697,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         Some(w) => container().width(w).height(content_h).child(grid),
         None => container().height(content_h).child(grid),
     };
+    // Per-plugin pointer handlers: notify each extension's on_click with the byte under the
+    // press. (The editor's own hit-testing above already placed the caret.)
+    let click_exts = p.extensions.clone();
     let click_area = GestureDetector::new(content_box)
         .on_pointer_down(action_event(move |e| {
             focus.request_focus();
@@ -680,6 +710,22 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 // Shift+Alt starts a column drag — don't place/add a caret on the press.
             } else {
                 hit(e.position, shift, alt);
+            }
+            if click_exts.iter().any(|x| x.on_click.is_some()) {
+                let cur = state.peek();
+                let text = cur.text();
+                let b = pos_to_byte(&text, e.position, pad_l, pad_t, advance, line_px);
+                let pr = cur.primary();
+                let snap = Snapshot {
+                    text: &text,
+                    caret: pr.head,
+                    selection: (pr.min(), pr.max()),
+                };
+                for x in &click_exts {
+                    if let Some(f) = &x.on_click {
+                        f(&snap, b);
+                    }
+                }
             }
         }))
         .on_pan_start(action_event(move |e| drag_anchor.set(Some(e.position))))

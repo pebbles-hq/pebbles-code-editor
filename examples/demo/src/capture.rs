@@ -177,6 +177,36 @@ pub fn shot(
     ui.make_current();
     ui.mount_root(View::new(base, OverlayHost::wrap(root().into_widget())).into_widget());
     pebbles::widgets::overlay::set_window_size(f64::from(w), f64::from(h));
+    // Optional: drive keys before the shot (e.g. SHOT_KEYS=find to open the find bar).
+    if let Ok(keys) = std::env::var("SHOT_KEYS") {
+        for _ in 0..3 {
+            ui.rebuild_if_dirty();
+            ui.layout(&mut env, Size::new(f64::from(w), f64::from(h)));
+        }
+        let dispatch = |ui: &mut Ui, env: &mut TextEnv, k: KeyInput| {
+            ui.dispatch_key(k);
+            ui.rebuild_if_dirty();
+            ui.layout(env, Size::new(f64::from(w), f64::from(h)));
+        };
+        match keys.as_str() {
+            "find" => {
+                dispatch(&mut ui, &mut env, KeyInput::Find);
+                for ch in "counts".chars() {
+                    dispatch(&mut ui, &mut env, KeyInput::Insert(ch.to_string()));
+                }
+            }
+            "replace" => {
+                dispatch(&mut ui, &mut env, KeyInput::Replace);
+                for ch in "counts".chars() {
+                    dispatch(&mut ui, &mut env, KeyInput::Insert(ch.to_string()));
+                }
+            }
+            "palette" => {
+                dispatch(&mut ui, &mut env, KeyInput::CommandPalette);
+            }
+            _ => {}
+        }
+    }
     let scene = scene_for(&mut ui, &mut env, w, h);
     let px = gpu.rasterize(&scene, w, h, base);
     std::fs::write(out, &px)?;

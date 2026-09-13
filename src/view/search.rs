@@ -116,8 +116,13 @@ pub(crate) fn bar(
             }
         });
 
-    let toggle_chip = |on: bool, label: &str, sig: Signal<bool>| {
-        toggle(on, text(label.to_string()).size(12.0))
+    // Option chips (case / whole-word / regex): a bordered Toggle so the pill is visible
+    // even when inactive, with a legible label that stays readable on both states.
+    let fg = theme.foreground;
+    let toggle_chip = move |on: bool, label: &str, sig: Signal<bool>| {
+        toggle(on, text(label.to_string()).size(12.0).weight(600.0).color(fg))
+            .variant(ToggleVariant::Outline)
+            .size(ToggleSize::Sm)
             .on_changed(move || sig.set(!sig.peek()))
             .into_widget()
     };
@@ -129,22 +134,24 @@ pub(crate) fn bar(
             .size(12.0)
             .color(theme.gutter_fg),
         gap_w(6.0),
-        button("‹").size(ButtonSize::Sm).variant(ButtonVariant::Ghost).on_pressed(move || {
+        icon_button(IconKind::ChevronUp).size(16.0).on_pressed(move || {
             if !m_prev.is_empty() {
                 go(&m_prev, (st.idx.peek() + m_prev.len() - 1) % m_prev.len());
             }
         }),
-        button("›").size(ButtonSize::Sm).variant(ButtonVariant::Ghost).on_pressed(move || {
+        icon_button(IconKind::ChevronDown).size(16.0).on_pressed(move || {
             if !m_next.is_empty() {
                 go(&m_next, (st.idx.peek() + 1) % m_next.len());
             }
         }),
         gap_w(6.0),
         toggle_chip(st.case.peek(), "Aa", st.case),
+        gap_w(4.0),
         toggle_chip(st.word.peek(), "W", st.word),
+        gap_w(4.0),
         toggle_chip(st.regex.peek(), ".*", st.regex),
         gap_w(6.0),
-        button("×").size(ButtonSize::Sm).variant(ButtonVariant::Ghost).on_pressed(move || {
+        icon_button(IconKind::Close).size(16.0).on_pressed(move || {
             st.open.set(0);
             focus.request_focus();
         }),

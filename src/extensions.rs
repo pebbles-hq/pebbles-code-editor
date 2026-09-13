@@ -88,6 +88,20 @@ pub struct GutterMark {
     pub color: Color,
 }
 
+/// A mergeable configuration facet an extension can contribute. Each `Some` field overrides
+/// the editor's resolved config (extensions apply in order, so a later `Some` wins). This is
+/// the editor's "config facet" mechanism — a plugin can ship its own preferred defaults
+/// (e.g. a "2-space indent" plugin) without the caller wiring every knob.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ConfigPatch {
+    pub tab_size: Option<usize>,
+    pub insert_spaces: Option<bool>,
+    pub indent_guides: Option<bool>,
+    pub render_whitespace: Option<bool>,
+    pub match_brackets: Option<bool>,
+    pub auto_close: Option<bool>,
+}
+
 /// The handle a [`Command`] uses to read and mutate the editor.
 #[derive(Clone, Copy)]
 pub struct EditContext {
@@ -174,6 +188,17 @@ type DecoFn = Rc<dyn Fn(&Snapshot) -> Vec<Decoration>>;
 type GutterFn = Rc<dyn Fn(&Snapshot) -> Vec<GutterMark>>;
 type RangeFn = Rc<dyn Fn(&Snapshot) -> Vec<(usize, usize)>>;
 type HookFn = Rc<dyn Fn(&Snapshot)>;
+type FocusFn = Rc<dyn Fn(bool)>;
+/// A per-plugin pointer handler: `(snapshot, byte_offset_of_the_click)`.
+type ClickFn = Rc<dyn Fn(&Snapshot, usize)>;
+
+/// A configurable keybinding: a chord (framework grammar, e.g. `"Mod+K"`, `"Ctrl+Shift+P"`)
+/// bound to a [`Command`] id. The editor registers it while focused.
+#[derive(Clone)]
+pub(crate) struct KeyBinding {
+    pub(crate) chord: String,
+    pub(crate) command: String,
+}
 
 /// A composable editor extension (plugin). Build one with [`extension`] and add it via
 /// `code_editor(..).extensions(..)`.
@@ -184,8 +209,22 @@ pub struct Extension {
     pub(crate) gutter: Option<GutterFn>,
     pub(crate) read_only: Option<RangeFn>,
     pub(crate) commands: Vec<Command>,
+    pub(crate) keys: Vec<KeyBinding>,
+    pub(crate) config: Option<ConfigPatch>,
     pub(crate) on_change: Option<HookFn>,
     pub(crate) on_selection: Option<HookFn>,
+    pub(crate) on_focus: Option<FocusFn>,
+    pub(crate) on_click: Option<ClickFn>,
+}
+
+/// Find the command with `id` across `exts` and run it against `ctx` (no-op if absent).
+pub(crate) fn run_command_by_id(exts: &[Extension], id: &str, ctx: &EditContext) {
+    for e in exts {
+        if let Some(cmd) = e.commands.iter().find(|c| c.id == id) {
+            (cmd.run)(ctx);
+            return;
+        }
+    }
 }
 
 /// Start building an [`Extension`] named `name`.
@@ -216,9 +255,24 @@ impl Extension {
         self.read_only = Some(Rc::new(f));
         self
     }
-    /// Add a command (runnable from the palette).
+    /// Add a command (runnable from the palette, or bound to a key via [`keybinding`](Self::keybinding)).
     pub fn command(mut self, command: Command) -> Self {
         self.commands.push(command);
+        self
+    }
+    /// Bind a key `chord` (framework grammar, e.g. `"Mod+K"`, `"Ctrl+Shift+U"`) to one of this
+    /// extension's command ids. The binding is active while the editor is focused. This is the
+    /// configurable-keymap surface — the same command can be reached from the palette *and* a key.
+    pub fn keybinding(mut self, chord: impl Into<String>, command_id: impl Into<String>) -> Self {
+        self.keys.push(KeyBinding {
+            chord: chord.into(),
+            command: command_id.into(),
+        });
+        self
+    }
+    /// Contribute a mergeable [`ConfigPatch`] — the plugin's preferred editor settings.
+    pub fn config(mut self, patch: ConfigPatch) -> Self {
+        self.config = Some(patch);
         self
     }
     /// Fire after the document changes.
@@ -229,6 +283,16 @@ impl Extension {
     /// Fire after the selection changes.
     pub fn on_selection(mut self, f: impl Fn(&Snapshot) + 'static) -> Self {
         self.on_selection = Some(Rc::new(f));
+        self
+    }
+    /// Fire when the editor gains (`true`) or loses (`false`) focus.
+    pub fn on_focus(mut self, f: impl Fn(bool) + 'static) -> Self {
+        self.on_focus = Some(Rc::new(f));
+        self
+    }
+    /// Fire on a pointer press in the text area, with the byte offset under the pointer.
+    pub fn on_click(mut self, f: impl Fn(&Snapshot, usize) + 'static) -> Self {
+        self.on_click = Some(Rc::new(f));
         self
     }
 }

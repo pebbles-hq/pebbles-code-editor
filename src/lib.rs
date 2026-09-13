@@ -51,7 +51,8 @@ mod theme;
 pub use config::{CodeEditor, code_editor};
 pub use edit::{ChangeSet, EditorState, History, Selection, Selections, Transaction};
 pub use extensions::{
-    Command, Decoration, DecoStyle, EditContext, Extension, GutterMark, Snapshot, extension,
+    Command, ConfigPatch, DecoStyle, Decoration, EditContext, Extension, GutterMark, Snapshot,
+    extension,
 };
 pub use lang::{Language, SyntaxNode, Token, TokenKind, bracket_tree};
 pub use providers::{
