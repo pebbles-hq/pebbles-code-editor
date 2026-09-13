@@ -250,6 +250,54 @@ fn triple_click_selects_the_whole_line() {
 }
 
 #[test]
+fn sticky_scroll_pins_and_navigates_to_scopes() {
+    use pebbles::render::RenderScroll;
+    let mut body = String::from("fn outer() {\n    if a {\n");
+    for i in 0..80 {
+        body.push_str(&format!("        stmt_{i}();\n"));
+    }
+    body.push_str("    }\n}\n");
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(body);
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    let win = Size::new(600.0, 400.0);
+    ui.mount_root(
+        View::new(white(), code_editor(code).height(200.0).sticky_scroll(true).autofocus())
+            .into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, win);
+    }
+    let v_offset = |ui: &Ui| {
+        let id = ui.render_tree().find::<RenderScroll>().unwrap();
+        ui.render_tree().object_ref(id).downcast_ref::<RenderScroll>().unwrap().offset
+    };
+    // Scroll deep into the nested block.
+    ui.dispatch_key(KeyInput::Move { motion: Motion::DocEnd, extend: false });
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, win);
+    }
+    let deep = v_offset(&ui);
+    assert!(deep > 300.0, "scrolled deep into the block");
+    // The enclosing scopes are pinned at the top as a pointer barrier: a click on the pinned
+    // header area is absorbed, so it does NOT move the caret in the content hidden behind it
+    // (which would jerk the viewport). Without sticky, the click would land in the content.
+    ui.dispatch_pointer_down(Offset::new(40.0, 8.0));
+    for _ in 0..2 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, win);
+    }
+    assert!(
+        (v_offset(&ui) - deep).abs() < 2.0,
+        "click on the pinned scope header was absorbed (content undisturbed)"
+    );
+}
+
+#[test]
 fn minimap_click_scrolls_the_document() {
     use pebbles::render::RenderScroll;
     let body: String = (0..300).map(|i| format!("line {i} of the doc")).collect::<Vec<_>>().join("\n");

@@ -76,6 +76,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         render_whitespace: false,
         rulers: Vec::new(),
         minimap: false,
+        sticky_scroll: false,
         title: None,
     }
 }
@@ -99,6 +100,7 @@ pub struct CodeEditor {
     render_whitespace: bool,
     rulers: Vec<usize>,
     minimap: bool,
+    sticky_scroll: bool,
     title: Option<String>,
 }
 
@@ -179,6 +181,12 @@ impl CodeEditor {
         self.minimap = on;
         self
     }
+    /// Pin the enclosing scopes (by indentation) to the top as you scroll — "sticky scroll".
+    /// Only shown when the editor has a fixed `height`. Default off.
+    pub fn sticky_scroll(mut self, on: bool) -> Self {
+        self.sticky_scroll = on;
+        self
+    }
     /// A filename / label shown in the status bar (also enables the status bar).
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
@@ -214,6 +222,7 @@ struct Props {
     render_whitespace: bool,
     rulers: Vec<usize>,
     minimap: bool,
+    sticky_scroll: bool,
     title: Option<String>,
 }
 
@@ -237,6 +246,7 @@ impl From<CodeEditor> for Props {
             render_whitespace: e.render_whitespace,
             rulers: e.rulers,
             minimap: e.minimap,
+            sticky_scroll: e.sticky_scroll,
             title: e.title,
         }
     }
@@ -344,24 +354,39 @@ fn render_editor(p: &Props) -> AnyWidget {
 
     // Autoscroll: keep the primary caret in view on every edit/move (only meaningful when a
     // fixed `height` makes the editor a scroll viewport). Runs on any state change.
-    let view_h = p.height;
     let scroll_a = scroll.clone();
     let hscroll_a = hscroll.clone();
-    create_effect(move || {
-        if view_h.is_none() {
-            return; // grows to content — nothing scrolls
-        }
-        let st = state.get();
-        let text = st.text();
-        let head = st.primary().head;
-        let line = line_of(&text, head);
-        let top = pad_t + line as f64 * line_px;
-        // One line of breathing room above/below the caret.
-        scroll_a.ensure_visible(top, top + line_px, line_px);
-        // Keep the caret's column in view horizontally too (a few columns of margin).
-        let x = pad_l + col_of(&text, head) as f64 * advance;
-        hscroll_a.ensure_visible(x, x + advance, advance * 4.0);
-    });
+    if let Some(vh) = p.height {
+        create_effect(move || {
+            let st = state.get();
+            let text = st.text();
+            let head = st.primary().head;
+            // Vertical: bring the caret's line into view. `scroll_top` (the signal fed by the
+            // scroll view) is the source of truth for the current offset; we compute the new
+            // target from it and set it optimistically so the virtualized window follows now,
+            // then command the scroll view to match. Only moves when the caret is off-screen,
+            // so it never fights a user scroll.
+            let line = line_of(&text, head);
+            let top = pad_t + line as f64 * line_px;
+            let bottom = top + line_px;
+            let cur = scroll_top.peek();
+            let margin = line_px;
+            let target = if top < cur + margin {
+                Some((top - margin).max(0.0))
+            } else if bottom > cur + vh - margin {
+                Some((bottom - vh + margin).max(0.0))
+            } else {
+                None
+            };
+            if let Some(t) = target {
+                scroll_a.scroll_to(t);
+                scroll_top.set(t.min((content_h - vh).max(0.0)));
+            }
+            // Horizontal: keep the caret's column in view (a few columns of margin).
+            let x = pad_l + col_of(&text, head) as f64 * advance;
+            hscroll_a.ensure_visible(x, x + advance, advance * 4.0);
+        });
+    }
 
     // ---- overlay layers on the monospace grid ----
     let mut layers: Vec<AnyWidget> = Vec::new();
@@ -734,6 +759,49 @@ fn render_editor(p: &Props) -> AnyWidget {
         body
     };
 
+    // ---- sticky scroll ----
+    // The enclosing scopes of the top visible line, derived from indentation: walking up,
+    // each line with strictly smaller indent than the last is an ancestor scope. We pin the
+    // ones that have scrolled above the viewport top.
+    let sticky_lines: Vec<usize> = if p.sticky_scroll && p.height.is_some() {
+        let indent_of = |ln: usize| -> Option<usize> {
+            let ls = line_start_of(&src, ln);
+            let le = line_end(&src, ls);
+            let s = &src[ls..le];
+            if s.trim().is_empty() {
+                None // blank lines don't open scopes
+            } else {
+                Some(s.chars().take_while(|c| *c == ' ' || *c == '\t').count())
+            }
+        };
+        let top = scroll_top.get();
+        let top_line = (((top - pad_t) / line_px).floor().max(0.0) as usize).min(line_count - 1);
+        let mut acc = Vec::new();
+        if let Some(mut ci) = indent_of(top_line).or_else(|| {
+            // blank top line: use the next non-blank line's indent as the reference
+            (top_line..line_count).find_map(indent_of)
+        }) {
+            let mut ln = top_line;
+            while ln > 0 && acc.len() < 6 {
+                ln -= 1;
+                if let Some(ind) = indent_of(ln)
+                    && ind < ci
+                    && (pad_t + ln as f64 * line_px) < top
+                {
+                    acc.push(ln);
+                    ci = ind;
+                    if ci == 0 {
+                        break;
+                    }
+                }
+            }
+        }
+        acc.reverse(); // outermost scope first
+        acc
+    } else {
+        Vec::new()
+    };
+
     // ---- minimap ----
     // A scaled overview of the WHOLE document drawn in a single canvas node (so it stays
     // cheap on huge files): one faint bar per line (indent-offset, length-scaled), with a
@@ -811,11 +879,56 @@ fn render_editor(p: &Props) -> AnyWidget {
                 .controller(scroll.clone())
                 // Re-render the visible window as the viewport scrolls.
                 .on_scroll(move |n| scroll_top.set(n.metrics.pixels));
+            // Sticky scope headers overlaid at the top of the scroller. The panel is a
+            // pointer barrier (absorb_pointer): it pins the enclosing scopes and swallows
+            // clicks so they never fall through to the content hidden behind it.
+            let scroller: AnyWidget = if sticky_lines.is_empty() {
+                scroller.into_widget()
+            } else {
+                let mut rows: Vec<AnyWidget> = Vec::new();
+                for &ln in &sticky_lines {
+                    let ls = line_start_of(&src, ln);
+                    let le = line_end(&src, ls);
+                    let spans = to_spans(&src[ls..le], &slice_tokens(&tokens, ls, le), theme, fs);
+                    rows.push(
+                        container()
+                            .height(line_px)
+                            .decoration(BoxDecoration::new().color(theme.background))
+                            .padding(EdgeInsets::only(pad_l, 0.0, 0.0, 0.0))
+                            .child(text_rich(spans).line_height(lh as f32))
+                            .into_widget(),
+                    );
+                }
+                rows.push(
+                    container()
+                        .height(1.0)
+                        .decoration(BoxDecoration::new().color(with_alpha(theme.punctuation, 0.35)))
+                        .into_widget(),
+                );
+                let sticky_h = sticky_lines.len() as f64 * line_px + 1.0;
+                let panel = absorb_pointer(
+                    container()
+                        .height(sticky_h)
+                        .decoration(BoxDecoration::new().color(theme.background))
+                        .child(column(rows).main_axis_size(MainAxisSize::Min)),
+                );
+                stack(children![
+                    scroller.into_widget(),
+                    Positioned::new(panel)
+                        .left(0.0)
+                        .right(0.0)
+                        .top(0.0)
+                        .height(sticky_h)
+                        .into_widget(),
+                ])
+                .fit(StackFit::Expand)
+                .into_widget()
+            };
             let inner: AnyWidget = match minimap_panel {
                 Some(mm) => row(children![expanded(scroller), mm])
                     .cross_axis_alignment(CrossAxisAlignment::Start)
                     .into_widget(),
-                None => scroller.into_widget(),
+                None => scroller,
             };
             container()
                 .height(h)
