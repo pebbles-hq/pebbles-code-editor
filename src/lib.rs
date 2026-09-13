@@ -79,6 +79,8 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         rulers: Vec::new(),
         minimap: false,
         sticky_scroll: false,
+        auto_close: true,
+        match_brackets: true,
         title: None,
     }
 }
@@ -104,6 +106,8 @@ pub struct CodeEditor {
     rulers: Vec<usize>,
     minimap: bool,
     sticky_scroll: bool,
+    auto_close: bool,
+    match_brackets: bool,
     title: Option<String>,
 }
 
@@ -197,6 +201,18 @@ impl CodeEditor {
         self.sticky_scroll = on;
         self
     }
+    /// Auto-close brackets and quotes: typing an opener inserts its closer, typing the
+    /// closer over an auto-inserted one skips it, and backspacing an empty pair clears both.
+    /// Default on.
+    pub fn auto_close(mut self, on: bool) -> Self {
+        self.auto_close = on;
+        self
+    }
+    /// Highlight the bracket under/next to the caret together with its match. Default on.
+    pub fn match_brackets(mut self, on: bool) -> Self {
+        self.match_brackets = on;
+        self
+    }
     /// A filename / label shown in the status bar (also enables the status bar).
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
@@ -234,6 +250,8 @@ struct Props {
     rulers: Vec<usize>,
     minimap: bool,
     sticky_scroll: bool,
+    auto_close: bool,
+    match_brackets: bool,
     title: Option<String>,
 }
 
@@ -259,6 +277,8 @@ impl From<CodeEditor> for Props {
             rulers: e.rulers,
             minimap: e.minimap,
             sticky_scroll: e.sticky_scroll,
+            auto_close: e.auto_close,
+            match_brackets: e.match_brackets,
             title: e.title,
         }
     }
@@ -307,12 +327,23 @@ fn render_editor(p: &Props) -> AnyWidget {
     } else {
         "\t".to_string()
     };
+    // Language-derived editing config (owned, so it can travel into the 'static handler).
+    let cfg = Rc::new(EditCfg {
+        tab: indent_unit.clone(),
+        line_comment: p.language.as_ref().and_then(|l| l.line_comment().map(String::from)),
+        brackets: p
+            .language
+            .as_ref()
+            .map(|l| l.brackets().to_vec())
+            .unwrap_or_else(|| DEFAULT_BRACKETS.to_vec()),
+        auto_close: p.auto_close,
+    });
     {
-        let t = indent_unit.clone();
+        let cfg = cfg.clone();
         // Register as a *code* editor so the shell routes Tab/Shift+Tab here (indent/outdent)
         // instead of moving focus.
         focus.register_code_editor(Rc::new(move |k: KeyInput| {
-            apply_key(k, state, history, code, goal, read_only, &t)
+            apply_key(k, state, history, code, goal, read_only, &cfg)
         }));
     }
 
@@ -484,6 +515,31 @@ fn render_editor(p: &Props) -> AnyWidget {
                 .top(pad_t + line as f64 * line_px)
                 .into_widget(),
             );
+        }
+    }
+
+    // bracket matching — box the bracket adjacent to the (collapsed) primary caret and its
+    // match, both within the visible window.
+    if p.match_brackets && !has_primary_sel {
+        let brs = p.language.as_ref().map(|l| l.brackets()).unwrap_or(DEFAULT_BRACKETS);
+        if let Some((a, b)) = find_bracket_match(&src, brs, pcc) {
+            for pos in [a, b] {
+                let l = line_of(&src, pos);
+                if (first_line..=last_line).contains(&l) {
+                    let col = col_of(&src, pos);
+                    layers.push(
+                        Positioned::new(
+                            container()
+                                .width(advance)
+                                .height(line_px)
+                                .decoration(BoxDecoration::new().color(theme.matching_bracket)),
+                        )
+                        .left(pad_l + col as f64 * advance)
+                        .top(pad_t + l as f64 * line_px)
+                        .into_widget(),
+                    );
+                }
+            }
         }
     }
 
@@ -744,27 +800,21 @@ fn render_editor(p: &Props) -> AnyWidget {
     // Right-click menu (configurable via `.context_menu(false)`), driving the same edit
     // commands as the keyboard.
     let body: AnyWidget = if p.context_menu {
+        let (c_cut, c_copy, c_paste, c_all) =
+            (cfg.clone(), cfg.clone(), cfg.clone(), cfg.clone());
         context_menu(body)
             .item(menu_item("Cut").on_select(move || {
-                apply_key(KeyInput::Cut, state, history, code, goal, read_only, "")
+                apply_key(KeyInput::Cut, state, history, code, goal, read_only, &c_cut)
             }))
             .item(menu_item("Copy").on_select(move || {
-                apply_key(KeyInput::Copy, state, history, code, goal, read_only, "")
+                apply_key(KeyInput::Copy, state, history, code, goal, read_only, &c_copy)
             }))
             .item(menu_item("Paste").on_select(move || {
-                apply_key(KeyInput::Paste, state, history, code, goal, read_only, "")
+                apply_key(KeyInput::Paste, state, history, code, goal, read_only, &c_paste)
             }))
             .separator()
             .item(menu_item("Select All").on_select(move || {
-                apply_key(
-                    KeyInput::SelectAll,
-                    state,
-                    history,
-                    code,
-                    goal,
-                    read_only,
-                    "",
-                )
+                apply_key(KeyInput::SelectAll, state, history, code, goal, read_only, &c_all)
             }))
             .into_widget()
     } else {
@@ -1116,6 +1166,15 @@ fn dispatch(
     state.set(next);
 }
 
+/// Language-derived knobs the key handler needs (owned so it can live in the 'static
+/// handler): the indent unit, the line-comment prefix, the bracket pairs, and auto-close.
+struct EditCfg {
+    tab: String,
+    line_comment: Option<String>,
+    brackets: Vec<(char, char)>,
+    auto_close: bool,
+}
+
 fn apply_key(
     k: KeyInput,
     state: Signal<EditorState>,
@@ -1123,8 +1182,9 @@ fn apply_key(
     code: Signal<String>,
     goal: Signal<usize>,
     read_only: bool,
-    tab: &str,
+    cfg: &EditCfg,
 ) {
+    let tab = cfg.tab.as_str();
     let st = state.peek();
     let src = st.text();
     let len = src.len();
@@ -1187,9 +1247,86 @@ fn apply_key(
             } else {
                 Coalesce::Never
             };
+            // Auto-close (single caret / selection only): type an opener → insert its pair
+            // (caret between) or wrap the selection; type a closer/quote sitting right at the
+            // caret → skip over it instead of doubling.
+            if cfg.auto_close && !is_multi && s.chars().count() == 1 {
+                let ch = s.chars().next().unwrap();
+                let is_quote = matches!(ch, '"' | '\'' | '`');
+                let opener = cfg.brackets.iter().find(|(o, _)| *o == ch).copied();
+                let closer_or_quote =
+                    cfg.brackets.iter().any(|(_, c)| *c == ch) || is_quote;
+                let head = primary.head;
+                let at_caret = src.get(head..).and_then(|s| s.chars().next());
+                if closer_or_quote && at_caret == Some(ch) {
+                    // Overtype the auto-inserted closer/quote.
+                    select_many(Selections::single(Selection::caret(next_char(&src, head))));
+                    return;
+                }
+                let pair = opener.or(if is_quote { Some((ch, ch)) } else { None });
+                if let Some((o, c)) = pair {
+                    // Don't pair a quote right after a word char (apostrophes in `don't`).
+                    let after_word = is_quote
+                        && head > 0
+                        && src[..head].chars().next_back().is_some_and(|p| p.is_alphanumeric());
+                    if !after_word {
+                        let (lo, hi) = (primary.min(), primary.max());
+                        let (cs, caret) = if primary.is_empty() {
+                            (ChangeSet::insert(head, format!("{o}{c}")), head + o.len_utf8())
+                        } else {
+                            (
+                                ChangeSet::from_changes(vec![
+                                    Change { from: lo, to: lo, insert: o.to_string() },
+                                    Change { from: hi, to: hi, insert: c.to_string() },
+                                ]),
+                                hi + o.len_utf8(),
+                            )
+                        };
+                        let sel = if primary.is_empty() {
+                            Selections::single(Selection::caret(caret))
+                        } else {
+                            Selections::single(Selection::range(lo + o.len_utf8(), caret))
+                        };
+                        dispatch(
+                            state,
+                            history,
+                            code,
+                            Transaction::change_and_select(cs, sel),
+                            Coalesce::Never,
+                        );
+                        goal.set(col_of(&state.peek().text(), state.peek().primary().head));
+                        return;
+                    }
+                }
+            }
             replace(&s, coalesce);
         }
         KeyInput::Enter if !read_only => {
+            // Pressing Enter with the caret between a bracket pair (`{|}`) opens the block:
+            // the caret lands on an indented middle line and the closer drops below it.
+            if !is_multi && primary.is_empty() {
+                let head = primary.head;
+                let before = src[..head].chars().next_back();
+                let after = src.get(head..).and_then(|s| s.chars().next());
+                if let (Some(b), Some(a)) = (before, after)
+                    && cfg.brackets.iter().any(|&(o, c)| o == b && c == a)
+                {
+                    let ls = line_start(&src, head);
+                    let indent: String = src[ls..head]
+                        .chars()
+                        .take_while(|ch| *ch == ' ' || *ch == '\t')
+                        .collect();
+                    let inner = format!("\n{indent}{tab}");
+                    let caret = head + inner.len();
+                    let tx = Transaction::change_and_select(
+                        ChangeSet::insert(head, format!("{inner}\n{indent}")),
+                        Selections::single(Selection::caret(caret)),
+                    );
+                    dispatch(state, history, code, tx, Coalesce::Never);
+                    goal.set(col_of(&state.peek().text(), caret));
+                    return;
+                }
+            }
             // Auto-indent per caret: carry that line's leading whitespace, and add one level
             // after an opening bracket or a `:` (smart indent).
             edit_ranges(
@@ -1210,6 +1347,31 @@ fn apply_key(
             );
         }
         KeyInput::Backspace if !read_only => {
+            // Auto-pair delete: a single caret sitting between an empty pair removes both.
+            if cfg.auto_close && !is_multi && primary.is_empty() && primary.head > 0 {
+                let head = primary.head;
+                let before = src[..head].chars().next_back();
+                let after = src.get(head..).and_then(|s| s.chars().next());
+                if let (Some(b), Some(a)) = (before, after) {
+                    let empty_pair = cfg.brackets.iter().any(|&(o, c)| o == b && c == a)
+                        || (matches!(b, '"' | '\'' | '`') && a == b);
+                    if empty_pair {
+                        let (from, to) = (prev_char(&src, head), next_char(&src, head));
+                        dispatch(
+                            state,
+                            history,
+                            code,
+                            Transaction::change_and_select(
+                                ChangeSet::delete(from, to),
+                                Selections::single(Selection::caret(from)),
+                            ),
+                            Coalesce::Deleting,
+                        );
+                        goal.set(col_of(&state.peek().text(), from));
+                        return;
+                    }
+                }
+            }
             // Delete each selection, or the char before each bare caret.
             edit_ranges(
                 &|r| {
@@ -1315,6 +1477,63 @@ fn apply_key(
                     if !ranges.iter().any(|r| r.min() == start && r.max() == end) {
                         select_many(sels.pushed(Selection::range(start, end)));
                     }
+                }
+            }
+        }
+        KeyInput::ToggleComment if !read_only => {
+            // Ctrl+/: comment or uncomment the touched lines with the language's line prefix.
+            // If every non-blank line is already commented, uncomment; else comment (aligned
+            // to the shallowest indentation). No-op for languages without a line comment.
+            if let Some(prefix) = cfg.line_comment.as_deref() {
+                let non_blank: Vec<usize> = touched_lines(&src, &ranges)
+                    .into_iter()
+                    .filter(|&l| {
+                        let ls = line_start_of(&src, l);
+                        !src[ls..line_end(&src, ls)].trim().is_empty()
+                    })
+                    .collect();
+                if !non_blank.is_empty() {
+                    let leading = |l: usize| -> usize {
+                        let ls = line_start_of(&src, l);
+                        let content = &src[ls..line_end(&src, ls)];
+                        content.len() - content.trim_start().len()
+                    };
+                    let all_commented = non_blank.iter().all(|&l| {
+                        let ls = line_start_of(&src, l);
+                        src[ls..line_end(&src, ls)].trim_start().starts_with(prefix)
+                    });
+                    let mut changes: Vec<Change> = Vec::new();
+                    if all_commented {
+                        for &l in &non_blank {
+                            let at = line_start_of(&src, l) + leading(l);
+                            let mut rm = prefix.len();
+                            if src[at + prefix.len()..].starts_with(' ') {
+                                rm += 1;
+                            }
+                            changes.push(Change {
+                                from: at,
+                                to: at + rm,
+                                insert: String::new(),
+                            });
+                        }
+                    } else {
+                        let col = non_blank.iter().map(|&l| leading(l)).min().unwrap_or(0);
+                        for &l in &non_blank {
+                            let at = line_start_of(&src, l) + col;
+                            changes.push(Change {
+                                from: at,
+                                to: at,
+                                insert: format!("{prefix} "),
+                            });
+                        }
+                    }
+                    dispatch(
+                        state,
+                        history,
+                        code,
+                        Transaction::change(ChangeSet::from_changes(changes)),
+                        Coalesce::Never,
+                    );
                 }
             }
         }
@@ -1573,6 +1792,60 @@ fn prev_word(src: &str, byte: usize) -> usize {
     }
     b
 }
+/// The default bracket pairs matched/auto-closed when no language (or the language's
+/// default) applies.
+const DEFAULT_BRACKETS: &[(char, char)] = &[('(', ')'), ('[', ']'), ('{', '}')];
+
+/// If the caret sits just after or before a bracket, return `(bracket_byte, match_byte)`
+/// for it and its counterpart (nesting-aware). `None` if there's no adjacent bracket or no
+/// match. Scans characters only (no string/comment awareness) — the standard baseline.
+fn find_bracket_match(
+    src: &str,
+    brackets: &[(char, char)],
+    caret: usize,
+) -> Option<(usize, usize)> {
+    let mut candidates = Vec::with_capacity(2);
+    if caret > 0 {
+        candidates.push(prev_char(src, caret)); // char before the caret
+    }
+    if caret < src.len() {
+        candidates.push(caret); // char at the caret
+    }
+    for cand in candidates {
+        let ch = match src.get(cand..).and_then(|s| s.chars().next()) {
+            Some(c) => c,
+            None => continue,
+        };
+        if let Some(&(o, c)) = brackets.iter().find(|(o, _)| *o == ch) {
+            let after = next_char(src, cand);
+            let mut depth = 1i32;
+            for (i, x) in src[after..].char_indices() {
+                if x == o {
+                    depth += 1;
+                } else if x == c {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some((cand, after + i));
+                    }
+                }
+            }
+        } else if let Some(&(o, c)) = brackets.iter().find(|(_, c)| *c == ch) {
+            let mut depth = 1i32;
+            for (i, x) in src[..cand].char_indices().rev() {
+                if x == c {
+                    depth += 1;
+                } else if x == o {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some((cand, i));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// The byte offset of the first occurrence of `needle` at or after `from` (for
 /// add-next-occurrence). `None` if there is none from there to the end.
 fn find_from(src: &str, needle: &str, from: usize) -> Option<usize> {
@@ -1650,4 +1923,34 @@ fn pos_to_byte(
 ) -> usize {
     let (line, col) = pos_to_grid(src, pos, pad_l, pad_t, advance, line_px);
     byte_at(src, line, col)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bracket_match_forward_and_backward() {
+        let src = "fn f() { a(b()) }";
+        // caret just after the first '(' at index 4 → matches ')' at 5
+        assert_eq!(find_bracket_match(src, DEFAULT_BRACKETS, 5), Some((4, 5)));
+        // caret before '{' (index 7) → matches the last '}' (index 16)
+        assert_eq!(find_bracket_match(src, DEFAULT_BRACKETS, 7), Some((7, 16)));
+        // nested: caret after '(' at 10 matches the outer call's ')' at 14
+        let (a, b) = find_bracket_match(src, DEFAULT_BRACKETS, 11).unwrap();
+        assert_eq!((a, b), (10, 14));
+    }
+
+    #[test]
+    fn bracket_match_none_when_not_on_a_bracket() {
+        let src = "abc def";
+        assert_eq!(find_bracket_match(src, DEFAULT_BRACKETS, 2), None);
+    }
+
+    #[test]
+    fn bracket_match_unbalanced_is_none() {
+        let src = "foo(bar";
+        // '(' at 3 has no closer
+        assert_eq!(find_bracket_match(src, DEFAULT_BRACKETS, 4), None);
+    }
 }

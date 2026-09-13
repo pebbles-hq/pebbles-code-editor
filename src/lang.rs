@@ -59,6 +59,18 @@ pub trait Language {
     fn name(&self) -> &str;
     /// Tag the colored runs of `src`. Never panics, whatever `src` contains.
     fn highlight(&self, src: &str) -> Vec<Token>;
+
+    /// The line-comment prefix, if the language has one (`//`, `#`, `--`). Used by the
+    /// comment-toggle command (Ctrl+/). `None` disables comment toggling.
+    fn line_comment(&self) -> Option<&str> {
+        None
+    }
+
+    /// The bracket pairs the editor should match and auto-close. Defaults to the common
+    /// `()`, `[]`, `{}`; override to add language-specific pairs.
+    fn brackets(&self) -> &[(char, char)] {
+        &[('(', ')'), ('[', ']'), ('{', '}')]
+    }
 }
 
 /// No highlighting — everything is plain text.
@@ -145,6 +157,9 @@ const RUST_CONSTS: &[&str] = &[
 ];
 
 impl Language for Rust {
+    fn line_comment(&self) -> Option<&str> {
+        Some("//")
+    }
     fn name(&self) -> &str {
         "Rust"
     }
@@ -314,6 +329,10 @@ pub struct CLike(pub &'static Grammar);
 impl Language for CLike {
     fn name(&self) -> &str {
         self.0.name
+    }
+    fn line_comment(&self) -> Option<&str> {
+        // Hash-comment languages (Python-family via CLike) use `#`; C-family use `//`.
+        Some(if self.0.hash_comments { "#" } else { "//" })
     }
     fn highlight(&self, src: &str) -> Vec<Token> {
         let g = self.0;
@@ -663,6 +682,9 @@ const PY_KEYWORDS: &[&str] = &[
 const PY_CONSTS: &[&str] = &["True", "False", "None", "self", "cls"];
 
 impl Language for Python {
+    fn line_comment(&self) -> Option<&str> {
+        Some("#")
+    }
     fn name(&self) -> &str {
         "Python"
     }

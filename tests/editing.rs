@@ -119,8 +119,9 @@ fn enter_auto_indents() {
         key(&mut ui, &mut env, KeyInput::Insert(ch.to_string()));
     }
     key(&mut ui, &mut env, KeyInput::Enter);
-    // Newline after `{` adds one indent level (4 spaces by default).
-    assert_eq!(code.get(), "fn main() {\n    ");
+    // Auto-close made `{}`, so Enter between them opens the block: an indented middle line
+    // with the caret, and the closer dropped below.
+    assert_eq!(code.get(), "fn main() {\n    \n}");
 }
 
 #[test]
@@ -175,6 +176,53 @@ fn indent_then_undo_is_one_step() {
     assert_eq!(code.get(), "    a\n    b");
     key(&mut ui, &mut env, KeyInput::Undo);
     assert_eq!(code.get(), "a\nb");
+}
+
+#[test]
+fn auto_close_inserts_skips_and_deletes_pairs() {
+    let (mut ui, mut env, code) = harness("");
+    key(&mut ui, &mut env, KeyInput::Insert("(".to_string()));
+    assert_eq!(code.get(), "()", "opener inserts its pair, caret between");
+    key(&mut ui, &mut env, KeyInput::Insert(")".to_string()));
+    assert_eq!(code.get(), "()", "typing the closer overtypes, not doubles");
+    // Caret is now after ')'. Go back between the pair and backspace → both go.
+    key(&mut ui, &mut env, KeyInput::Move { motion: Motion::Left, extend: false });
+    key(&mut ui, &mut env, KeyInput::Backspace);
+    assert_eq!(code.get(), "", "backspace between an empty pair removes both");
+}
+
+#[test]
+fn auto_close_wraps_the_selection() {
+    let (mut ui, mut env, code) = harness("x");
+    key(&mut ui, &mut env, KeyInput::SelectAll);
+    key(&mut ui, &mut env, KeyInput::Insert("(".to_string()));
+    assert_eq!(code.get(), "(x)", "typing a bracket around a selection wraps it");
+}
+
+#[test]
+fn toggle_comment_comments_and_uncomments() {
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from("let x = 1;"));
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(
+        View::new(
+            white(),
+            code_editor(code)
+                .language(Box::new(pebbles_code_editor::lang::Rust))
+                .autofocus(),
+        )
+        .into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    key(&mut ui, &mut env, KeyInput::ToggleComment);
+    assert_eq!(code.get(), "// let x = 1;");
+    key(&mut ui, &mut env, KeyInput::ToggleComment);
+    assert_eq!(code.get(), "let x = 1;");
 }
 
 #[test]

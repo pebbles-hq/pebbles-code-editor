@@ -31,6 +31,8 @@ pub struct EditorTheme {
     pub whitespace: Color,
     /// Vertical ruler / print-margin lines.
     pub ruler: Color,
+    /// Highlight box drawn around a bracket and its match.
+    pub matching_bracket: Color,
     /// Default text (identifiers, whitespace, unclassified tokens).
     pub foreground: Color,
     /// Per-token colors.
@@ -81,6 +83,7 @@ impl EditorTheme {
             indent_guide_active: Color::from_rgba8(0xFF, 0xFF, 0xFF, 0x30),
             whitespace: Color::from_rgba8(0xFF, 0xFF, 0xFF, 0x24),
             ruler: Color::from_rgba8(0xFF, 0xFF, 0xFF, 0x10),
+            matching_bracket: Color::from_rgba8(0x8A, 0xB4, 0xF8, 0x4D),
             foreground: c(0xD7, 0xDC, 0xE6),
             keyword: c(0xC5, 0x92, 0xF0),   // violet
             type_: c(0x6C, 0xD1, 0xC0),     // teal
@@ -111,6 +114,7 @@ impl EditorTheme {
             indent_guide_active: Color::from_rgba8(0x00, 0x00, 0x00, 0x2E),
             whitespace: Color::from_rgba8(0x00, 0x00, 0x00, 0x24),
             ruler: Color::from_rgba8(0x00, 0x00, 0x00, 0x0E),
+            matching_bracket: Color::from_rgba8(0x24, 0x5F, 0xC2, 0x3D),
             foreground: c(0x24, 0x29, 0x33),
             keyword: c(0x8A, 0x3F, 0xC8),
             type_: c(0x0F, 0x86, 0x8E),
