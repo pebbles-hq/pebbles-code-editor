@@ -11,6 +11,8 @@
 //!   search/replace, the command palette, and the sample plugin bundle.
 //! - **Project search**, a **Settings** panel, a **Problems** dock, a **menu bar**
 //!   (File / Edit / View), and a **status bar**.
+//! - **Per-tab view state**: each file's scroll offset is persisted and restored on tab switch
+//!   (via the editor's `.on_scroll()` / `.initial_scroll()` — §10 view state).
 //!
 //! Run it: `cargo run -p demo`
 //! Headless screenshot: `SHOT=1400:900:/tmp/ide.rgba cargo run -p demo`

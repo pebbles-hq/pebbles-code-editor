@@ -63,6 +63,7 @@ pub fn ide() -> AnyWidget {
                     saved: create_signal(s.content),
                     diagnostics,
                     inlays,
+                    scroll: create_signal(0.0),
                 }
             })
             .collect(),

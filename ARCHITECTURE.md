@@ -49,6 +49,10 @@ src/
   search.rs      Pure find logic: match collection with case / whole-word / regex options
                  (the widget + replace actions live in view/search.rs).
 
+  # ── collaboration (public API) ─────────────────────────────────────────
+  collab.rs      The `Edit` delta type + pure `diff(old,new)` / `map_pos` — the OT/CRDT-ready
+                 change stream (`.on_edit`) and remote-caret remapping. No widgets, no I/O.
+
   # ── extensibility / plugins (public API) ───────────────────────────────
   extensions.rs  The plugin model: the composable `Extension` (decorations, gutter markers,
                  read-only ranges, commands, keybindings, a mergeable `ConfigPatch`, and

@@ -18,6 +18,8 @@ pub struct FileEntry {
     pub saved: Signal<String>,
     pub diagnostics: Signal<Vec<Diagnostic>>,
     pub inlays: Signal<Vec<InlayHint>>,
+    /// Persisted scroll offset, so switching away and back to a tab restores the view (§10).
+    pub scroll: Signal<f64>,
 }
 
 /// The immutable project file set (content mutates through each entry's signal).

@@ -121,18 +121,43 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     };
     let focus = create_focus();
 
-    // Two-way binding: if the caller replaces `code` from the outside (e.g. loads a file),
-    // rebuild the state from it. The editor's own edits write `code` == `state.text()`, so
-    // this effect no-ops on them (it only fires for genuinely external changes).
+    // Two-way binding + collaboration stream. On any `code` change: if it came from OUTSIDE
+    // (a remote/loader edit — `code != state.text()`), rebuild the doc and REMAP the carets
+    // through the delta so a collaborator's edit never yanks the local cursor; then report the
+    // minimal `Edit` to `on_edit` (with `remote` set). Local keystrokes keep `code ==
+    // state.text()`, so `remote` is false and no rebuild happens.
+    let on_edit = p.on_edit.clone();
+    let prev_code = create_signal(code.peek());
     create_effect(move || {
-        let external = code.get();
-        if external != state.peek().text() {
-            let sel = state.peek().selection.clamped(external.len());
-            state.set(EditorState {
-                doc: Rope::from_str(&external),
-                selection: sel,
-            });
+        let new = code.get();
+        let old = prev_code.peek();
+        if new == old {
+            return;
         }
+        let delta = crate::collab::diff(&old, &new);
+        let remote = new != state.peek().text();
+        if remote {
+            let cur = state.peek();
+            let sel = match &delta {
+                Some(e) => {
+                    let mapped: Vec<Selection> = cur
+                        .selection
+                        .ranges()
+                        .iter()
+                        .map(|r| {
+                            Selection::range(crate::collab::map_pos(r.anchor, e), crate::collab::map_pos(r.head, e))
+                        })
+                        .collect();
+                    Selections::new(mapped, cur.selection.primary_index()).clamped(new.len())
+                }
+                None => cur.selection.clamped(new.len()),
+            };
+            state.set(EditorState { doc: Rope::from_str(&new), selection: sel });
+        }
+        if let (Some(cb), Some(e)) = (&on_edit, &delta) {
+            cb(e, remote);
+        }
+        prev_code.set(new);
     });
 
     // Grab focus on mount if requested — but only ONCE, so it never steals focus back from a
@@ -143,6 +168,20 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             if !did_autofocus.peek() {
                 focus.request_focus();
                 did_autofocus.set(true);
+            }
+        });
+    }
+
+    // Restore a saved scroll offset once on mount (persist/restore view state).
+    if p.initial_scroll > 0.0 {
+        let scroll_restore = scroll.clone();
+        let init = p.initial_scroll;
+        let did_restore = create_signal(false);
+        create_effect(move || {
+            if !did_restore.peek() {
+                scroll_restore.scroll_to(init);
+                scroll_top.set(init);
+                did_restore.set(true);
             }
         });
     }
@@ -494,7 +533,25 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     }
 
     // ---- tokens (cached lexical + semantic overlay) ----
-    let tokens: Rc<Vec<Token>> = {
+    // Large-file mode: past a line threshold, tokenize ONLY the visible window (lazily, each
+    // render) and rebase to absolute offsets, instead of the whole document — so a 100k-line
+    // file re-highlights in screenful-sized work per edit/scroll. Tradeoff: a multi-line
+    // construct (string/comment) that opens above the window may mis-color at the top edge.
+    const LARGE_FILE_LINES: usize = 5000;
+    let tokens: Rc<Vec<Token>> = if line_count > LARGE_FILE_LINES {
+        let ls = line_start_of(&src, first_line);
+        let le = line_end(&src, line_start_of(&src, last_line));
+        let win = &src[ls..le];
+        let toks: Vec<Token> = p
+            .language
+            .as_ref()
+            .map(|l| l.highlight(win))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| Token { start: t.start + ls, ..t })
+            .collect();
+        Rc::new(toks)
+    } else {
         let cell = token_cache.peek();
         let mut c = cell.borrow_mut();
         if c.0 != src {
@@ -944,10 +1001,17 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // optional minimap); without one it grows to its content (inline snippets).
     let code_area: AnyWidget = match p.height {
         Some(h) => {
+            let on_scroll_cb = p.on_scroll.clone();
             let scroller = scroll_view(body)
                 .controller(scroll.clone())
-                // Re-render the visible window as the viewport scrolls.
-                .on_scroll(move |n| scroll_top.set(n.metrics.pixels))
+                // Re-render the visible window as the viewport scrolls, and report the offset so
+                // the caller can persist/restore it (view state).
+                .on_scroll(move |n| {
+                    scroll_top.set(n.metrics.pixels);
+                    if let Some(cb) = &on_scroll_cb {
+                        cb(n.metrics.pixels);
+                    }
+                })
                 .into_widget();
             let scroller = sticky::overlay(&frame, scroller, scroll_top);
             let inner: AnyWidget = match minimap::panel(&frame, scroll, scroll_top) {

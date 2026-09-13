@@ -65,9 +65,14 @@ pub fn pane(ws: Workspace, s: Settings, height: f64) -> AnyWidget {
     let inlays = f.inlays;
 
     let relaxed = s.relaxed.get();
+    // Persist/restore the scroll offset per file (§10 view state), so switching tabs and
+    // coming back keeps your place.
+    let scroll = f.scroll;
     let mut editor = code_editor(code)
         .language(providers::lang_for(lang))
         .a11y_label(format!("{} editor", f.path))
+        .initial_scroll(scroll.peek())
+        .on_scroll(move |px| scroll.set(px))
         .theme(if s.light.get() { EditorTheme::light() } else { EditorTheme::dark() })
         .height(height.max(120.0))
         .font_size(s.font_size.get())

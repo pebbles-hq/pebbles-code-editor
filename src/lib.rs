@@ -26,6 +26,9 @@
 //! - **Input & a11y** — IME composition (CJK / dead keys via `KeyInput::Preedit`), drag-and-drop
 //!   text (move, or copy with Ctrl/Cmd), and a screen-reader `TextInput` semantics node with a
 //!   configurable `.a11y_label()`.
+//! - **Collaboration & scale** — `.on_edit(|edit, remote|)` streams minimal [`Edit`] deltas
+//!   (OT/CRDT-ready) and remote edits remap the local caret; large-file mode tokenizes only the
+//!   visible window; `.initial_scroll()`/`.on_scroll()` persist & restore view state.
 //!
 //! ```ignore
 //! use pebbles::prelude::*;
@@ -43,6 +46,7 @@ pub mod lang;
 pub mod providers;
 
 mod brackets;
+mod collab;
 mod geometry;
 mod highlight;
 mod commands;
@@ -51,6 +55,7 @@ mod search;
 mod view;
 mod theme;
 
+pub use collab::Edit;
 pub use config::{CodeEditor, code_editor};
 pub use edit::{ChangeSet, EditorState, History, Selection, Selections, Transaction};
 pub use extensions::{

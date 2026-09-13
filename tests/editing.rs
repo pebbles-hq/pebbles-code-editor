@@ -1061,3 +1061,87 @@ fn a11y_label_editor_renders() {
     }
     assert!(ui.element_count() > 0, "a11y-wrapped editor renders (TextInput semantics node)");
 }
+
+// ---------------------------------------------------------------------------
+// Advanced / collaborative (§10)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn on_edit_reports_local_deltas() {
+    use pebbles_code_editor::Edit;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::new());
+    let log: Rc<RefCell<Vec<(Edit, bool)>>> = Rc::new(RefCell::new(Vec::new()));
+    let log_c = log.clone();
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(
+        View::new(
+            white(),
+            code_editor(code)
+                .on_edit(move |e, remote| log_c.borrow_mut().push((e.clone(), remote)))
+                .autofocus(),
+        )
+        .into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    key(&mut ui, &mut env, KeyInput::Insert("hi".to_string()));
+    let last = log.borrow().last().cloned().expect("an edit was reported");
+    assert_eq!(last.0.insert, "hi", "the delta carries the inserted text");
+    assert!(!last.1, "a local keystroke is not remote");
+}
+
+#[test]
+fn remote_edit_remaps_the_caret() {
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from("hello"));
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(View::new(white(), code_editor(code).autofocus()).into_widget());
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    // Caret to the end (byte 5).
+    key(&mut ui, &mut env, KeyInput::Move { motion: Motion::DocEnd, extend: false });
+    // A remote collaborator inserts "XX" at the start.
+    code.set("XXhello".to_string());
+    ui.rebuild_if_dirty();
+    ui.layout(&mut env, Size::new(600.0, 400.0));
+    // The caret remapped 5 -> 7, so typing lands at the end (not mid-word).
+    key(&mut ui, &mut env, KeyInput::Insert("!".to_string()));
+    assert_eq!(code.get(), "XXhello!", "the local caret followed the remote insert");
+}
+
+#[test]
+fn large_file_renders() {
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    // A big document (well past the large-file threshold) must render (window-only tokenize).
+    let big: String = (0..8000).map(|i| format!("let x{i} = {i}; // line {i}\n")).collect();
+    let code = create_root_signal(big);
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(
+        View::new(
+            white(),
+            code_editor(code)
+                .language(Box::new(pebbles_code_editor::lang::Rust))
+                .height(300.0)
+                .autofocus(),
+        )
+        .into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    assert!(ui.element_count() > 0, "large file renders via window-only tokenization");
+}

@@ -53,6 +53,9 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         extensions: Vec::new(),
         title: None,
         a11y_label: None,
+        on_edit: None,
+        on_scroll: None,
+        initial_scroll: 0.0,
     }
 }
 
@@ -92,7 +95,16 @@ pub struct CodeEditor {
     extensions: Vec<Extension>,
     title: Option<String>,
     a11y_label: Option<String>,
+    on_edit: Option<EditHook>,
+    on_scroll: Option<ScrollHook>,
+    initial_scroll: f64,
 }
+
+/// Fired after each change with the minimal [`Edit`] delta; `remote` is true when the change
+/// arrived from outside (the `code` signal was set by the app) vs. a local keystroke.
+pub type EditHook = std::rc::Rc<dyn Fn(&crate::collab::Edit, bool)>;
+/// Fired with the vertical scroll offset (logical px) whenever it changes.
+pub type ScrollHook = std::rc::Rc<dyn Fn(f64)>;
 
 impl CodeEditor {
     /// The syntax highlighter (default: none — plain text).
@@ -279,6 +291,25 @@ impl CodeEditor {
         self.a11y_label = Some(label.into());
         self
     }
+    /// Observe every change as a minimal [`Edit`](crate::Edit) delta (the second arg is `true`
+    /// for remote changes — the `code` signal set from outside). This is the OT/CRDT-ready
+    /// outbound op stream; remote edits are applied with the local caret remapped through the
+    /// same delta, so a collaborator's edit never moves your cursor.
+    pub fn on_edit(mut self, f: impl Fn(&crate::collab::Edit, bool) + 'static) -> Self {
+        self.on_edit = Some(std::rc::Rc::new(f));
+        self
+    }
+    /// Observe the vertical scroll offset (logical px) as it changes — persist it to restore
+    /// the view later with [`initial_scroll`](Self::initial_scroll).
+    pub fn on_scroll(mut self, f: impl Fn(f64) + 'static) -> Self {
+        self.on_scroll = Some(std::rc::Rc::new(f));
+        self
+    }
+    /// The starting vertical scroll offset (logical px) — restore a saved view state.
+    pub fn initial_scroll(mut self, px: f64) -> Self {
+        self.initial_scroll = px.max(0.0);
+        self
+    }
 }
 
 impl IntoWidget for CodeEditor {
@@ -326,6 +357,9 @@ pub(crate) struct Props {
     pub(crate) extensions: Vec<Extension>,
     pub(crate) title: Option<String>,
     pub(crate) a11y_label: String,
+    pub(crate) on_edit: Option<EditHook>,
+    pub(crate) on_scroll: Option<ScrollHook>,
+    pub(crate) initial_scroll: f64,
 }
 
 impl From<CodeEditor> for Props {
@@ -399,6 +433,9 @@ impl From<CodeEditor> for Props {
             extensions: e.extensions,
             title: e.title,
             a11y_label: e.a11y_label.unwrap_or_else(|| "Code editor".to_string()),
+            on_edit: e.on_edit,
+            on_scroll: e.on_scroll,
+            initial_scroll: e.initial_scroll,
         }
     }
 }
