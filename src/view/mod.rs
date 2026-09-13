@@ -9,6 +9,7 @@
 
 mod chrome;
 mod completion;
+mod extensions;
 mod gutter;
 mod minimap;
 mod overlays;
@@ -27,6 +28,7 @@ use crate::brackets::DEFAULT_BRACKETS;
 use crate::commands::{EditCfg, apply_key, dispatch};
 use crate::config::Props;
 use crate::edit::{ChangeSet, Coalesce, EditorState, History, Selection, Selections, Transaction};
+use crate::extensions::{Decoration, GutterMark, Snapshot};
 use crate::geometry::*;
 use crate::highlight::merge_tokens;
 use crate::lang::Token;
@@ -63,6 +65,8 @@ pub(crate) struct Frame<'a> {
     pub(crate) caret_on: bool,
     /// Highlight other occurrences of the selected word (off while the find bar is open).
     pub(crate) highlight_word_matches: bool,
+    /// Gutter markers contributed by extensions (rendered as colored dots).
+    pub(crate) ext_gutter_marks: &'a [GutterMark],
 }
 
 /// The editor component: wires reactive state, computes the [`Frame`], and assembles the
@@ -99,6 +103,11 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         word: create_signal(false),
         regex: create_signal(false),
         idx: create_signal(0usize),
+    };
+    let palette = extensions::Palette {
+        open: create_signal(false),
+        query: create_signal(String::new()),
+        sel: create_signal(0usize),
     };
     let focus = create_focus();
 
@@ -152,6 +161,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         let definition = p.definition.clone();
         let format = p.format.clone();
         let sig_provider = p.signature.clone();
+        let ro_exts = p.extensions.clone(); // for read-only-range veto
         // Register as a *code* editor so the shell routes Tab/Shift+Tab here (indent/outdent)
         // instead of moving focus. When the completion popup is open it intercepts navigation
         // keys; otherwise keys flow to the command engine, and typing re-queries completion.
@@ -201,6 +211,15 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 }
                 KeyInput::Escape if find.open.peek() > 0 => {
                     find.open.set(0);
+                    return;
+                }
+                KeyInput::CommandPalette => {
+                    palette.open.set(true);
+                    pebbles::core::focus::set_focus(None); // let the palette field autofocus
+                    return;
+                }
+                KeyInput::Escape if palette.open.peek() => {
+                    palette.open.set(false);
                     return;
                 }
                 KeyInput::TriggerCompletion => {
@@ -267,6 +286,37 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 KeyInput::Escape => 2,
                 _ => 0,
             };
+            // Read-only veto: if an editing key would touch a range an extension marked
+            // read-only, drop it (checked against the primary selection/caret).
+            let editing = matches!(
+                &k,
+                KeyInput::Insert(_)
+                    | KeyInput::Backspace
+                    | KeyInput::Delete
+                    | KeyInput::DeleteWordBack
+                    | KeyInput::DeleteWordForward
+                    | KeyInput::Enter
+                    | KeyInput::Indent
+                    | KeyInput::Outdent
+                    | KeyInput::Paste
+                    | KeyInput::Cut
+                    | KeyInput::ToggleComment
+            );
+            if editing && !ro_exts.is_empty() {
+                let st = state.peek();
+                let text = st.text();
+                let pr = st.primary();
+                let (a, b) = (pr.min(), pr.max());
+                let snap = Snapshot { text: &text, caret: pr.head, selection: (a, b) };
+                let blocked = ro_exts.iter().any(|e| {
+                    e.read_only.as_ref().is_some_and(|f| {
+                        f(&snap).iter().any(|&(lo, hi)| a <= hi && b >= lo)
+                    })
+                });
+                if blocked {
+                    return;
+                }
+            }
             apply_key(k, state, history, code, goal, read_only, &cfg);
             if let Some(pv) = &provider {
                 if follow == 1 {
@@ -284,6 +334,34 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 _ => {}
             }
         }));
+    }
+
+    // Extension event hooks: on_change (text changed) and on_selection (any state change).
+    if p.extensions.iter().any(|e| e.on_change.is_some() || e.on_selection.is_some()) {
+        let hook_exts = p.extensions.clone();
+        let prev = create_signal(state.peek().text());
+        create_effect(move || {
+            let st = state.get();
+            let text = st.text();
+            let pr = st.primary();
+            let snap = Snapshot {
+                text: &text,
+                caret: pr.head,
+                selection: (pr.min(), pr.max()),
+            };
+            let changed = *prev.peek() != text;
+            for e in &hook_exts {
+                if changed && let Some(f) = &e.on_change {
+                    f(&snap);
+                }
+                if let Some(f) = &e.on_selection {
+                    f(&snap);
+                }
+            }
+            if changed {
+                prev.set(text);
+            }
+        });
     }
 
     // ---- read model ----
@@ -393,6 +471,32 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         None => tokens,
     };
 
+    // ---- extension contributions for this frame ----
+    // Decorations + gutter markers are recomputed from the current snapshot each render.
+    let (ext_decos, ext_gutter_marks): (Vec<Decoration>, Vec<GutterMark>) = if p.extensions.is_empty()
+    {
+        (Vec::new(), Vec::new())
+    } else {
+        let snap = Snapshot {
+            text: &src,
+            caret: pcc,
+            selection: (primary.min(), primary.max()),
+        };
+        let decos = p
+            .extensions
+            .iter()
+            .filter_map(|e| e.decorations.as_ref())
+            .flat_map(|f| f(&snap))
+            .collect();
+        let marks = p
+            .extensions
+            .iter()
+            .filter_map(|e| e.gutter.as_ref())
+            .flat_map(|f| f(&snap))
+            .collect();
+        (decos, marks)
+    };
+
     // ---- the read-model the view builders share ----
     let frame = Frame {
         p,
@@ -415,6 +519,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         last_line,
         caret_on,
         highlight_word_matches: find.open.get() == 0,
+        ext_gutter_marks: &ext_gutter_marks,
     };
 
     // Overlay layers on the monospace grid (current-line, rulers, guides, selection, bracket
@@ -434,6 +539,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     };
 
     let mut layers = overlays::build(&frame);
+    if !ext_decos.is_empty() {
+        layers.extend(extensions::decoration_layers(&frame, &ext_decos));
+    }
     if !search_matches.is_empty() {
         let cur = find.idx.peek().min(search_matches.len() - 1);
         layers.extend(search::match_layers(&frame, &search_matches, cur));
@@ -657,6 +765,20 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let code_area: AnyWidget = if find.open.get() > 0 {
         let bar = search::bar(find, search_matches, state, history, code, goal, focus, theme);
         stack(children![code_area, bar]).into_widget()
+    } else {
+        code_area
+    };
+
+    // Overlay the command palette (all extension commands) when open.
+    let code_area: AnyWidget = if palette.open.get() {
+        let commands: Vec<crate::extensions::Command> = p
+            .extensions
+            .iter()
+            .flat_map(|e| e.commands.iter().cloned())
+            .collect();
+        let ctx = crate::extensions::EditContext { state, history, code, goal };
+        let pal = extensions::palette(palette, commands, ctx, focus, theme);
+        stack(children![code_area, pal]).into_widget()
     } else {
         code_area
     };

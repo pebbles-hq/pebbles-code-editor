@@ -35,6 +35,7 @@
 //! ```
 
 pub mod edit;
+pub mod extensions;
 pub mod lang;
 pub mod providers;
 
@@ -49,6 +50,9 @@ mod theme;
 
 pub use config::{CodeEditor, code_editor};
 pub use edit::{ChangeSet, EditorState, History, Selection, Selections, Transaction};
+pub use extensions::{
+    Command, Decoration, DecoStyle, EditContext, Extension, GutterMark, Snapshot, extension,
+};
 pub use lang::{Language, SyntaxNode, Token, TokenKind, bracket_tree};
 pub use providers::{
     CompletionContext, CompletionItem, CompletionKind, CompletionProvider, DefinitionProvider,

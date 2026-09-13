@@ -686,3 +686,109 @@ fn shift_alt_drag_makes_a_column_of_carets() {
     key(&mut ui, &mut env, KeyInput::Insert("X".to_string()));
     assert_eq!(code.get(), "aXbc\ndXef\ngXhi");
 }
+
+// ---------------------------------------------------------------------------
+// Extensions & plugins (§7)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn extension_decorations_render() {
+    use pebbles_code_editor::{Decoration, extension};
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from("hello world"));
+    // Decorate the first word on every render.
+    let ext = extension("highlight-first-word")
+        .decorations(|_snap| vec![Decoration::background((0, 5), Color::from_rgba8(0, 128, 255, 60))]);
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    let before = {
+        ui.mount_root(View::new(white(), code_editor(code).autofocus()).into_widget());
+        for _ in 0..3 {
+            ui.rebuild_if_dirty();
+            ui.layout(&mut env, Size::new(600.0, 400.0));
+        }
+        ui.element_count()
+    };
+    // Remount with the extension: the decoration adds at least one overlay layer.
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(View::new(white(), code_editor(code).extension(ext).autofocus()).into_widget());
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    assert!(ui.element_count() > before, "decoration layer rendered");
+}
+
+#[test]
+fn command_palette_runs_a_command() {
+    use pebbles_code_editor::{Command, extension};
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from("abc"));
+    // A command that appends "!" at the caret.
+    let cmd = Command::new("test.bang", "Insert Bang", |ctx| ctx.insert("!"));
+    let ext = extension("commands").command(cmd);
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(View::new(white(), code_editor(code).extension(ext).autofocus()).into_widget());
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    // Move the caret to the end so the insert lands after "abc".
+    key(&mut ui, &mut env, KeyInput::Move { motion: Motion::DocEnd, extend: false });
+    // Open the palette, filter to the command, and run it with Enter.
+    key(&mut ui, &mut env, KeyInput::CommandPalette);
+    key(&mut ui, &mut env, KeyInput::Insert("bang".to_string()));
+    key(&mut ui, &mut env, KeyInput::Enter);
+    assert_eq!(code.get(), "abc!", "the palette ran the command against the editor");
+}
+
+#[test]
+fn read_only_range_vetoes_an_edit() {
+    use pebbles_code_editor::extension;
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from("locked text"));
+    // Mark the first 6 bytes read-only.
+    let ext = extension("guard").read_only_ranges(|_snap| vec![(0, 6)]);
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(View::new(white(), code_editor(code).extension(ext).autofocus()).into_widget());
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    // Caret is at 0 (inside the read-only range): typing is vetoed.
+    key(&mut ui, &mut env, KeyInput::Insert("X".to_string()));
+    assert_eq!(code.get(), "locked text", "edit inside a read-only range is vetoed");
+    // Move past the guarded range: typing works again.
+    key(&mut ui, &mut env, KeyInput::Move { motion: Motion::DocEnd, extend: false });
+    key(&mut ui, &mut env, KeyInput::Insert("!".to_string()));
+    assert_eq!(code.get(), "locked text!", "edit outside the read-only range applies");
+}
+
+#[test]
+fn extension_on_change_hook_fires() {
+    use pebbles_code_editor::extension;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from(""));
+    let seen: Rc<RefCell<usize>> = Rc::new(RefCell::new(0));
+    let seen_c = seen.clone();
+    let ext = extension("counter").on_change(move |_snap| *seen_c.borrow_mut() += 1);
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(View::new(white(), code_editor(code).extension(ext).autofocus()).into_widget());
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    let base = *seen.borrow();
+    key(&mut ui, &mut env, KeyInput::Insert("a".to_string()));
+    assert!(*seen.borrow() > base, "on_change fired after an edit");
+}

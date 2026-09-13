@@ -28,6 +28,10 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
             marks.insert(line, severity_color(f.theme, d.severity));
         }
     }
+    // Extension-contributed gutter markers (a later entry wins over a diagnostic dot).
+    for m in f.ext_gutter_marks {
+        marks.insert(m.line, m.color);
+    }
     let mut nums: Vec<AnyWidget> = Vec::new();
     for n in f.first_line..=f.last_line {
         if let Some(&color) = marks.get(&n) {

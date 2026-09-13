@@ -6,6 +6,7 @@
 use pebbles::prelude::*;
 
 use crate::ADVANCE_RATIO;
+use crate::extensions::Extension;
 use crate::lang::{Language, Token};
 use crate::providers::{
     CompletionProvider, DefinitionProvider, Diagnostics, FormatProvider, HoverProvider, InlayHints,
@@ -47,6 +48,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         inlay_hints: None,
         definition: None,
         format: None,
+        extensions: Vec::new(),
         title: None,
     }
 }
@@ -82,6 +84,7 @@ pub struct CodeEditor {
     inlay_hints: Option<InlayHints>,
     definition: Option<DefinitionProvider>,
     format: Option<FormatProvider>,
+    extensions: Vec<Extension>,
     title: Option<String>,
 }
 
@@ -226,6 +229,17 @@ impl CodeEditor {
         self.format = Some(provider);
         self
     }
+    /// Add one editor [`Extension`] (plugin) — decorations, commands, gutter markers,
+    /// read-only ranges, and event hooks. Call repeatedly or use [`extensions`](Self::extensions).
+    pub fn extension(mut self, ext: Extension) -> Self {
+        self.extensions.push(ext);
+        self
+    }
+    /// Add several extensions at once (composed in order).
+    pub fn extensions(mut self, exts: impl IntoIterator<Item = Extension>) -> Self {
+        self.extensions.extend(exts);
+        self
+    }
     pub fn semantic_tokens(mut self, tokens: Signal<Vec<Token>>) -> Self {
         self.semantic = Some(tokens);
         self
@@ -277,6 +291,7 @@ pub(crate) struct Props {
     pub(crate) inlay_hints: Option<InlayHints>,
     pub(crate) definition: Option<DefinitionProvider>,
     pub(crate) format: Option<FormatProvider>,
+    pub(crate) extensions: Vec<Extension>,
     pub(crate) title: Option<String>,
 }
 
@@ -312,6 +327,7 @@ impl From<CodeEditor> for Props {
             inlay_hints: e.inlay_hints,
             definition: e.definition,
             format: e.format,
+            extensions: e.extensions,
             title: e.title,
         }
     }

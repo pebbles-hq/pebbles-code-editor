@@ -12,6 +12,9 @@
 //! - IntelliSense (dev-supplied here): completion (Ctrl+Space or type), snippets, hover,
 //!   signature help (type `(`), diagnostics (TODO/FIXME/unwrap), inlay hints, go-to-def (F12),
 //!   format (Shift+Alt+F).
+//! - Extensions/plugins (toggle "Plugins"): decorations (TODO highlight), gutter markers
+//!   (TODO bookmark dot), a read-only region (line 1 is locked), and a command palette
+//!   (Ctrl+P → "Uppercase Selection" / "Wrap Selection in println!").
 //!
 //! Run it: `cargo run -p demo`
 //! Headless screenshot: `SHOT=1200:820:/tmp/editor.rgba cargo run -p demo`
@@ -20,9 +23,10 @@ use std::rc::Rc;
 
 use pebbles::prelude::*;
 use pebbles_code_editor::{
-    CompletionContext, CompletionItem, CompletionKind, CompletionProvider, DefinitionProvider,
-    Diagnostic, EditorTheme, FormatProvider, Hover, HoverProvider, InlayHint, Severity,
-    SignatureHelp, SignatureProvider, code_editor, lang, lang::Language,
+    Command, CompletionContext, CompletionItem, CompletionKind, CompletionProvider,
+    DefinitionProvider, Decoration, Diagnostic, EditorTheme, Extension, FormatProvider, GutterMark,
+    Hover, HoverProvider, InlayHint, Severity, SignatureHelp, SignatureProvider, code_editor,
+    extension, lang, lang::Language,
 };
 
 mod capture;
@@ -226,6 +230,61 @@ fn compute_inlays(src: &str) -> Vec<InlayHint> {
 }
 
 // ---------------------------------------------------------------------------
+// Extensions / plugins (§7)
+// ---------------------------------------------------------------------------
+
+/// A set of sample extensions, each a self-contained plugin:
+/// - a decoration plugin (translucent highlight on every `TODO`),
+/// - a gutter-marker plugin (a bookmark dot on every line with a `TODO`),
+/// - a read-only plugin (the first line is a locked "header" — edits there are vetoed),
+/// - a command plugin (two commands runnable from the palette with Ctrl+P).
+fn sample_extensions() -> Vec<Extension> {
+    // Highlight every `TODO` — composes with the diagnostics underline on the same range.
+    let highlight = extension("todo-highlighter").decorations(|snap| {
+        snap.text
+            .match_indices("TODO")
+            .map(|(i, _)| {
+                Decoration::background((i, i + 4), Color::from_rgba8(255, 190, 60, 55))
+            })
+            .collect()
+    });
+    // A bookmark dot in the gutter on every line containing a `TODO`.
+    let bookmarks = extension("todo-bookmarks").gutter_markers(|snap| {
+        snap.text
+            .match_indices("TODO")
+            .map(|(i, _)| GutterMark {
+                line: snap.text[..i].bytes().filter(|&b| b == b'\n').count(),
+                color: Color::from_rgba8(255, 190, 60, 255),
+            })
+            .collect()
+    });
+    // The first line is a locked header — any edit that touches it is vetoed.
+    let guard = extension("first-line-guard").read_only_ranges(|snap| {
+        let end = snap.text.find('\n').unwrap_or(snap.text.len());
+        vec![(0, end)]
+    });
+    // Two commands for the palette (Ctrl+P): uppercase the selection, wrap it in println!.
+    let commands = extension("edit-commands")
+        .command(Command::new("edit.upper", "Uppercase Selection", |ctx| {
+            let (a, b) = ctx.selection();
+            if a != b {
+                let up = ctx.text()[a..b].to_uppercase();
+                ctx.replace(a, b, up);
+            }
+        }))
+        .command(Command::new(
+            "edit.wrap-println",
+            "Wrap Selection in println!",
+            |ctx| {
+                let (a, b) = ctx.selection();
+                let inner = ctx.text()[a..b].to_string();
+                ctx.replace(a, b, format!("println!(\"{{}}\", {inner});"));
+            },
+        ));
+    vec![highlight, bookmarks, guard, commands]
+}
+
+// ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
 
@@ -241,6 +300,7 @@ fn app() -> AnyWidget {
     let whitespace = create_signal(false);
     let ruler = create_signal(false);
     let light = create_signal(false);
+    let plugins = create_signal(true);
 
     // Provider data derived reactively from the current text.
     let diagnostics = create_signal(compute_diagnostics(&code.peek()));
@@ -317,6 +377,8 @@ fn app() -> AnyWidget {
                     sw(ruler, "Ruler @ 80"),
                     gap_w(14.0),
                     sw(light, "Light theme"),
+                    gap_w(14.0),
+                    sw(plugins, "Plugins"),
                 ])
                 .cross_axis_alignment(CrossAxisAlignment::Center)
                 .main_axis_size(MainAxisSize::Min),
@@ -339,13 +401,15 @@ fn app() -> AnyWidget {
                     .diagnostics(diagnostics)
                     .inlay_hints(inlays)
                     .definition(definition_provider())
-                    .format(format_provider()),
+                    .format(format_provider())
+                    .extensions(if plugins.get() { sample_extensions() } else { Vec::new() }),
                 gap_h(12.0),
                 // ---- keybindings legend ----
                 text(
                     "Ctrl+F find · Ctrl+H replace · Ctrl+Space complete · Tab/Enter accept · \
                      Ctrl+/ comment · Ctrl+D add-next · Alt+click multi-cursor · Shift+Alt+drag column · \
-                     dbl/triple-click word/line · F12 go-to-def · Shift+Alt+F format · hover for docs · ( for signature",
+                     dbl/triple-click word/line · F12 go-to-def · Shift+Alt+F format · hover for docs · ( for signature · \
+                     Ctrl+P command palette · plugins: TODO highlight + gutter bookmark, line 1 read-only",
                 )
                 .size(11.5)
                 .color(c.muted_foreground),

@@ -49,6 +49,12 @@ src/
   search.rs      Pure find logic: match collection with case / whole-word / regex options
                  (the widget + replace actions live in view/search.rs).
 
+  # ── extensibility / plugins (public API) ───────────────────────────────
+  extensions.rs  The plugin model: the composable `Extension` (decorations, gutter markers,
+                 read-only ranges, commands, change/selection hooks), the `Snapshot` handed
+                 to callbacks, and the `EditContext` a `Command` uses to read/mutate. Data +
+                 builders only; the view renders the contributions and the palette.
+
   # ── configuration (public API) ─────────────────────────────────────────
   config.rs      The `code_editor()` builder + fluent `CodeEditor` config, and the resolved
                  `Props` the view consumes. The crate's front door.
@@ -65,7 +71,9 @@ src/
                  underlines, whitespace markers, carets.
     completion.rs The autocomplete popup: session state, trigger/accept, snippet expansion.
     search.rs    The find/replace bar widget + match-highlight overlay layers.
-    gutter.rs    The virtualized line-number gutter (+ diagnostic marker dots).
+    extensions.rs Extension rendering: decoration overlay layers (background/underline/line)
+                 + the command-palette overlay (Ctrl+P).
+    gutter.rs    The virtualized line-number gutter (+ diagnostic & extension marker dots).
     minimap.rs   The scaled document overview (one canvas node) + click/drag-to-scroll.
     sticky.rs    Sticky scroll — indentation-derived pinned scope headers.
     chrome.rs    Small shared view helpers: status bar, line band, tooltip, alpha tweak.
