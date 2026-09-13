@@ -14,9 +14,11 @@
 //!   arrows + word/line/doc motions, Shift-select, Ctrl+A, and Copy/Cut/Paste — all built
 //!   on an invertible [`ChangeSet`]/[`Transaction`] model with undo/redo.
 //! - **Multiple cursors & selections** — a [`Selections`] set (sorted, merged, with a
-//!   primary): Alt-click adds a caret, Shift+Alt-drag makes a rectangular (column)
-//!   selection, double-click selects a word, Esc collapses; every edit and motion applies
-//!   to all cursors at once.
+//!   primary): Alt-click adds a caret, Ctrl/Cmd+D adds the next occurrence, Shift+Alt-drag
+//!   makes a rectangular (column) selection, double-click selects a word, triple-click a
+//!   line, Esc collapses; every edit and motion applies to all cursors at once.
+//! - **Caret autoscroll** — keyboard navigation keeps the caret in view (when a fixed
+//!   `height` makes the editor scroll).
 //! - **Syntax highlighting** via a pluggable [`Language`] layer (Rust + JSON bundled).
 //! - **Line-number gutter** with an active-line marker, **current-line highlight**,
 //!   selection, and a blinking caret.
@@ -44,6 +46,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use pebbles::prelude::*;
+use pebbles::render::ScrollHandle;
 use ropey::Rope;
 
 use crate::edit::{Change, Coalesce};
@@ -212,6 +215,9 @@ fn render_editor(p: &Props) -> AnyWidget {
     let goal = create_signal(0usize); // preserved column for Up/Down
     let blink_stamp = create_signal(0.0_f64); // loop time of the last edit/move — caret solid then
     let drag_anchor = create_signal::<Option<Offset>>(None); // pointer-down pos for column select
+    // Imperative scroll handle — drives caret-into-view autoscroll (only used when a fixed
+    // `height` makes the editor a scroll viewport). Held in a signal so it survives renders.
+    let scroll = create_signal(ScrollHandle::new()).peek();
     let focus = create_focus();
 
     // Two-way binding: if the caller replaces `code` from the outside (e.g. loads a file),
@@ -280,6 +286,22 @@ fn render_editor(p: &Props) -> AnyWidget {
     });
     let caret_on =
         focused && (blink_loop.get() - blink_stamp.get()).rem_euclid(1.0) < 0.5;
+
+    // Autoscroll: keep the primary caret in view on every edit/move (only meaningful when a
+    // fixed `height` makes the editor a scroll viewport). Runs on any state change.
+    let view_h = p.height;
+    let scroll_a = scroll.clone();
+    create_effect(move || {
+        if view_h.is_none() {
+            return; // grows to content — nothing scrolls
+        }
+        let st = state.get();
+        let head = st.primary().head;
+        let line = line_of(&st.text(), head);
+        let top = pad_t + line as f64 * line_px;
+        // One line of breathing room above/below the caret.
+        scroll_a.ensure_visible(top, top + line_px, line_px);
+    });
 
     // ---- overlay layers on the monospace grid ----
     let mut layers: Vec<AnyWidget> = Vec::new();
@@ -397,6 +419,21 @@ fn render_editor(p: &Props) -> AnyWidget {
         goal.set(col_of(&text, e));
         history.peek().borrow_mut().break_group();
     };
+    // Triple-click selects the whole line under the pointer (including its newline).
+    let line_select = move |pos: Offset| {
+        let cur = state.peek();
+        let text = cur.text();
+        let b = pos_to_byte(&text, pos, pad_l, pad_t, advance, line_px);
+        let s = line_start(&text, b);
+        let le = line_end(&text, b);
+        let e = if le < text.len() { next_char(&text, le) } else { le };
+        state.set(EditorState {
+            doc: cur.doc.clone(),
+            selection: Selections::single(Selection::range(s, e)),
+        });
+        goal.set(col_of(&text, e));
+        history.peek().borrow_mut().break_group();
+    };
     // Column (rectangular) selection: Shift+Alt+drag makes one caret/range per row across
     // the dragged rectangle — a caret per line if the two edges share a column.
     let column_select = move |from: Offset, to: Offset| {
@@ -441,7 +478,8 @@ fn render_editor(p: &Props) -> AnyWidget {
                 hit(e.position, true, false);
             }
         }))
-        .on_double_tap(action_event(move |e| word_select(e.position)));
+        .on_double_tap(action_event(move |e| word_select(e.position)))
+        .on_triple_tap(action_event(move |e| line_select(e.position)));
 
     // ---- gutter ----
     let body: AnyWidget = if p.gutter {
@@ -520,7 +558,7 @@ fn render_editor(p: &Props) -> AnyWidget {
         Some(h) => container()
             .height(h)
             .decoration(BoxDecoration::new().color(theme.background))
-            .child(scroll_view(body))
+            .child(scroll_view(body).controller(scroll.clone()))
             .into_widget(),
         None => container()
             .decoration(BoxDecoration::new().color(theme.background))
@@ -855,6 +893,26 @@ fn apply_key(
                 select_many(Selections::single(Selection::caret(primary.head)));
             }
         }
+        KeyInput::SelectNextOccurrence => {
+            // Ctrl+D: with no selection, select the word under the caret; otherwise add a
+            // cursor at the next occurrence of the current selection (wrapping).
+            if primary.is_empty() {
+                let (s, e) = word_at(&src, primary.head);
+                if e > s {
+                    select_many(Selections::single(Selection::range(s, e)));
+                }
+            } else {
+                let needle = &src[primary.min()..primary.max()];
+                let from = ranges.iter().map(|r| r.max()).max().unwrap_or(0);
+                if let Some(start) = find_from(&src, needle, from).or_else(|| find_from(&src, needle, 0))
+                {
+                    let end = start + needle.len();
+                    if !ranges.iter().any(|r| r.min() == start && r.max() == end) {
+                        select_many(sels.pushed(Selection::range(start, end)));
+                    }
+                }
+            }
+        }
         KeyInput::Copy => {
             // Join each non-empty selection's text with newlines (multi-cursor copy).
             let parts: Vec<String> = ranges
@@ -1109,6 +1167,15 @@ fn prev_word(src: &str, byte: usize) -> usize {
         b = p;
     }
     b
+}
+/// The byte offset of the first occurrence of `needle` at or after `from` (for
+/// add-next-occurrence). `None` if there is none from there to the end.
+fn find_from(src: &str, needle: &str, from: usize) -> Option<usize> {
+    if needle.is_empty() {
+        return None;
+    }
+    let from = from.min(src.len());
+    src.get(from..).and_then(|s| s.find(needle)).map(|i| from + i)
 }
 /// The byte range of the word under `byte` (for double-click). If `byte` isn't on/adjacent
 /// to a word character, selects just the single character there.

@@ -227,6 +227,76 @@ fn multi_cursor_backspace_deletes_at_each() {
 }
 
 #[test]
+fn ctrl_d_selects_word_then_adds_next_occurrence() {
+    let (mut ui, mut env, code) = harness("foo bar foo");
+    // First Ctrl+D (no selection) selects the word under the caret ("foo" at 0).
+    key(&mut ui, &mut env, KeyInput::SelectNextOccurrence);
+    // Second Ctrl+D adds a cursor at the next "foo".
+    key(&mut ui, &mut env, KeyInput::SelectNextOccurrence);
+    // Typing replaces both selections.
+    key(&mut ui, &mut env, KeyInput::Insert("X".to_string()));
+    assert_eq!(code.get(), "X bar X");
+}
+
+#[test]
+fn triple_click_selects_the_whole_line() {
+    let (mut ui, mut env, code) = mouse_harness("aaa\nbbb\nccc");
+    ui.dispatch_triple_tap(at(1, 1)); // the "bbb" line
+    ui.rebuild_if_dirty();
+    ui.layout(&mut env, Size::new(600.0, 400.0));
+    // The whole line (incl. its newline) is selected, so typing replaces it.
+    key(&mut ui, &mut env, KeyInput::Insert("X".to_string()));
+    assert_eq!(code.get(), "aaa\nXccc");
+}
+
+#[test]
+fn keyboard_nav_autoscrolls_the_caret_into_view() {
+    use pebbles::render::RenderScroll;
+    // A short viewport over a tall document: moving to the end must scroll it into view.
+    let body: String = (0..100).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(body);
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(
+        View::new(white(), code_editor(code).height(120.0).gutter(false).autofocus()).into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    let offset = |ui: &Ui| {
+        let id = ui.render_tree().find::<RenderScroll>().expect("a scroll view");
+        ui.render_tree()
+            .object_ref(id)
+            .downcast_ref::<RenderScroll>()
+            .unwrap()
+            .offset
+    };
+    assert_eq!(offset(&ui), 0.0, "starts at the top");
+    key(
+        &mut ui,
+        &mut env,
+        KeyInput::Move {
+            motion: Motion::DocEnd,
+            extend: false,
+        },
+    );
+    assert!(offset(&ui) > 500.0, "caret at doc end scrolled the viewport down");
+    // Back to the top brings the offset home.
+    key(
+        &mut ui,
+        &mut env,
+        KeyInput::Move {
+            motion: Motion::DocStart,
+            extend: false,
+        },
+    );
+    assert_eq!(offset(&ui), 0.0, "caret at doc start scrolled back to the top");
+}
+
+#[test]
 fn shift_alt_drag_makes_a_column_of_carets() {
     let (mut ui, mut env, code) = mouse_harness("abc\ndef\nghi");
     // Shift+Alt drag straight down column 1 → a caret on each of the three lines.
