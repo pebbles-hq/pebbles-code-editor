@@ -24,6 +24,13 @@ pub struct EditorTheme {
     pub caret: Color,
     /// The selection highlight.
     pub selection: Color,
+    /// Indent-guide vertical lines (and their brighter active variant on the caret's block).
+    pub indent_guide: Color,
+    pub indent_guide_active: Color,
+    /// Whitespace/EOL markers (middots, tab arrows, ¶) when rendering is on.
+    pub whitespace: Color,
+    /// Vertical ruler / print-margin lines.
+    pub ruler: Color,
     /// Default text (identifiers, whitespace, unclassified tokens).
     pub foreground: Color,
     /// Per-token colors.
@@ -70,6 +77,10 @@ impl EditorTheme {
             current_line: Color::from_rgba8(0xFF, 0xFF, 0xFF, 0x0C),
             caret: c(0x8A, 0xB4, 0xF8),
             selection: Color::from_rgba8(0x3D, 0x59, 0x8F, 0x66),
+            indent_guide: Color::from_rgba8(0xFF, 0xFF, 0xFF, 0x12),
+            indent_guide_active: Color::from_rgba8(0xFF, 0xFF, 0xFF, 0x30),
+            whitespace: Color::from_rgba8(0xFF, 0xFF, 0xFF, 0x24),
+            ruler: Color::from_rgba8(0xFF, 0xFF, 0xFF, 0x10),
             foreground: c(0xD7, 0xDC, 0xE6),
             keyword: c(0xC5, 0x92, 0xF0),   // violet
             type_: c(0x6C, 0xD1, 0xC0),     // teal
@@ -96,6 +107,10 @@ impl EditorTheme {
             current_line: Color::from_rgba8(0x00, 0x00, 0x00, 0x08),
             caret: c(0x24, 0x5F, 0xC2),
             selection: Color::from_rgba8(0x2F, 0x62, 0xE0, 0x33),
+            indent_guide: Color::from_rgba8(0x00, 0x00, 0x00, 0x12),
+            indent_guide_active: Color::from_rgba8(0x00, 0x00, 0x00, 0x2E),
+            whitespace: Color::from_rgba8(0x00, 0x00, 0x00, 0x24),
+            ruler: Color::from_rgba8(0x00, 0x00, 0x00, 0x0E),
             foreground: c(0x24, 0x29, 0x33),
             keyword: c(0x8A, 0x3F, 0xC8),
             type_: c(0x0F, 0x86, 0x8E),

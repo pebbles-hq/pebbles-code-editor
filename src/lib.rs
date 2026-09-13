@@ -72,6 +72,9 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         context_menu: true,
         tab_size: 4,
         insert_spaces: true,
+        indent_guides: false,
+        render_whitespace: false,
+        rulers: Vec::new(),
         title: None,
     }
 }
@@ -91,6 +94,9 @@ pub struct CodeEditor {
     context_menu: bool,
     tab_size: usize,
     insert_spaces: bool,
+    indent_guides: bool,
+    render_whitespace: bool,
+    rulers: Vec<usize>,
     title: Option<String>,
 }
 
@@ -150,6 +156,21 @@ impl CodeEditor {
         self.insert_spaces = spaces;
         self
     }
+    /// Draw faint vertical indent guides at each indentation level (default off).
+    pub fn indent_guides(mut self, on: bool) -> Self {
+        self.indent_guides = on;
+        self
+    }
+    /// Render whitespace: middots for spaces, arrows for tabs (default off).
+    pub fn render_whitespace(mut self, on: bool) -> Self {
+        self.render_whitespace = on;
+        self
+    }
+    /// Vertical rulers / print-margin lines at the given columns (e.g. `[80, 120]`).
+    pub fn rulers(mut self, columns: impl Into<Vec<usize>>) -> Self {
+        self.rulers = columns.into();
+        self
+    }
     /// A filename / label shown in the status bar (also enables the status bar).
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
@@ -181,6 +202,9 @@ struct Props {
     context_menu: bool,
     tab_size: usize,
     insert_spaces: bool,
+    indent_guides: bool,
+    render_whitespace: bool,
+    rulers: Vec<usize>,
     title: Option<String>,
 }
 
@@ -200,6 +224,9 @@ impl From<CodeEditor> for Props {
             context_menu: e.context_menu,
             tab_size: e.tab_size,
             insert_spaces: e.insert_spaces,
+            indent_guides: e.indent_guides,
+            render_whitespace: e.render_whitespace,
+            rulers: e.rulers,
             title: e.title,
         }
     }
@@ -216,9 +243,10 @@ fn render_editor(p: &Props) -> AnyWidget {
     let blink_stamp = create_signal(0.0_f64); // loop time of the last edit/move — caret solid then
     let drag_anchor = create_signal::<Option<Offset>>(None); // pointer-down pos for column select
     let scroll_top = create_signal(0.0_f64); // live vertical scroll offset (drives virtualization)
-    // Imperative scroll handle — drives caret-into-view autoscroll (only used when a fixed
-    // `height` makes the editor a scroll viewport). Held in a signal so it survives renders.
-    let scroll = create_signal(ScrollHandle::new()).peek();
+    // Imperative scroll handles — drive caret-into-view autoscroll (only used when a fixed
+    // `height` makes the editor a scroll viewport). Held in signals so they survive renders.
+    let scroll = create_signal(ScrollHandle::new()).peek(); // vertical
+    let hscroll = create_signal(ScrollHandle::new()).peek(); // horizontal
     let focus = create_focus();
 
     // Two-way binding: if the caller replaces `code` from the outside (e.g. loads a file),
@@ -308,16 +336,21 @@ fn render_editor(p: &Props) -> AnyWidget {
     // fixed `height` makes the editor a scroll viewport). Runs on any state change.
     let view_h = p.height;
     let scroll_a = scroll.clone();
+    let hscroll_a = hscroll.clone();
     create_effect(move || {
         if view_h.is_none() {
             return; // grows to content — nothing scrolls
         }
         let st = state.get();
+        let text = st.text();
         let head = st.primary().head;
-        let line = line_of(&st.text(), head);
+        let line = line_of(&text, head);
         let top = pad_t + line as f64 * line_px;
         // One line of breathing room above/below the caret.
         scroll_a.ensure_visible(top, top + line_px, line_px);
+        // Keep the caret's column in view horizontally too (a few columns of margin).
+        let x = pad_l + col_of(&text, head) as f64 * advance;
+        hscroll_a.ensure_visible(x, x + advance, advance * 4.0);
     });
 
     // ---- overlay layers on the monospace grid ----
@@ -330,6 +363,50 @@ fn render_editor(p: &Props) -> AnyWidget {
             line_px,
             theme.current_line,
         ));
+    }
+
+    // rulers / print-margin — thin full-height vertical lines at the configured columns.
+    for &rc in &p.rulers {
+        layers.push(
+            Positioned::new(
+                container()
+                    .width(1.0)
+                    .height(content_h)
+                    .decoration(BoxDecoration::new().color(theme.ruler)),
+            )
+            .left(pad_l + rc as f64 * advance)
+            .top(0.0)
+            .into_widget(),
+        );
+    }
+
+    // indent guides — a faint vertical line at each indent level inside a line's leading
+    // whitespace (visible lines only).
+    if p.indent_guides {
+        let step = p.tab_size.max(1);
+        for line in first_line..=last_line {
+            let ls = line_start_of(&src, line);
+            let le = line_end(&src, ls);
+            let lead = src[ls..le]
+                .chars()
+                .take_while(|c| *c == ' ' || *c == '\t')
+                .count();
+            let mut gcol = step;
+            while gcol < lead {
+                layers.push(
+                    Positioned::new(
+                        container()
+                            .width(1.0)
+                            .height(line_px)
+                            .decoration(BoxDecoration::new().color(theme.indent_guide)),
+                    )
+                    .left(pad_l + gcol as f64 * advance)
+                    .top(pad_t + line as f64 * line_px)
+                    .into_widget(),
+                );
+                gcol += step;
+            }
+        }
     }
 
     // selection rects — one set per non-empty range (multi-cursor), clipped to the window.
@@ -382,6 +459,49 @@ fn render_editor(p: &Props) -> AnyWidget {
             .top(pad_t + first_line as f64 * line_px)
             .into_widget(),
     );
+
+    // whitespace / EOL rendering — a single faint overlay aligned to the text (spaces→·,
+    // tabs→→, everything else blanked to preserve columns) plus a ¶ at each visible line end.
+    if p.render_whitespace {
+        let marks: String = visible_src
+            .chars()
+            .map(|c| match c {
+                ' ' => '·',
+                '\t' => '→',
+                '\n' => '\n',
+                _ => ' ',
+            })
+            .collect();
+        layers.push(
+            Positioned::new(
+                text_rich(vec![
+                    span(marks)
+                        .size(fs as f32)
+                        .font_family(MONO)
+                        .color(theme.whitespace),
+                ])
+                .line_height(lh as f32),
+            )
+            .left(pad_l)
+            .top(pad_t + first_line as f64 * line_px)
+            .into_widget(),
+        );
+        for line in first_line..=last_line {
+            let x = pad_l + line_char_len(&src, line) as f64 * advance;
+            layers.push(
+                Positioned::new(
+                    text("¶".to_string())
+                        .size((fs * 0.9) as f32)
+                        .line_height(lh as f32)
+                        .font_family(MONO)
+                        .color(theme.whitespace),
+                )
+                .left(x)
+                .top(pad_t + line as f64 * line_px)
+                .into_widget(),
+            );
+        }
+    }
 
     // carets — one per range's head (multi-cursor); all blink in phase.
     if caret_on {
@@ -480,7 +600,18 @@ fn render_editor(p: &Props) -> AnyWidget {
         goal.set(cb);
         history.peek().borrow_mut().break_group();
     };
-    let click_area = GestureDetector::new(container().height(content_h).child(grid))
+    // With a fixed height, bound the content to the widest line so it can overflow and
+    // scroll horizontally (the gutter stays fixed, outside the horizontal scroll). Without a
+    // height the editor grows to content, so the grid fills naturally.
+    let content_w = p.height.map(|_| {
+        let max_cols = src.split('\n').map(|l| l.chars().count()).max().unwrap_or(0);
+        pad_l * 2.0 + max_cols as f64 * advance
+    });
+    let content_box = match content_w {
+        Some(w) => container().width(w).height(content_h).child(grid),
+        None => container().height(content_h).child(grid),
+    };
+    let click_area = GestureDetector::new(content_box)
         .on_pointer_down(action_event(move |e| {
             focus.request_focus();
             let alt = pebbles::core::keyboard::alt_held();
@@ -506,6 +637,16 @@ fn render_editor(p: &Props) -> AnyWidget {
         }))
         .on_double_tap(action_event(move |e| word_select(e.position)))
         .on_triple_tap(action_event(move |e| line_select(e.position)));
+
+    // Horizontal scroll: wrap the content (not the gutter) so long lines scroll sideways
+    // while the line numbers stay put. Only when the editor is a bounded viewport.
+    let content_area: AnyWidget = if content_w.is_some() {
+        SingleChildScrollView::horizontal(click_area)
+            .controller(hscroll.clone())
+            .into_widget()
+    } else {
+        click_area.into_widget()
+    };
 
     // ---- gutter ----
     // Virtualized to match the text: only the visible line numbers are built, each absolutely
@@ -546,11 +687,11 @@ fn render_editor(p: &Props) -> AnyWidget {
             .decoration(BoxDecoration::new().color(theme.gutter_bg))
             .child(stack(nums).alignment(Alignment::TOP_LEFT))
             .into_widget();
-        row(children![gutter_col, expanded(click_area)])
+        row(children![gutter_col, expanded(content_area)])
             .cross_axis_alignment(CrossAxisAlignment::Start)
             .into_widget()
     } else {
-        click_area.into_widget()
+        content_area
     };
 
     // Right-click menu (configurable via `.context_menu(false)`), driving the same edit

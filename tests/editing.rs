@@ -250,6 +250,70 @@ fn triple_click_selects_the_whole_line() {
 }
 
 #[test]
+fn indent_guides_whitespace_and_rulers_render() {
+    // Exercise the overlay build/layout path for all three toggles on an indented doc.
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from("fn main() {\n        let x = 1;\n}\n"));
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(
+        View::new(
+            white(),
+            code_editor(code)
+                .height(200.0)
+                .indent_guides(true)
+                .render_whitespace(true)
+                .rulers([4usize, 80])
+                .autofocus(),
+        )
+        .into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    assert!(ui.element_count() > 0, "overlays built without panicking");
+}
+
+#[test]
+fn long_line_scrolls_horizontally_to_the_caret() {
+    use pebbles::render::RenderScroll;
+    // A short doc (so the VERTICAL scroll can't move) with one very long line.
+    let body = format!("short\n{}", "x".repeat(400));
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(body);
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(View::new(white(), code_editor(code).height(120.0).autofocus()).into_widget());
+    let win = Size::new(320.0, 400.0); // narrow, so the long line overflows
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, win);
+    }
+    // Max offset across both scroll views; the vertical one can't move (content fits), so any
+    // movement is horizontal.
+    let max_offset = |ui: &Ui| {
+        ui.render_tree()
+            .find_all::<RenderScroll>()
+            .into_iter()
+            .filter_map(|id| ui.render_tree().object_ref(id).downcast_ref::<RenderScroll>())
+            .map(|s| s.offset)
+            .fold(0.0_f64, f64::max)
+    };
+    assert_eq!(max_offset(&ui), 0.0, "starts flush left");
+    // Move to the end of the long line — the viewport scrolls right to reveal the caret.
+    ui.dispatch_key(KeyInput::Move {
+        motion: Motion::DocEnd,
+        extend: false,
+    });
+    ui.rebuild_if_dirty();
+    ui.layout(&mut env, win);
+    assert!(max_offset(&ui) > 0.0, "caret at end of a long line scrolled horizontally");
+}
+
+#[test]
 fn viewport_is_virtualized_for_large_docs() {
     // A 2000-line doc in a 200px viewport must render only a screenful of nodes, not 2000
     // lines' worth — the virtualization tripwire (render node count tracks the viewport).
