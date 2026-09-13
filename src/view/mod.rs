@@ -838,8 +838,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         code_area
     };
 
-    // ---- chrome: optional title/status bar above the code area, all inside a bordered card ----
-    let border = theme.border;
+    // ---- chrome: optional title/status bar above the code area ----
+    // The editor renders FLAT by design — just its background, no rounded corners and no
+    // border. Any frame (radius, border, shadow, card) is the caller's to add by wrapping the
+    // editor, so it drops cleanly into any design.
     let lang_name = p
         .language
         .as_ref()
@@ -851,20 +853,14 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         col.push(
             container()
                 .height(1.0)
-                .decoration(BoxDecoration::new().color(border))
+                .decoration(BoxDecoration::new().color(theme.border))
                 .into_widget(),
         );
     }
     col.push(code_area);
 
     container()
-        .decoration(
-            BoxDecoration::new()
-                .color(theme.background)
-                .radius(BorderRadius::all(12.0))
-                .border(Border::new(border, 1.0)),
-        )
-        .clip()
+        .color(theme.background)
         .child(
             column(col)
                 .cross_axis_alignment(CrossAxisAlignment::Stretch)
