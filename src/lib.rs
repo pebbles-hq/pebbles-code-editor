@@ -215,6 +215,7 @@ fn render_editor(p: &Props) -> AnyWidget {
     let goal = create_signal(0usize); // preserved column for Up/Down
     let blink_stamp = create_signal(0.0_f64); // loop time of the last edit/move — caret solid then
     let drag_anchor = create_signal::<Option<Offset>>(None); // pointer-down pos for column select
+    let scroll_top = create_signal(0.0_f64); // live vertical scroll offset (drives virtualization)
     // Imperative scroll handle — drives caret-into-view autoscroll (only used when a fixed
     // `height` makes the editor a scroll viewport). Held in a signal so it survives renders.
     let scroll = create_signal(ScrollHandle::new()).peek();
@@ -276,6 +277,22 @@ fn render_editor(p: &Props) -> AnyWidget {
     let content_h = line_count as f64 * line_px + pad_t * 2.0;
     let focused = focus.is_focused();
 
+    // ---- viewport virtualization ----
+    // With a fixed height we render only the lines in view (plus a small overscan), so a
+    // 100k-line file costs the same as a screenful. Reading `scroll_top` here makes the
+    // component re-render as the viewport scrolls (fed by the scroll view's `on_scroll`).
+    // Without a height the editor grows to its content, so every line is "visible".
+    const OVERSCAN: usize = 4;
+    let (first_line, last_line) = if let Some(h) = p.height {
+        let top = scroll_top.get();
+        let first = (((top - pad_t) / line_px).floor() as isize - OVERSCAN as isize).max(0) as usize;
+        let rows = (h / line_px).ceil() as usize + OVERSCAN * 2;
+        let last = (first + rows).min(line_count - 1);
+        (first.min(line_count - 1), last)
+    } else {
+        (0, line_count - 1)
+    };
+
     // Caret blink: a 0.5s phase that ticks ONLY while focused, reset to solid on any edit
     // or caret move (the `blink_stamp` effect below), so the caret is steady while you work.
     let blink_loop = create_loop_while(focused, 0.5);
@@ -307,7 +324,7 @@ fn render_editor(p: &Props) -> AnyWidget {
     let mut layers: Vec<AnyWidget> = Vec::new();
 
     // current-line band (primary caret's line, only when the primary has no selection)
-    if p.current_line && !has_primary_sel {
+    if p.current_line && !has_primary_sel && (first_line..=last_line).contains(&cl) {
         layers.push(band(
             pad_t + cl as f64 * line_px,
             line_px,
@@ -315,7 +332,7 @@ fn render_editor(p: &Props) -> AnyWidget {
         ));
     }
 
-    // selection rects — one set per non-empty range (multi-cursor).
+    // selection rects — one set per non-empty range (multi-cursor), clipped to the window.
     for r in sels.ranges() {
         let (lo, hi) = (r.min(), r.max());
         if lo == hi {
@@ -323,7 +340,7 @@ fn render_editor(p: &Props) -> AnyWidget {
         }
         let (la, ca) = (line_of(&src, lo), col_of(&src, lo));
         let (lb, cb) = (line_of(&src, hi), col_of(&src, hi));
-        for line in la..=lb {
+        for line in la.max(first_line)..=lb.min(last_line) {
             let start_col = if line == la { ca } else { 0 };
             let end_col = if line == lb {
                 cb
@@ -346,17 +363,23 @@ fn render_editor(p: &Props) -> AnyWidget {
         }
     }
 
-    // highlighted text
+    // highlighted text — only the visible block, as one rich-text positioned at the first
+    // visible line. Tokens are computed for the whole doc (for correct multi-line context)
+    // then sliced to the window, so we never lay out or paint offscreen text.
     let tokens = p
         .language
         .as_ref()
         .map(|l| l.highlight(&src))
         .unwrap_or_default();
-    let spans = to_spans(&src, &tokens, theme, fs);
+    let slice_start = line_start_of(&src, first_line);
+    let slice_end = line_end(&src, line_start_of(&src, last_line));
+    let visible_src = &src[slice_start..slice_end];
+    let vis_tokens = slice_tokens(&tokens, slice_start, slice_end);
+    let spans = to_spans(visible_src, &vis_tokens, theme, fs);
     layers.push(
         Positioned::new(text_rich(spans).line_height(lh as f32))
             .left(pad_l)
-            .top(pad_t)
+            .top(pad_t + first_line as f64 * line_px)
             .into_widget(),
     );
 
@@ -364,6 +387,9 @@ fn render_editor(p: &Props) -> AnyWidget {
     if caret_on {
         for r in sels.ranges() {
             let l = line_of(&src, r.head);
+            if !(first_line..=last_line).contains(&l) {
+                continue;
+            }
             let col = col_of(&src, r.head);
             layers.push(
                 Positioned::new(
@@ -482,39 +508,44 @@ fn render_editor(p: &Props) -> AnyWidget {
         .on_triple_tap(action_event(move |e| line_select(e.position)));
 
     // ---- gutter ----
+    // Virtualized to match the text: only the visible line numbers are built, each absolutely
+    // positioned at its row inside a full-height (`content_h`) column so the scroll range and
+    // vertical alignment stay exact.
     let body: AnyWidget = if p.gutter {
         let digits = line_count.to_string().len().max(2);
         let gutter_w = digits as f64 * advance + 22.0;
         let mut nums: Vec<AnyWidget> = Vec::new();
-        for n in 0..line_count {
+        for n in first_line..=last_line {
             let active = n == cl;
             nums.push(
-                container()
-                    .height(line_px)
-                    .alignment(Alignment::CENTER_RIGHT)
-                    .child(
-                        text((n + 1).to_string())
-                            .size(fs as f32)
-                            .line_height(lh as f32)
-                            .font_family(MONO)
-                            .color(if active {
-                                theme.gutter_active_fg
-                            } else {
-                                theme.gutter_fg
-                            }),
-                    )
-                    .into_widget(),
+                Positioned::new(
+                    container()
+                        .width(gutter_w - 8.0)
+                        .height(line_px)
+                        .alignment(Alignment::CENTER_RIGHT)
+                        .child(
+                            text((n + 1).to_string())
+                                .size(fs as f32)
+                                .line_height(lh as f32)
+                                .font_family(MONO)
+                                .color(if active {
+                                    theme.gutter_active_fg
+                                } else {
+                                    theme.gutter_fg
+                                }),
+                        ),
+                )
+                .left(0.0)
+                .top(pad_t + n as f64 * line_px)
+                .into_widget(),
             );
         }
         let gutter_col = container()
             .width(gutter_w)
+            .height(content_h)
             .decoration(BoxDecoration::new().color(theme.gutter_bg))
-            .padding(EdgeInsets::only(0.0, pad_t, 8.0, 0.0))
-            .child(
-                column(nums)
-                    .cross_axis_alignment(CrossAxisAlignment::Stretch)
-                    .main_axis_size(MainAxisSize::Min),
-            );
+            .child(stack(nums).alignment(Alignment::TOP_LEFT))
+            .into_widget();
         row(children![gutter_col, expanded(click_area)])
             .cross_axis_alignment(CrossAxisAlignment::Start)
             .into_widget()
@@ -558,7 +589,12 @@ fn render_editor(p: &Props) -> AnyWidget {
         Some(h) => container()
             .height(h)
             .decoration(BoxDecoration::new().color(theme.background))
-            .child(scroll_view(body).controller(scroll.clone()))
+            .child(
+                scroll_view(body)
+                    .controller(scroll.clone())
+                    // Re-render the visible window as the viewport scrolls.
+                    .on_scroll(move |n| scroll_top.set(n.metrics.pixels)),
+            )
             .into_widget(),
         None => container()
             .decoration(BoxDecoration::new().color(theme.background))
@@ -679,6 +715,23 @@ fn to_spans(src: &str, tokens: &[Token], theme: &EditorTheme, fs: f64) -> Vec<Te
         push(&src[cursor..], TokenKind::Plain, &mut spans);
     }
     spans
+}
+
+/// Clip `tokens` to the byte range `from..to` and rebase their offsets to the start of that
+/// slice — so the visible block can be highlighted as its own rich-text (virtualization).
+fn slice_tokens(tokens: &[Token], from: usize, to: usize) -> Vec<Token> {
+    tokens
+        .iter()
+        .filter_map(|t| {
+            let s = t.start.max(from);
+            let e = (t.start + t.len).min(to);
+            (e > s).then_some(Token {
+                start: s - from,
+                len: e - s,
+                kind: t.kind,
+            })
+        })
+        .collect()
 }
 
 fn with_alpha(c: Color, a: f32) -> Color {

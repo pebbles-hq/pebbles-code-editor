@@ -250,6 +250,25 @@ fn triple_click_selects_the_whole_line() {
 }
 
 #[test]
+fn viewport_is_virtualized_for_large_docs() {
+    // A 2000-line doc in a 200px viewport must render only a screenful of nodes, not 2000
+    // lines' worth — the virtualization tripwire (render node count tracks the viewport).
+    let body: String = (0..2000).map(|i| format!("fn line_{i}() {{}}")).collect::<Vec<_>>().join("\n");
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(body);
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(View::new(white(), code_editor(code).height(200.0).autofocus()).into_widget());
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    let nodes = ui.render_node_count();
+    assert!(nodes < 300, "expected a virtualized node count, got {nodes} for 2000 lines");
+}
+
+#[test]
 fn keyboard_nav_autoscrolls_the_caret_into_view() {
     use pebbles::render::RenderScroll;
     // A short viewport over a tall document: moving to the end must scroll it into view.
