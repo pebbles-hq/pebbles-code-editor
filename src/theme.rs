@@ -195,8 +195,9 @@ impl EditorTheme {
         let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
         let a = Color::from_rgba8;
         EditorTheme {
-            background: c(0x0F, 0x14, 0x1F),
-            gutter_bg: c(0x0F, 0x14, 0x1F),
+            // A simple neutral dark, matching the framework's default dark background.
+            background: c(0x0A, 0x0A, 0x0B),
+            gutter_bg: c(0x0A, 0x0A, 0x0B),
             gutter_fg: c(0x44, 0x4C, 0x5C),
             gutter_active_fg: c(0x9A, 0xA4, 0xB8),
             current_line: a(0xFF, 0xFF, 0xFF, 0x0C),
@@ -210,7 +211,7 @@ impl EditorTheme {
             matching_bracket: a(0x8A, 0xB4, 0xF8, 0x4D),
             foreground: c(0xD7, 0xDC, 0xE6),
             border: a(0x9A, 0xA4, 0xB8, 0x50),
-            overlay_bg: c(0x18, 0x1F, 0x2E),
+            overlay_bg: c(0x18, 0x18, 0x1B),
             muted: c(0x5D, 0x67, 0x7A),
             accent: c(0x76, 0xB2, 0xF0),
             search_match: a(0xE6, 0xB4, 0x73, 0x47),
