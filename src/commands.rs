@@ -119,6 +119,34 @@ pub(crate) fn apply_key(
             } else {
                 Coalesce::Never
             };
+            // Language-aware reindent: typing a closing bracket on an otherwise-blank line
+            // dedents that line one level, so `}` / `)` / `]` line up under their opener.
+            if !is_multi && primary.is_empty() && s.chars().count() == 1 {
+                let ch = s.chars().next().unwrap();
+                if cfg.brackets.iter().any(|(_, c)| *c == ch) {
+                    let head = primary.head;
+                    let ls = line_start(&src, head);
+                    let indent = &src[ls..head];
+                    if !indent.is_empty() && indent.chars().all(|c| c == ' ' || c == '\t') {
+                        let cut = indent.len().min(cfg.tab.len().max(1));
+                        dispatch(
+                            state,
+                            history,
+                            code,
+                            Transaction::change_and_select(
+                                ChangeSet::from_changes(vec![
+                                    Change { from: ls, to: ls + cut, insert: String::new() },
+                                    Change { from: head, to: head, insert: s.clone() },
+                                ]),
+                                Selections::single(Selection::caret(head - cut + s.len())),
+                            ),
+                            Coalesce::Never,
+                        );
+                        goal.set(col_of(&state.peek().text(), state.peek().primary().head));
+                        return;
+                    }
+                }
+            }
             // Auto-close (single caret / selection only): type an opener → insert its pair
             // (caret between) or wrap the selection; type a closer/quote sitting right at the
             // caret → skip over it instead of doubling.

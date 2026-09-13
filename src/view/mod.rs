@@ -161,30 +161,30 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     });
 
     // Grab focus on mount if requested — but only ONCE, so it never steals focus back from a
-    // child input (the find bar's query field) on later re-renders.
+    // child input (the find bar's query field) on later re-renders. The hook is created
+    // UNCONDITIONALLY (the condition lives inside the effect) so the hook order never churns.
     let did_autofocus = create_signal(false);
-    if p.autofocus {
-        create_effect(move || {
-            if !did_autofocus.peek() {
-                focus.request_focus();
-                did_autofocus.set(true);
-            }
-        });
-    }
+    let want_focus = p.autofocus;
+    create_effect(move || {
+        if want_focus && !did_autofocus.peek() {
+            focus.request_focus();
+            did_autofocus.set(true);
+        }
+    });
 
-    // Restore a saved scroll offset once on mount (persist/restore view state).
-    if p.initial_scroll > 0.0 {
-        let scroll_restore = scroll.clone();
-        let init = p.initial_scroll;
-        let did_restore = create_signal(false);
-        create_effect(move || {
-            if !did_restore.peek() {
-                scroll_restore.scroll_to(init);
-                scroll_top.set(init);
-                did_restore.set(true);
-            }
-        });
-    }
+    // Restore a saved scroll offset once on mount (persist/restore view state). Again the
+    // signal + effect are UNCONDITIONAL (gated inside), so a per-render change in
+    // `initial_scroll` can't shift this component's hook positions.
+    let did_restore = create_signal(false);
+    let init_scroll = p.initial_scroll;
+    let scroll_restore = scroll.clone();
+    create_effect(move || {
+        if init_scroll > 0.0 && !did_restore.peek() {
+            scroll_restore.scroll_to(init_scroll);
+            scroll_top.set(init_scroll);
+            did_restore.set(true);
+        }
+    });
 
     // Register the key handler (semantic edit commands from the framework).
     let read_only = p.read_only;
@@ -395,46 +395,44 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         }));
     }
 
-    // Extension event hooks: on_change (text changed) and on_selection (any state change).
-    if p.extensions.iter().any(|e| e.on_change.is_some() || e.on_selection.is_some()) {
-        let hook_exts = p.extensions.clone();
-        let prev = create_signal(state.peek().text());
-        create_effect(move || {
-            let st = state.get();
-            let text = st.text();
-            let pr = st.primary();
-            let snap = Snapshot {
-                text: &text,
-                caret: pr.head,
-                selection: (pr.min(), pr.max()),
-            };
-            let changed = *prev.peek() != text;
-            for e in &hook_exts {
-                if changed && let Some(f) = &e.on_change {
-                    f(&snap);
-                }
-                if let Some(f) = &e.on_selection {
-                    f(&snap);
-                }
+    // Extension event hooks (on_change / on_selection). The signal + effect are created
+    // UNCONDITIONALLY (they no-op with no hooks) so toggling the extension set never churns
+    // this component's hook order.
+    let hook_exts = p.extensions.clone();
+    let prev = create_signal(state.peek().text());
+    create_effect(move || {
+        let st = state.get();
+        let text = st.text();
+        let pr = st.primary();
+        let snap = Snapshot {
+            text: &text,
+            caret: pr.head,
+            selection: (pr.min(), pr.max()),
+        };
+        let changed = *prev.peek() != text;
+        for e in &hook_exts {
+            if changed && let Some(f) = &e.on_change {
+                f(&snap);
             }
-            if changed {
-                prev.set(text);
+            if let Some(f) = &e.on_selection {
+                f(&snap);
             }
-        });
-    }
+        }
+        if changed {
+            prev.set(text);
+        }
+    });
 
-    // Extension focus hook: fire on_focus(true/false) as the editor gains/loses focus.
-    if p.extensions.iter().any(|e| e.on_focus.is_some()) {
-        let focus_exts = p.extensions.clone();
-        create_effect(move || {
-            let has = focus.is_focused();
-            for e in &focus_exts {
-                if let Some(f) = &e.on_focus {
-                    f(has);
-                }
+    // Extension focus hook (unconditional, gated inside).
+    let focus_exts = p.extensions.clone();
+    create_effect(move || {
+        let has = focus.is_focused();
+        for e in &focus_exts {
+            if let Some(f) = &e.on_focus {
+                f(has);
             }
-        });
-    }
+        }
+    });
 
     // Extension keymap: bind each extension keybinding to its command while the editor is
     // focused (declined otherwise, so it falls through to other handlers / page scroll).
@@ -726,6 +724,41 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             .top(y)
             .into_widget(),
         );
+    }
+    // Touch selection handles: draggable knobs at the selection ends (opt-in). Dragging a
+    // handle moves that endpoint (the other stays anchored).
+    if p.selection_handles && has_primary_sel {
+        let (lo, hi) = (primary.min(), primary.max());
+        for (byte, is_end) in [(lo, false), (hi, true)] {
+            let ln = line_of(&src, byte);
+            if !(first_line..=last_line).contains(&ln) {
+                continue;
+            }
+            let hx = pad_l + col_of(&src, byte) as f64 * advance - 7.0;
+            let hy = pad_t + ln as f64 * line_px + line_px - 3.0;
+            // The OTHER endpoint stays fixed while this handle drags.
+            let fixed = if is_end { lo } else { hi };
+            let handle = GestureDetector::new(
+                container()
+                    .width(14.0)
+                    .height(14.0)
+                    .decoration(
+                        BoxDecoration::new().color(theme.caret).radius(BorderRadius::all(7.0)),
+                    ),
+            )
+            .cursor(Cursor::Pointer)
+            .on_pan_update(action_event(move |e| {
+                let cur = state.peek();
+                let text = cur.text();
+                let b = pos_to_byte(&text, e.position, pad_l, pad_t, advance, line_px);
+                state.set(EditorState {
+                    doc: cur.doc.clone(),
+                    selection: Selections::single(Selection::range(fixed, b)),
+                });
+                goal.set(col_of(&text, b));
+            }));
+            layers.push(Positioned::new(handle).left(hx).top(hy).into_widget());
+        }
     }
     // Text drag-and-drop: a drop caret at the target byte while dragging a selection.
     if let Some(d) = drop_byte.get() {

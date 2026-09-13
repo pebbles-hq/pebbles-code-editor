@@ -1145,3 +1145,58 @@ fn large_file_renders() {
     }
     assert!(ui.element_count() > 0, "large file renders via window-only tokenization");
 }
+
+// ---------------------------------------------------------------------------
+// Language-aware reindent (§1) + touch handles (§9)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn closing_bracket_reindents_the_line() {
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    // Caret sits on an over-indented blank line; typing `}` dedents one level then inserts it.
+    let code = create_root_signal(String::from("fn f() {\n        "));
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(
+        View::new(
+            white(),
+            code_editor(code)
+                .language(Box::new(pebbles_code_editor::lang::Rust))
+                .autofocus(),
+        )
+        .into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    key(&mut ui, &mut env, KeyInput::Move { motion: Motion::DocEnd, extend: false });
+    key(&mut ui, &mut env, KeyInput::Insert("}".to_string()));
+    // 8 spaces dedented by one 4-space level -> 4 spaces, then `}`.
+    assert_eq!(code.get(), "fn f() {\n    }");
+}
+
+#[test]
+fn selection_handles_render_with_a_selection() {
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from("abcdef"));
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(
+        View::new(white(), code_editor(code).gutter(false).selection_handles(true).autofocus())
+            .into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    let before = ui.element_count();
+    // Select "abc" — two draggable handles (start + end) should now render.
+    key(&mut ui, &mut env, KeyInput::Move { motion: Motion::DocStart, extend: false });
+    for _ in 0..3 {
+        key(&mut ui, &mut env, KeyInput::Move { motion: Motion::Right, extend: true });
+    }
+    assert!(ui.element_count() > before, "selection handles rendered for the selection");
+}

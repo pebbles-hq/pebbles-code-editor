@@ -56,6 +56,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         on_edit: None,
         on_scroll: None,
         initial_scroll: 0.0,
+        selection_handles: false,
     }
 }
 
@@ -98,6 +99,7 @@ pub struct CodeEditor {
     on_edit: Option<EditHook>,
     on_scroll: Option<ScrollHook>,
     initial_scroll: f64,
+    selection_handles: bool,
 }
 
 /// Fired after each change with the minimal [`Edit`] delta; `remote` is true when the change
@@ -310,6 +312,12 @@ impl CodeEditor {
         self.initial_scroll = px.max(0.0);
         self
     }
+    /// Show draggable selection handles at the ends of a selection (for touch). Default off
+    /// (desktop pointer selection needs no handles). Drag a handle to grow/shrink the selection.
+    pub fn selection_handles(mut self, on: bool) -> Self {
+        self.selection_handles = on;
+        self
+    }
 }
 
 impl IntoWidget for CodeEditor {
@@ -360,6 +368,7 @@ pub(crate) struct Props {
     pub(crate) on_edit: Option<EditHook>,
     pub(crate) on_scroll: Option<ScrollHook>,
     pub(crate) initial_scroll: f64,
+    pub(crate) selection_handles: bool,
 }
 
 impl From<CodeEditor> for Props {
@@ -436,6 +445,7 @@ impl From<CodeEditor> for Props {
             on_edit: e.on_edit,
             on_scroll: e.on_scroll,
             initial_scroll: e.initial_scroll,
+            selection_handles: e.selection_handles,
         }
     }
 }
