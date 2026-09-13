@@ -3,6 +3,8 @@
 
 pub struct Sample {
     pub name: &'static str,
+    /// Suggested filename (kept for reference; the IDE seeds its own paths in `project()`).
+    #[allow(dead_code)]
     pub file: &'static str,
     pub src: &'static str,
 }
@@ -34,6 +36,56 @@ pub fn big() -> String {
          println!(\"result = {}\", p.run(&[1, 2, 3, 4, 5]));\n}\n",
     );
     s
+}
+
+/// One seed file in the IDE's in-memory project.
+pub struct Seed {
+    pub path: &'static str,
+    pub lang: &'static str,
+    pub content: String,
+}
+
+/// A small polyglot project the IDE opens on launch — folders, several languages, a long
+/// Rust file (virtualization/minimap/sticky), TODOs (diagnostics) and `let`s (inlay hints).
+pub fn project() -> Vec<Seed> {
+    let by_name = |name: &str| SAMPLES.iter().find(|s| s.name == name).map(|s| s.src).unwrap_or("");
+    let seed = |path, lang, content: &str| Seed { path, lang, content: content.to_string() };
+    vec![
+        seed(
+            "README.md",
+            "Plain",
+            "# Pebbles IDE — reference project\n\nA sample project opened by the demo IDE. It shows\n\
+             the file explorer, tabs, search, settings, the Problems panel, and the code editor\n\
+             with completion, hover, diagnostics, inlay hints, and plugins.\n\n\
+             TODO: replace these samples with your own code.\n",
+        ),
+        seed(
+            "Cargo.toml",
+            "TOML",
+            "[package]\nname = \"reference-project\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\n",
+        ),
+        seed(
+            ".gitignore",
+            "Plain",
+            "/target\n**/*.rs.bk\nCargo.lock\n.DS_Store\n",
+        ),
+        seed("src/main.rs", "Rust", by_name("Rust")),
+        seed(
+            "src/lib.rs",
+            "Rust",
+            "//! Library root.\npub mod processors;\n\n/// Add two numbers.\n\
+             pub fn add(a: i64, b: i64) -> i64 {\n    // TODO: check for overflow\n    a + b\n}\n\n\
+             #[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn adds() {\n        \
+             let sum = add(2, 3);\n        assert_eq!(sum, 5);\n    }\n}\n",
+        ),
+        Seed { path: "src/processors.rs", lang: "Rust", content: big() },
+        seed("examples/server.go", "Go", by_name("Go")),
+        seed("scripts/primes.py", "Python", by_name("Python")),
+        seed("web/store.ts", "TypeScript", by_name("TypeScript")),
+        seed("web/fetch.js", "JavaScript", by_name("JavaScript")),
+        seed("config/package.json", "JSON", by_name("JSON")),
+    ]
 }
 
 pub const SAMPLES: &[Sample] = &[

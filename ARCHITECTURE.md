@@ -110,6 +110,8 @@ commands ┘            └─▶ brackets ─▶ geometry ─▶ edit
 - **Signals live in `view::render_editor`;** builders take plain values (via `Frame`) or an
   explicit handle, so they stay simple and testable.
 - **Never panic on bad input.** The editor is always full of half-typed, invalid source.
-- **Every user-facing feature must be shown in `examples/demo`.** When you add a capability,
-  wire it into the demo (a toggle, a sample provider, a legend entry) so it's visible and
-  runnable (`cargo run -p demo`) — a feature that isn't in the demo isn't done.
+- **Every user-facing feature must be shown in `examples/demo`.** The demo is a **full IDE**
+  (`examples/demo/src/ide/` — explorer, tabs, search, settings, problems, menu/status bars
+  around the editor); wire each new capability into it (a settings toggle, a sample provider,
+  a plugin) so it's visible and runnable (`cargo run -p demo`) — a feature that isn't in the
+  demo isn't done. The IDE is itself domain-split (one concern per module), mirroring this crate.

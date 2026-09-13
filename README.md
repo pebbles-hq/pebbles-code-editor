@@ -81,13 +81,23 @@ language highlights the moment you return its tokens. The bundled scanners are
 hand-written, dependency-free, and **panic-free on any input** (an editor is full of
 half-typed, invalid source).
 
-## Run the sample
+## Run the sample — a full IDE
+
+The `demo` crate is a **complete IDE** built on this editor + Pebbles, meant both as the
+live testbed for every feature and as a reference for building an IDE on the framework: an
+activity bar, a file explorer, project search, a settings panel, editor tabs with dirty
+state, a Problems dock, a menu bar (File / Edit / View), and a status bar — around the
+fully-wired code editor.
 
 ```sh
 cargo run -p demo
 # headless screenshot (no display needed):
-SHOT=1100:760:/tmp/editor.rgba cargo run -p demo
+SHOT=1400:900:/tmp/ide.rgba cargo run -p demo
 ```
+
+Its source (`examples/demo/src/ide/`) is domain-split — `workspace` (state), `explorer`,
+`tabs`, `editor_pane`, `search_panel`, `settings`, `problems`, `statusbar`, `providers` —
+one concern per file, so it doubles as a worked example of structuring a Pebbles app.
 
 ## Status & roadmap
 
