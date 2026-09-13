@@ -220,6 +220,14 @@ pub fn shot(
             "palette" => {
                 dispatch(&mut ui, &mut env, KeyInput::CommandPalette);
             }
+            // Insert a right-to-left (Arabic) comment to check bidi display.
+            "rtl" => {
+                dispatch(&mut ui, &mut env, KeyInput::Move { motion: Motion::DocEnd, extend: false });
+                dispatch(&mut ui, &mut env, KeyInput::Enter);
+                for ch in "// مرحبا بالعالم hello".chars() {
+                    dispatch(&mut ui, &mut env, KeyInput::Insert(ch.to_string()));
+                }
+            }
             // Type a fresh line so the inline diff (vs last-saved) shows a green added band.
             "diff" => {
                 dispatch(&mut ui, &mut env, KeyInput::Move { motion: Motion::DocEnd, extend: false });
