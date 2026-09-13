@@ -16,6 +16,7 @@ pub struct Settings {
     pub light: Signal<bool>,
     pub plugins: Signal<bool>,
     pub relaxed: Signal<bool>,
+    pub wrap: Signal<bool>,
     pub font_size: Signal<f64>,
 }
 
@@ -30,6 +31,7 @@ impl Settings {
             light: create_signal(false),
             plugins: create_signal(true),
             relaxed: create_signal(false),
+            wrap: create_signal(false),
             font_size: create_signal(13.5),
         }
     }
@@ -89,6 +91,8 @@ pub fn panel(s: Settings) -> AnyWidget {
         sw(s.whitespace, "Render whitespace", "dots + arrows"),
         gap_h(12.0),
         sw(s.ruler, "Ruler at 80", "print-margin line"),
+        gap_h(12.0),
+        sw(s.wrap, "Word wrap", "wrap long lines to width"),
         gap_h(12.0),
         sw(s.relaxed, "Relaxed spacing", "taller lines + tracking"),
         gap_h(20.0),

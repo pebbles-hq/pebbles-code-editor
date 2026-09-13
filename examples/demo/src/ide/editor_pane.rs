@@ -79,6 +79,7 @@ pub fn pane(ws: Workspace, s: Settings, height: f64) -> AnyWidget {
         .font_size(s.font_size.get())
         .line_height(if relaxed { 2.0 } else { 1.6 })
         .letter_spacing(if relaxed { 1.2 } else { 0.0 })
+        .soft_wrap(s.wrap.get())
         .autofocus()
         .minimap(s.minimap.get())
         .sticky_scroll(s.sticky.get())

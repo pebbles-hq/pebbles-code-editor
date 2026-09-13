@@ -49,6 +49,11 @@ src/
   search.rs      Pure find logic: match collection with case / whole-word / regex options
                  (the widget + replace actions live in view/search.rs).
 
+  # ── folding + soft wrap (display model) ────────────────────────────────
+  fold.rs        Indentation-derived foldable regions + the `DisplayMap`: the buffer-line ↔
+                 visual-row mapping the whole view renders through. A folded line contributes
+                 zero rows; a wrapped line contributes several. Pure, no widgets.
+
   # ── collaboration (public API) ─────────────────────────────────────────
   collab.rs      The `Edit` delta type + pure `diff(old,new)` / `map_pos` — the OT/CRDT-ready
                  change stream (`.on_edit`) and remote-caret remapping. No widgets, no I/O.

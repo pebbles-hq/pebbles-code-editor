@@ -78,9 +78,33 @@ pub(crate) struct Frame<'a> {
 }
 
 impl Frame<'_> {
-    /// The y (px) of a buffer line in display-row space (folded lines collapse to their head).
+    /// The (x, y) px of a buffer `(line, col)` in visual-row space — accounts for folding
+    /// (collapsed rows) and soft wrap (a column past the wrap point drops to the next row).
+    pub(crate) fn xy(&self, line: usize, col: usize) -> (f64, f64) {
+        let (row, xcol) = self.disp.place(line, col);
+        (self.pad_l + xcol as f64 * self.advance, self.pad_t + row as f64 * self.line_px)
+    }
+    /// The y (px) of a display row index.
+    pub(crate) fn row_y(&self, row: usize) -> f64 {
+        self.pad_t + row as f64 * self.line_px
+    }
+    /// The y (px) of a buffer line's FIRST visual row.
     pub(crate) fn y_of(&self, line: usize) -> f64 {
-        self.pad_t + self.disp.row_of.get(line).copied().unwrap_or(0) as f64 * self.line_px
+        self.xy(line, 0).1
+    }
+    /// The visual rows `(row_index, Row)` that make up `line` (one unless soft-wrapped).
+    pub(crate) fn segments(&self, line: usize) -> Vec<(usize, crate::fold::Row)> {
+        let mut out = Vec::new();
+        let mut i = self.disp.place(line, 0).0;
+        while i < self.disp.rows() {
+            let r = self.disp.row_at(i);
+            if r.line != line {
+                break;
+            }
+            out.push((i, r));
+            i += 1;
+        }
+        out
     }
     /// Whether `line` is inside the rendered window AND not collapsed by a fold.
     pub(crate) fn line_visible(&self, line: usize) -> bool {
@@ -123,6 +147,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // private one. `create_signal` runs unconditionally so the hook order never churns.
     let internal_folds = create_signal::<std::collections::BTreeSet<usize>>(std::collections::BTreeSet::new());
     let folds = p.folds.unwrap_or(internal_folds);
+    // The live wrap-column width, shared with the (once-created) autoscroll effect via interior
+    // mutability so it can map the caret to its display row without a stale capture.
+    let wrap_hold = create_signal(Rc::new(std::cell::Cell::new(0usize)));
     // Find/replace state.
     let find = search::State {
         open: create_signal(0u8),
@@ -487,15 +514,34 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let cl = line_of(&src, pcc);
     let cc = col_of(&src, pcc);
     let line_count = src.split('\n').count().max(1);
+    let char_lens: Vec<usize> = src.split('\n').map(|l| l.chars().count()).collect();
 
-    // ---- code folding: buffer-line ↔ display-row map ----
-    // Folded regions collapse their body lines; the whole view renders in DISPLAY-ROW space
-    // (y = row_of[line] * line_px), so folded lines take no height and everything below shifts
-    // up. Reading `folds` here re-renders on fold/unfold.
+    // ---- folding + soft wrap: buffer-line ↔ visual-row map ----
+    // The whole view renders in VISUAL-ROW space (folded lines collapse, wrapped lines split).
+    // Reading `folds` re-renders on fold/unfold. Soft wrap needs the measured content width; it
+    // settles one frame after mount (use_bounds is a tracked signal), and is 0 until then.
+    let bounds = use_bounds();
+    let gutter_w_est = if p.gutter {
+        line_count.to_string().len().max(2) as f64 * advance + 22.0 + 14.0
+    } else {
+        0.0
+    };
+    let wrap_cols = if p.soft_wrap && p.height.is_some() && bounds.width() > 1.0 {
+        (((bounds.width() - gutter_w_est - pad_l * 2.0) / advance).floor() as isize).max(8) as usize
+    } else {
+        0
+    };
     let fold_regions: std::rc::Rc<Vec<(usize, usize)>> = std::rc::Rc::new(crate::fold::foldable(&src));
-    let disp = std::rc::Rc::new(crate::fold::DisplayMap::new(line_count, &folds.get(), &fold_regions));
+    let disp = std::rc::Rc::new(crate::fold::DisplayMap::new(
+        line_count,
+        &folds.get(),
+        &fold_regions,
+        &char_lens,
+        wrap_cols,
+    ));
     let display_rows = disp.rows();
     let content_h = display_rows as f64 * line_px + pad_t * 2.0;
+    wrap_hold.peek().set(wrap_cols); // publish to the autoscroll effect
     let focused = focus.is_focused();
 
     // ---- viewport virtualization (in display-row space) ----
@@ -514,21 +560,23 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         (0, line_count - 1)
     };
 
-    // Pointer → byte, fold-aware: the y maps to a DISPLAY row, then to its buffer line. When
-    // nothing is folded this is the plain identity mapping (fast path). Copy closure (captures
-    // only signals + f64s), so it's reused by every click/drag/hover handler below.
+    // Pointer → byte, fold/wrap-aware: the y maps to a VISUAL row, then to its buffer line +
+    // column span. When nothing is folded or wrapped this is the plain identity mapping (fast
+    // path). Copy closure (captures only signals + f64s), reused by every pointer handler.
     let p2b = move |text: &str, pos: Offset| -> usize {
         let row = (((pos.y - pad_t) / line_px).floor().max(0.0)) as usize;
-        let col = (((pos.x - pad_l) / advance).round().max(0.0)) as usize;
+        let xcol = (((pos.x - pad_l) / advance).round().max(0.0)) as usize;
         let nlines = text.split('\n').count().max(1);
         let fset = folds.peek();
-        let line = if fset.is_empty() {
-            row.min(nlines - 1)
-        } else {
-            let regions = crate::fold::foldable(text);
-            crate::fold::DisplayMap::new(nlines, &fset, &regions).line_at_row(row)
-        };
-        byte_at(text, line, col)
+        if wrap_cols == 0 && fset.is_empty() {
+            return byte_at(text, row.min(nlines - 1), xcol);
+        }
+        let clens: Vec<usize> = text.split('\n').map(|l| l.chars().count()).collect();
+        let regions = crate::fold::foldable(text);
+        let map = crate::fold::DisplayMap::new(nlines, &fset, &regions, &clens, wrap_cols);
+        let r = map.row_at(row);
+        let col = (r.start + xcol).min(clens.get(r.line).copied().unwrap_or(0));
+        byte_at(text, r.line, col)
     };
 
     // ---- caret blink ----
@@ -554,7 +602,24 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             let text = st.text();
             let head = st.primary().head;
             let line = line_of(&text, head);
-            let top = pad_t + line as f64 * line_px;
+            let col = col_of(&text, head);
+            // The caret's DISPLAY row (fold/wrap-aware), so autoscroll targets the right place.
+            let wc = wrap_hold.peek().get();
+            let drow = if wc == 0 && folds.peek().is_empty() {
+                line
+            } else {
+                let clens: Vec<usize> = text.split('\n').map(|l| l.chars().count()).collect();
+                let regions = crate::fold::foldable(&text);
+                let map = crate::fold::DisplayMap::new(
+                    clens.len().max(1),
+                    &folds.peek(),
+                    &regions,
+                    &clens,
+                    wc,
+                );
+                map.place(line, col).0
+            };
+            let top = pad_t + drow as f64 * line_px;
             let bottom = top + line_px;
             let cur = scroll_top.peek();
             let margin = line_px;
@@ -950,11 +1015,15 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
 
     // With a fixed height, bound the content to the widest line so it can overflow and scroll
     // horizontally (the gutter stays fixed, outside the horizontal scroll). Without a height
-    // the editor grows to content, so the grid fills naturally.
-    let content_w = p.height.map(|_| {
-        let max_cols = src.split('\n').map(|l| l.chars().count()).max().unwrap_or(0);
-        pad_l * 2.0 + max_cols as f64 * advance
-    });
+    // the editor grows to content. Soft wrap disables horizontal overflow (lines fit the width).
+    let content_w = if wrap_cols > 0 {
+        None
+    } else {
+        p.height.map(|_| {
+            let max_cols = src.split('\n').map(|l| l.chars().count()).max().unwrap_or(0);
+            pad_l * 2.0 + max_cols as f64 * advance
+        })
+    };
     let content_box = match content_w {
         Some(w) => container().width(w).height(content_h).child(grid),
         None => container().height(content_h).child(grid),

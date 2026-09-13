@@ -1,13 +1,11 @@
-//! Code folding: the pure model behind the fold gutter. `foldable` derives collapsible
-//! regions from indentation (language-agnostic); [`DisplayMap`] turns the set of folded head
-//! lines into the buffer-line ↔ display-row mapping the view renders through, so folded lines
-//! collapse to nothing and everything below shifts up.
+//! The display model behind code folding **and** soft wrap: a list of visual [`Row`]s, each a
+//! `(buffer line, char-column span)`. A hidden (folded) line contributes zero rows; a wrapped
+//! line contributes several. The whole view renders in visual-row space, so folding collapses
+//! rows and wrapping splits them — one abstraction for both.
 
 use std::collections::BTreeSet;
 
-/// The indentation-derived foldable regions as `(head_line, last_line)` pairs: `head_line`
-/// stays visible (it gets a fold arrow); `head_line+1 ..= last_line` are the collapsible body.
-/// Regions may nest. Blank lines don't break a region and never head one.
+/// The indentation-derived foldable regions as `(head_line, last_line)` pairs (see below).
 pub(crate) fn foldable(src: &str) -> Vec<(usize, usize)> {
     let lines: Vec<&str> = src.split('\n').collect();
     let indent = |l: &str| l.len() - l.trim_start().len();
@@ -39,20 +37,33 @@ pub(crate) fn foldable(src: &str) -> Vec<(usize, usize)> {
     regions
 }
 
-/// The buffer-line → display-row mapping for a set of folded head lines.
+/// One visual row: a slice `[start, end)` (char columns) of buffer `line`. `first` marks the
+/// line's first row (which shows the line number + fold arrow in the gutter).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Row {
+    pub line: usize,
+    pub start: usize,
+    pub end: usize,
+    pub first: bool,
+}
+
+/// Buffer-line ↔ visual-row mapping for a fold set + wrap width.
 pub(crate) struct DisplayMap {
-    /// `row_of[line]` = the display row a buffer line paints on (a hidden line shares its fold
-    /// head's row).
-    pub(crate) row_of: Vec<usize>,
-    /// Visible buffer lines, in display order (`visible[row]` = buffer line for that row).
-    pub(crate) visible: Vec<usize>,
-    /// True for lines collapsed inside a folded region.
+    pub(crate) rows: Vec<Row>,
+    row0: Vec<usize>, // line -> index of its first row (hidden lines -> the fold head's row)
     hidden: Vec<bool>,
 }
 
 impl DisplayMap {
-    /// Build the map for `line_count` lines given the `folded` head set and the `regions`.
-    pub(crate) fn new(line_count: usize, folded: &BTreeSet<usize>, regions: &[(usize, usize)]) -> Self {
+    /// Build the map. `char_lens[line]` is that line's length in chars; `wrap_cols == 0`
+    /// disables wrapping (one row per visible line).
+    pub(crate) fn new(
+        line_count: usize,
+        folded: &BTreeSet<usize>,
+        regions: &[(usize, usize)],
+        char_lens: &[usize],
+        wrap_cols: usize,
+    ) -> Self {
         let mut hidden = vec![false; line_count];
         for &(head, last) in regions {
             if folded.contains(&head) {
@@ -62,33 +73,62 @@ impl DisplayMap {
                 }
             }
         }
-        let mut row_of = vec![0usize; line_count];
-        let mut visible = Vec::new();
+        let mut rows = Vec::new();
+        let mut row0 = vec![0usize; line_count];
         for line in 0..line_count {
             if hidden[line] {
-                row_of[line] = visible.len().saturating_sub(1);
+                row0[line] = rows.len().saturating_sub(1);
+                continue;
+            }
+            row0[line] = rows.len();
+            let len = char_lens.get(line).copied().unwrap_or(0);
+            if wrap_cols == 0 || len <= wrap_cols {
+                rows.push(Row { line, start: 0, end: len, first: true });
             } else {
-                row_of[line] = visible.len();
-                visible.push(line);
+                let mut s = 0;
+                let mut first = true;
+                while s < len {
+                    let e = (s + wrap_cols).min(len);
+                    rows.push(Row { line, start: s, end: e, first });
+                    s = e;
+                    first = false;
+                }
             }
         }
-        DisplayMap { row_of, visible, hidden }
+        DisplayMap { rows, row0, hidden }
     }
 
-    /// Number of display rows (visible lines).
     pub(crate) fn rows(&self) -> usize {
-        self.visible.len()
+        self.rows.len()
     }
 
-    /// Whether `line` is collapsed inside a fold.
     pub(crate) fn is_hidden(&self, line: usize) -> bool {
         self.hidden.get(line).copied().unwrap_or(false)
     }
 
     /// The buffer line shown at display `row` (clamped).
     pub(crate) fn line_at_row(&self, row: usize) -> usize {
-        let row = row.min(self.visible.len().saturating_sub(1));
-        self.visible.get(row).copied().unwrap_or(0)
+        let row = row.min(self.rows.len().saturating_sub(1));
+        self.rows.get(row).map(|r| r.line).unwrap_or(0)
+    }
+
+    /// The visual row at `row` (clamped).
+    pub(crate) fn row_at(&self, row: usize) -> Row {
+        let row = row.min(self.rows.len().saturating_sub(1));
+        self.rows.get(row).copied().unwrap_or(Row { line: 0, start: 0, end: 0, first: true })
+    }
+
+    /// Place `(line, col)` → `(display_row, x_col_within_row)`.
+    pub(crate) fn place(&self, line: usize, col: usize) -> (usize, usize) {
+        let mut i = self.row0.get(line).copied().unwrap_or(0);
+        while i + 1 < self.rows.len()
+            && self.rows[i + 1].line == line
+            && self.rows[i].end <= col
+        {
+            i += 1;
+        }
+        let start = self.rows.get(i).map(|r| r.start).unwrap_or(0);
+        (i, col.saturating_sub(start))
     }
 }
 
@@ -96,34 +136,42 @@ impl DisplayMap {
 mod tests {
     use super::*;
 
-    fn folds(heads: &[usize]) -> BTreeSet<usize> {
-        heads.iter().copied().collect()
+    fn folds(h: &[usize]) -> BTreeSet<usize> {
+        h.iter().copied().collect()
     }
 
     #[test]
     fn foldable_finds_indented_blocks() {
-        let src = "fn a() {\n    x;\n    y;\n}\ntop\n";
-        let r = foldable(src);
-        assert!(r.contains(&(0, 2)), "fn body folds lines 1..=2, got {r:?}");
+        let r = foldable("fn a() {\n    x;\n    y;\n}\ntop\n");
+        assert!(r.contains(&(0, 2)));
     }
 
     #[test]
-    fn display_map_collapses_folded_lines() {
-        // 5 lines; fold head 0 covers 1..=2.
-        let regions = vec![(0usize, 2usize)];
-        let m = DisplayMap::new(5, &folds(&[0]), &regions);
-        assert_eq!(m.rows(), 3, "lines 1,2 hidden → 3 visible rows");
+    fn folding_hides_lines() {
+        let m = DisplayMap::new(5, &folds(&[0]), &[(0, 2)], &[8, 6, 6, 1, 0], 0);
+        assert_eq!(m.rows(), 3);
         assert!(m.is_hidden(1) && m.is_hidden(2));
-        assert!(!m.is_hidden(0) && !m.is_hidden(3));
-        // Rows: 0->line0, 1->line3, 2->line4.
         assert_eq!(m.line_at_row(1), 3);
-        assert_eq!(m.row_of[3], 1);
     }
 
     #[test]
-    fn unfolded_map_is_identity() {
-        let m = DisplayMap::new(4, &folds(&[]), &[(0, 1)]);
-        assert_eq!(m.rows(), 4);
-        assert_eq!(m.row_of, vec![0, 1, 2, 3]);
+    fn wrapping_splits_a_long_line() {
+        // One 25-char line, wrap at 10 → 3 rows.
+        let m = DisplayMap::new(1, &folds(&[]), &[], &[25], 10);
+        assert_eq!(m.rows(), 3);
+        assert_eq!(m.row_at(0), Row { line: 0, start: 0, end: 10, first: true });
+        assert_eq!(m.row_at(1), Row { line: 0, start: 10, end: 20, first: false });
+        assert_eq!(m.row_at(2), Row { line: 0, start: 20, end: 25, first: false });
+        // col 14 lands on row 1, x-col 4.
+        assert_eq!(m.place(0, 14), (1, 4));
+        assert_eq!(m.place(0, 0), (0, 0));
+        assert_eq!(m.place(0, 25), (2, 5));
+    }
+
+    #[test]
+    fn no_wrap_is_one_row_per_line() {
+        let m = DisplayMap::new(3, &folds(&[]), &[], &[4, 4, 4], 0);
+        assert_eq!(m.rows(), 3);
+        assert_eq!(m.place(2, 3), (2, 3));
     }
 }

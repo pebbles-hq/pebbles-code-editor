@@ -146,17 +146,33 @@ impl Gpu {
     }
 }
 
+/// Mirror the shell's post-layout step so `use_bounds()` works headlessly (needed for soft
+/// wrap, which measures the content width). Without this, bounds stay `Rect::ZERO`.
+fn publish_bounds(ui: &Ui) {
+    let tree = ui.render_tree();
+    for (w, src) in pebbles::core::bounds::wanted_bounds() {
+        if let Some(rid) = tree.find_by_source(src) {
+            let o = tree.absolute_offset(rid);
+            let s = tree.size_of(rid);
+            pebbles::core::bounds::publish_bounds(
+                w,
+                src,
+                Rect::new(o.x, o.y, o.x + s.width, o.y + s.height),
+            );
+        }
+    }
+}
+
 fn scene_for(ui: &mut Ui, env: &mut TextEnv, w: u32, h: u32) -> Scene {
     let size = Size::new(f64::from(w), f64::from(h));
     ui.make_current();
     let mut scene = Scene::new();
-    for _ in 0..4 {
+    for _ in 0..6 {
         ui.rebuild_if_dirty();
         ui.layout(env, size);
         scene = Scene::new();
-        if !ui.paint(env, &mut scene) {
-            break;
-        }
+        ui.paint(env, &mut scene);
+        publish_bounds(ui);
     }
     scene
 }

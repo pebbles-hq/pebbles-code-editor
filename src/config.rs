@@ -58,6 +58,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         initial_scroll: 0.0,
         selection_handles: false,
         folds: None,
+        soft_wrap: false,
     }
 }
 
@@ -102,6 +103,7 @@ pub struct CodeEditor {
     initial_scroll: f64,
     selection_handles: bool,
     folds: Option<Signal<std::collections::BTreeSet<usize>>>,
+    soft_wrap: bool,
 }
 
 /// Fired after each change with the minimal [`Edit`] delta; `remote` is true when the change
@@ -327,6 +329,13 @@ impl CodeEditor {
         self.folds = Some(folds);
         self
     }
+    /// Soft-wrap long lines to the viewport width instead of scrolling horizontally (needs a
+    /// fixed [`height`](Self::height)). Default off. Caret, click, and selection all follow the
+    /// wrapped rows.
+    pub fn soft_wrap(mut self, on: bool) -> Self {
+        self.soft_wrap = on;
+        self
+    }
 }
 
 impl IntoWidget for CodeEditor {
@@ -379,6 +388,7 @@ pub(crate) struct Props {
     pub(crate) initial_scroll: f64,
     pub(crate) selection_handles: bool,
     pub(crate) folds: Option<Signal<std::collections::BTreeSet<usize>>>,
+    pub(crate) soft_wrap: bool,
 }
 
 impl From<CodeEditor> for Props {
@@ -457,6 +467,7 @@ impl From<CodeEditor> for Props {
             initial_scroll: e.initial_scroll,
             selection_handles: e.selection_handles,
             folds: e.folds,
+            soft_wrap: e.soft_wrap,
         }
     }
 }

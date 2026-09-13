@@ -238,7 +238,12 @@ pub(crate) fn apply_key(
                         .chars()
                         .take_while(|ch| *ch == ' ' || *ch == '\t')
                         .collect();
-                    if cur.trim_end().ends_with(['{', '(', '[', ':']) {
+                    // Language-aware: add a level after any of the language's opening brackets
+                    // (or a `:`, for Python-style block headers).
+                    let opens_block = cur.trim_end().chars().next_back().is_some_and(|c| {
+                        c == ':' || cfg.brackets.iter().any(|&(o, _)| o == c)
+                    });
+                    if opens_block {
                         indent.push_str(tab);
                     }
                     (r.min(), r.max(), format!("\n{indent}"))
