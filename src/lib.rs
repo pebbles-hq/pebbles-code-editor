@@ -295,6 +295,11 @@ fn render_editor(p: &Props) -> AnyWidget {
     let blink_stamp = create_signal(0.0_f64); // loop time of the last edit/move — caret solid then
     let drag_anchor = create_signal::<Option<Offset>>(None); // pointer-down pos for column select
     let scroll_top = create_signal(0.0_f64); // live vertical scroll offset (drives virtualization)
+    // Tokenization cache: (source, tokens). Re-tokenizes only when the text changes, so
+    // scrolling (which re-renders the window) never re-parses the document.
+    #[allow(clippy::type_complexity)]
+    let token_cache: Signal<Rc<RefCell<(String, Rc<Vec<Token>>)>>> =
+        create_signal(Rc::new(RefCell::new((String::new(), Rc::new(Vec::new())))));
     // Imperative scroll handles — drive caret-into-view autoscroll (only used when a fixed
     // `height` makes the editor a scroll viewport). Held in signals so they survive renders.
     let scroll = create_signal(ScrollHandle::new()).peek(); // vertical
@@ -544,13 +549,22 @@ fn render_editor(p: &Props) -> AnyWidget {
     }
 
     // highlighted text — only the visible block, as one rich-text positioned at the first
-    // visible line. Tokens are computed for the whole doc (for correct multi-line context)
-    // then sliced to the window, so we never lay out or paint offscreen text.
-    let tokens = p
-        .language
-        .as_ref()
-        .map(|l| l.highlight(&src))
-        .unwrap_or_default();
+    // visible line. Tokens are computed (and cached) for the whole doc so multi-line context
+    // is correct, then sliced to the window, so we never lay out or paint offscreen text.
+    let tokens: Rc<Vec<Token>> = {
+        let cell = token_cache.peek();
+        let mut c = cell.borrow_mut();
+        if c.0 != src {
+            let toks = Rc::new(
+                p.language
+                    .as_ref()
+                    .map(|l| l.highlight(&src))
+                    .unwrap_or_default(),
+            );
+            *c = (src.clone(), toks);
+        }
+        c.1.clone()
+    };
     let slice_start = line_start_of(&src, first_line);
     let slice_end = line_end(&src, line_start_of(&src, last_line));
     let visible_src = &src[slice_start..slice_end];

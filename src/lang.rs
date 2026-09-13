@@ -666,6 +666,140 @@ grammar!(
     hash = false
 );
 
+grammar!(
+    cpp,
+    "C++",
+    kw = [
+        "auto", "break", "case", "catch", "class", "const", "constexpr", "continue", "decltype",
+        "default", "delete", "do", "else", "enum", "explicit", "export", "extern", "for", "friend",
+        "goto", "if", "inline", "mutable", "namespace", "new", "noexcept", "operator", "override",
+        "private", "protected", "public", "return", "sizeof", "static", "struct", "switch",
+        "template", "this", "throw", "try", "typedef", "typename", "union", "using", "virtual",
+        "volatile", "while", "concept", "requires", "co_await", "co_return", "co_yield"
+    ],
+    ty = [
+        "int", "long", "short", "char", "bool", "float", "double", "void", "unsigned", "signed",
+        "size_t", "wchar_t", "string", "vector", "map", "set", "auto"
+    ],
+    c = ["true", "false", "nullptr", "NULL"],
+    hash = false
+);
+
+grammar!(
+    csharp,
+    "C#",
+    kw = [
+        "using", "namespace", "class", "struct", "interface", "enum", "record", "public",
+        "private", "protected", "internal", "static", "readonly", "const", "abstract", "sealed",
+        "virtual", "override", "new", "return", "if", "else", "for", "foreach", "while", "do",
+        "switch", "case", "break", "continue", "try", "catch", "finally", "throw", "async",
+        "await", "yield", "var", "get", "set", "in", "out", "ref", "params", "is", "as", "this",
+        "base", "typeof", "nameof"
+    ],
+    ty = [
+        "int", "long", "short", "byte", "char", "bool", "float", "double", "decimal", "string",
+        "object", "void", "var", "dynamic"
+    ],
+    c = ["true", "false", "null"],
+    hash = false
+);
+
+grammar!(
+    kotlin,
+    "Kotlin",
+    kw = [
+        "fun", "val", "var", "class", "object", "interface", "data", "sealed", "enum", "return",
+        "if", "else", "for", "while", "do", "when", "break", "continue", "try", "catch", "finally",
+        "throw", "import", "package", "public", "private", "protected", "internal", "open",
+        "override", "abstract", "companion", "init", "constructor", "suspend", "in", "is", "as",
+        "by", "lateinit", "vararg", "typealias"
+    ],
+    ty = [
+        "Int", "Long", "Short", "Byte", "Char", "Boolean", "Float", "Double", "String", "Any",
+        "Unit", "List", "Map", "Set", "Array"
+    ],
+    c = ["true", "false", "null", "this", "super"],
+    hash = false
+);
+
+grammar!(
+    swift,
+    "Swift",
+    kw = [
+        "func", "let", "var", "class", "struct", "enum", "protocol", "extension", "return", "if",
+        "else", "for", "in", "while", "repeat", "switch", "case", "default", "break", "continue",
+        "guard", "defer", "do", "try", "catch", "throw", "throws", "rethrows", "import", "public",
+        "private", "internal", "fileprivate", "open", "static", "final", "override", "init",
+        "deinit", "self", "super", "some", "any", "where", "as", "is", "async", "await", "actor"
+    ],
+    ty = [
+        "Int", "Double", "Float", "Bool", "String", "Character", "Array", "Dictionary", "Set",
+        "Optional", "Any", "Void"
+    ],
+    c = ["true", "false", "nil"],
+    hash = false
+);
+
+grammar!(
+    php,
+    "PHP",
+    kw = [
+        "function", "class", "interface", "trait", "extends", "implements", "public", "private",
+        "protected", "static", "const", "abstract", "final", "return", "if", "else", "elseif",
+        "for", "foreach", "while", "do", "switch", "case", "break", "continue", "try", "catch",
+        "finally", "throw", "new", "use", "namespace", "echo", "print", "as", "instanceof",
+        "global", "isset", "unset", "list", "array", "fn", "match", "yield"
+    ],
+    ty = ["int", "float", "string", "bool", "array", "object", "void", "mixed", "callable"],
+    c = ["true", "false", "null", "this"],
+    hash = false
+);
+
+grammar!(
+    ruby,
+    "Ruby",
+    kw = [
+        "def", "class", "module", "return", "if", "elsif", "else", "unless", "case", "when",
+        "while", "until", "for", "in", "do", "begin", "rescue", "ensure", "raise", "yield", "then",
+        "end", "require", "require_relative", "attr_accessor", "attr_reader", "attr_writer", "new",
+        "lambda", "proc", "next", "break", "redo", "retry", "and", "or", "not"
+    ],
+    ty = [],
+    c = ["true", "false", "nil", "self", "__FILE__", "__LINE__"],
+    hash = true
+);
+
+grammar!(
+    bash,
+    "Shell",
+    kw = [
+        "if", "then", "else", "elif", "fi", "for", "in", "do", "done", "while", "until", "case",
+        "esac", "function", "return", "break", "continue", "local", "export", "readonly", "declare",
+        "echo", "cd", "exit", "source", "alias", "unset", "set", "trap", "shift"
+    ],
+    ty = [],
+    c = ["true", "false"],
+    hash = true
+);
+
+grammar!(
+    yaml,
+    "YAML",
+    kw = ["true", "false", "null", "yes", "no", "on", "off"],
+    ty = [],
+    c = ["true", "false", "null", "yes", "no"],
+    hash = true
+);
+
+grammar!(
+    toml,
+    "TOML",
+    kw = [],
+    ty = [],
+    c = ["true", "false"],
+    hash = true
+);
+
 // ---------------------------------------------------------------------------
 // Python
 // ---------------------------------------------------------------------------
@@ -866,5 +1000,39 @@ impl Language for Json {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_grammars_highlight_keywords() {
+        // Each new grammar tags at least one keyword/comment run.
+        assert!(cpp().highlight("class Foo {};").iter().any(|t| t.kind == TokenKind::Keyword));
+        assert!(csharp().highlight("public class A {}").iter().any(|t| t.kind == TokenKind::Keyword));
+        assert!(kotlin().highlight("fun main() {}").iter().any(|t| t.kind == TokenKind::Keyword));
+        assert!(swift().highlight("func f() {}").iter().any(|t| t.kind == TokenKind::Keyword));
+        assert!(ruby().highlight("# note\ndef m; end").iter().any(|t| t.kind == TokenKind::Comment));
+        assert!(bash().highlight("# c\nif x; then :; fi").iter().any(|t| t.kind == TokenKind::Comment));
+    }
+
+    #[test]
+    fn grammars_are_panic_free_on_garbage() {
+        // An editor is full of half-typed / invalid source — scanners must never panic.
+        for g in [cpp(), csharp(), kotlin(), swift(), php(), ruby(), bash(), yaml(), toml()] {
+            let _ = g.highlight("\"unterminated /* nested ' `\u{1F600}\n\t weird");
+            let _ = g.highlight("");
+        }
+    }
+
+    #[test]
+    fn line_comment_metadata() {
+        assert_eq!(Rust.line_comment(), Some("//"));
+        assert_eq!(Python.line_comment(), Some("#"));
+        assert_eq!(cpp().line_comment(), Some("//"));
+        assert_eq!(bash().line_comment(), Some("#"));
+        assert_eq!(Json.line_comment(), None);
     }
 }
