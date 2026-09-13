@@ -59,6 +59,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         selection_handles: false,
         folds: None,
         soft_wrap: false,
+        diff_base: None,
     }
 }
 
@@ -104,6 +105,7 @@ pub struct CodeEditor {
     selection_handles: bool,
     folds: Option<Signal<std::collections::BTreeSet<usize>>>,
     soft_wrap: bool,
+    diff_base: Option<Signal<String>>,
 }
 
 /// Fired after each change with the minimal [`Edit`] delta; `remote` is true when the change
@@ -336,6 +338,13 @@ impl CodeEditor {
         self.soft_wrap = on;
         self
     }
+    /// Show an inline diff against `base` (a reactive signal): added lines get a green band + a
+    /// `+` gutter mark, and a red `−` marks where lines were removed. Recomputes as either the
+    /// buffer or the base changes.
+    pub fn diff_base(mut self, base: Signal<String>) -> Self {
+        self.diff_base = Some(base);
+        self
+    }
 }
 
 impl IntoWidget for CodeEditor {
@@ -389,6 +398,7 @@ pub(crate) struct Props {
     pub(crate) selection_handles: bool,
     pub(crate) folds: Option<Signal<std::collections::BTreeSet<usize>>>,
     pub(crate) soft_wrap: bool,
+    pub(crate) diff_base: Option<Signal<String>>,
 }
 
 impl From<CodeEditor> for Props {
@@ -468,6 +478,7 @@ impl From<CodeEditor> for Props {
             selection_handles: e.selection_handles,
             folds: e.folds,
             soft_wrap: e.soft_wrap,
+            diff_base: e.diff_base,
         }
     }
 }

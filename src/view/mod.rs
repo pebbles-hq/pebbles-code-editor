@@ -75,6 +75,8 @@ pub(crate) struct Frame<'a> {
     pub(crate) disp: &'a crate::fold::DisplayMap,
     pub(crate) fold_regions: &'a [(usize, usize)],
     pub(crate) folds: Signal<std::collections::BTreeSet<usize>>,
+    /// Inline diff against the base text (added lines / removed markers), if configured.
+    pub(crate) diff: Option<&'a crate::diff::LineDiff>,
 }
 
 impl Frame<'_> {
@@ -559,6 +561,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let cc = col_of(&src, pcc);
     let line_count = src.split('\n').count().max(1);
     let char_lens: Vec<usize> = src.split('\n').map(|l| l.chars().count()).collect();
+    // Inline diff against the base (added lines + removed markers), recomputed reactively.
+    let line_diff = p.diff_base.map(|base| crate::diff::diff_lines(&base.get(), &src));
 
     // ---- folding + soft wrap: buffer-line ↔ visual-row map ----
     // The whole view renders in VISUAL-ROW space (folded lines collapse, wrapped lines split).
@@ -783,6 +787,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         disp: disp.as_ref(),
         fold_regions: fold_regions.as_slice(),
         folds,
+        diff: line_diff.as_ref(),
     };
 
     // Overlay layers on the monospace grid (current-line, rulers, guides, selection, bracket

@@ -74,6 +74,7 @@ pub fn pane(ws: Workspace, s: Settings, height: f64) -> AnyWidget {
         .initial_scroll(scroll.peek())
         .on_scroll(move |px| scroll.set(px))
         .folds(f.folds)
+        .diff_base(f.saved) // inline diff of unsaved edits (git-gutter style)
         .theme(if s.light.get() { EditorTheme::light() } else { EditorTheme::dark() })
         .height(height.max(120.0))
         .font_size(s.font_size.get())

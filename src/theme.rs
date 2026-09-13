@@ -176,6 +176,9 @@ pub struct EditorTheme {
     pub diag_warning: Color,
     pub diag_info: Color,
     pub diag_hint: Color,
+    /// Inline-diff line band (added) + removed-line marker.
+    pub diff_added: Color,
+    pub diff_removed: Color,
     /// The syntax palette (swappable independently of the chrome above).
     pub syntax: HighlightStyle,
 }
@@ -222,6 +225,8 @@ impl EditorTheme {
             diag_warning: c(0xE6, 0xB4, 0x73),
             diag_info: c(0x76, 0xB2, 0xF0),
             diag_hint: c(0x5D, 0x67, 0x7A),
+            diff_added: a(0x6C, 0xD1, 0x8A, 0x22),
+            diff_removed: a(0xE9, 0x6A, 0x6A, 0xC0),
             syntax: HighlightStyle::dark(),
         }
     }
@@ -257,6 +262,8 @@ impl EditorTheme {
             diag_warning: c(0xB0, 0x6A, 0x14),
             diag_info: c(0x24, 0x5F, 0xC2),
             diag_hint: c(0x9A, 0xA1, 0xAD),
+            diff_added: a(0x3E, 0x8A, 0x3E, 0x1F),
+            diff_removed: a(0xC0, 0x3A, 0x4B, 0xB0),
             syntax: HighlightStyle::light(),
         }
     }

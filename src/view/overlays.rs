@@ -16,6 +16,7 @@ use crate::view::chrome::{band, with_alpha};
 /// Build every overlay layer for the current frame, bottom to top.
 pub(crate) fn build(f: &Frame) -> Vec<AnyWidget> {
     let mut layers: Vec<AnyWidget> = Vec::new();
+    diff_bands(f, &mut layers);
     current_line(f, &mut layers);
     rulers(f, &mut layers);
     indent_guides(f, &mut layers);
@@ -37,6 +38,29 @@ pub(crate) fn severity_color(theme: &EditorTheme, sev: Severity) -> Color {
         Severity::Warning => theme.diag_warning,
         Severity::Info => theme.diag_info,
         Severity::Hint => theme.diag_hint,
+    }
+}
+
+/// Inline-diff bands: a green full-width band on each added line's rows, and a red 2px marker
+/// at the top of a line where base lines were deleted.
+fn diff_bands(f: &Frame, layers: &mut Vec<AnyWidget>) {
+    let Some(d) = f.diff else { return };
+    for line in f.first_line..=f.last_line {
+        if f.disp.is_hidden(line) {
+            continue;
+        }
+        if d.added.get(line).copied().unwrap_or(false) {
+            for (row, _) in f.segments(line) {
+                layers.push(band(f.row_y(row), f.line_px, f.theme.diff_added));
+            }
+        }
+        if d.removed_before.contains(&line) {
+            layers.push(band(f.y_of(line), 2.0, f.theme.diff_removed));
+        }
+    }
+    if d.removed_at_end && f.line_visible(f.line_count.saturating_sub(1)) {
+        let last = f.line_count.saturating_sub(1);
+        layers.push(band(f.y_of(last) + f.line_px - 2.0, 2.0, f.theme.diff_removed));
     }
 }
 

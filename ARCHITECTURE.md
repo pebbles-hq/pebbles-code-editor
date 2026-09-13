@@ -54,6 +54,10 @@ src/
                  visual-row mapping the whole view renders through. A folded line contributes
                  zero rows; a wrapped line contributes several. Pure, no widgets.
 
+  # ── inline diff (public API) ───────────────────────────────────────────
+  diff.rs        LCS line-diff against a base text → added lines + removed-line markers, for
+                 the `.diff_base()` git-gutter overlay. Pure, no widgets.
+
   # ── collaboration (public API) ─────────────────────────────────────────
   collab.rs      The `Edit` delta type + pure `diff(old,new)` / `map_pos` — the OT/CRDT-ready
                  change stream (`.on_edit`) and remote-caret remapping. No widgets, no I/O.

@@ -1241,3 +1241,26 @@ fn extension_edit_filter_transforms_typing() {
     }
     assert_eq!(code.get(), "ABC", "the edit filter upper-cased typed text");
 }
+
+#[test]
+fn diff_view_bands_added_lines() {
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from("a\nb\nc"));
+    let base = create_root_signal(String::from("a\nc")); // "b" is an addition vs base
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(
+        View::new(white(), code_editor(code).diff_base(base).autofocus()).into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    let with_diff = ui.element_count();
+    // Remove the diff by making base == code: the added-line band disappears.
+    base.set(String::from("a\nb\nc"));
+    ui.rebuild_if_dirty();
+    ui.layout(&mut env, Size::new(600.0, 400.0));
+    assert!(with_diff > ui.element_count(), "the added-line band rendered for the diff");
+}

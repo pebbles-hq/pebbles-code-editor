@@ -220,6 +220,14 @@ pub fn shot(
             "palette" => {
                 dispatch(&mut ui, &mut env, KeyInput::CommandPalette);
             }
+            // Type a fresh line so the inline diff (vs last-saved) shows a green added band.
+            "diff" => {
+                dispatch(&mut ui, &mut env, KeyInput::Move { motion: Motion::DocEnd, extend: false });
+                dispatch(&mut ui, &mut env, KeyInput::Enter);
+                for ch in "let added = true;".chars() {
+                    dispatch(&mut ui, &mut env, KeyInput::Insert(ch.to_string()));
+                }
+            }
             // An exhaustive interaction soak: TAP the activity bar / explorer rows / tabs /
             // menus, drive find/replace/palette, type, double/right-click, scroll and hover —
             // to surface any crash and confirm the live-signal count stays bounded.
