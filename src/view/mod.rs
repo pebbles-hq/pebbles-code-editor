@@ -103,7 +103,9 @@ impl Frame<'_> {
             if r.line != line {
                 break;
             }
-            out.push((i, r));
+            if !r.gap {
+                out.push((i, r));
+            }
             i += 1;
         }
         out
@@ -579,6 +581,24 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     } else {
         0
     };
+    // Extension block widgets (full-width widgets on reserved rows below a line). Collect them
+    // and the per-line gap-row counts BEFORE the map so it can reserve the space.
+    let block_snap = Snapshot {
+        text: &src,
+        caret: primary.head,
+        selection: (primary.min(), primary.max()),
+    };
+    let block_widgets: Vec<crate::extensions::BlockWidget> = p
+        .extensions
+        .iter()
+        .filter_map(|e| e.block.as_ref())
+        .flat_map(|f| f(&block_snap))
+        .filter(|b| b.line < line_count)
+        .collect();
+    let mut block_gaps = vec![0usize; line_count];
+    for b in &block_widgets {
+        block_gaps[b.line] += (b.height / line_px).ceil().max(1.0) as usize;
+    }
     let fold_regions: std::rc::Rc<Vec<(usize, usize)>> = std::rc::Rc::new(crate::fold::foldable(&src));
     let disp = std::rc::Rc::new(crate::fold::DisplayMap::new(
         line_count,
@@ -586,6 +606,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         &fold_regions,
         &char_lens,
         wrap_cols,
+        &block_gaps,
     ));
     let display_rows = disp.rows();
     let content_h = display_rows as f64 * line_px + pad_t * 2.0;
@@ -621,7 +642,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         }
         let clens: Vec<usize> = text.split('\n').map(|l| l.chars().count()).collect();
         let regions = crate::fold::foldable(text);
-        let map = crate::fold::DisplayMap::new(nlines, &fset, &regions, &clens, wrap_cols);
+        let map = crate::fold::DisplayMap::new(nlines, &fset, &regions, &clens, wrap_cols, &[]);
         let r = map.row_at(row);
         let col = (r.start + xcol).min(clens.get(r.line).copied().unwrap_or(0));
         byte_at(text, r.line, col)
@@ -664,6 +685,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     &regions,
                     &clens,
                     wc,
+                    &[],
                 );
                 map.place(line, col).0
             };
@@ -809,6 +831,24 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let mut layers = overlays::build(&frame);
     if !ext_decos.is_empty() {
         layers.extend(extensions::decoration_layers(&frame, &ext_decos));
+    }
+    // Extension block widgets: render each on its reserved gap rows below the line.
+    if !block_widgets.is_empty() {
+        let mut used: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
+        for bw in block_widgets {
+            if let Some(grow) = disp.gap_row_of(bw.line) {
+                let off = used.entry(bw.line).or_insert(0.0);
+                let y = frame.row_y(grow) + *off;
+                *off += bw.height;
+                layers.push(
+                    Positioned::new(container().height(bw.height).child(bw.widget))
+                        .left(pad_l)
+                        .right(0.0)
+                        .top(y)
+                        .into_widget(),
+                );
+            }
+        }
     }
     if !search_matches.is_empty() {
         let cur = find.idx.peek().min(search_matches.len() - 1);

@@ -4,7 +4,7 @@
 
 use pebbles::prelude::*;
 use pebbles_code_editor::{
-    Command, Decoration, EditorTheme, Extension, GutterMark, code_editor, extension,
+    BlockWidget, Command, Decoration, EditorTheme, Extension, GutterMark, code_editor, extension,
 };
 
 use super::providers;
@@ -47,7 +47,28 @@ fn sample_extensions() -> Vec<Extension> {
         t.syntax.string = t.syntax.string.bold();
         t
     });
-    vec![highlight, bookmarks, commands, theming]
+    // A block widget: an inline note panel rendered on its own row under each TODO line.
+    let notes = extension("todo-notes").block_widgets(|snap| {
+        snap.text
+            .match_indices("TODO")
+            .map(|(i, _)| {
+                let line = snap.text[..i].bytes().filter(|&b| b == b'\n').count();
+                let panel = container()
+                    .height(24.0)
+                    .decoration(BoxDecoration::new().color(Color::from_rgba8(255, 190, 60, 30)))
+                    .padding(EdgeInsets::symmetric(12.0, 3.0))
+                    .alignment(Alignment::CENTER_LEFT)
+                    .child(
+                        text("↳ track this TODO in the issue tracker")
+                            .size(12.0)
+                            .color(Color::from_rgba8(255, 190, 60, 255)),
+                    )
+                    .into_widget();
+                BlockWidget { line, height: 24.0, widget: panel }
+            })
+            .collect()
+    });
+    vec![highlight, bookmarks, commands, theming, notes]
 }
 
 /// The editor pane for the active file (or a welcome screen). `height` is the pane's height so

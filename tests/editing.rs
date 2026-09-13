@@ -1264,3 +1264,36 @@ fn diff_view_bands_added_lines() {
     ui.layout(&mut env, Size::new(600.0, 400.0));
     assert!(with_diff > ui.element_count(), "the added-line band rendered for the diff");
 }
+
+#[test]
+fn block_widget_reserves_a_row() {
+    use pebbles_code_editor::{BlockWidget, extension};
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from("a\nb\nc"));
+    let ext = extension("panel").block_widgets(|_snap| {
+        vec![BlockWidget {
+            line: 0,
+            height: 24.0,
+            widget: pebbles::prelude::text("note".to_string()).into_widget(),
+        }]
+    });
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    let before = {
+        ui.mount_root(View::new(white(), code_editor(code).autofocus()).into_widget());
+        for _ in 0..3 {
+            ui.rebuild_if_dirty();
+            ui.layout(&mut env, Size::new(600.0, 400.0));
+        }
+        ui.element_count()
+    };
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(View::new(white(), code_editor(code).extension(ext).autofocus()).into_widget());
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    assert!(ui.element_count() > before, "the block widget rendered on its reserved row");
+}

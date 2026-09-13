@@ -12,7 +12,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use pebbles::prelude::{Color, Signal};
+use pebbles::prelude::{AnyWidget, Color, Signal};
 
 use crate::commands::dispatch;
 use crate::edit::{ChangeSet, Coalesce, EditorState, History, Selection, Selections, Transaction};
@@ -86,6 +86,14 @@ impl Decoration {
 pub struct GutterMark {
     pub line: usize,
     pub color: Color,
+}
+
+/// A block widget: a full-width `widget` rendered on its own row(s) directly below `line`,
+/// reserving `height` logical px of vertical space (inline error panels, images, blame, …).
+pub struct BlockWidget {
+    pub line: usize,
+    pub height: f64,
+    pub widget: AnyWidget,
 }
 
 /// A mergeable configuration facet an extension can contribute. Each `Some` field overrides
@@ -186,6 +194,7 @@ impl Command {
 
 type DecoFn = Rc<dyn Fn(&Snapshot) -> Vec<Decoration>>;
 type GutterFn = Rc<dyn Fn(&Snapshot) -> Vec<GutterMark>>;
+type BlockFn = Rc<dyn Fn(&Snapshot) -> Vec<BlockWidget>>;
 type RangeFn = Rc<dyn Fn(&Snapshot) -> Vec<(usize, usize)>>;
 type HookFn = Rc<dyn Fn(&Snapshot)>;
 type FocusFn = Rc<dyn Fn(bool)>;
@@ -212,6 +221,7 @@ pub struct Extension {
     pub(crate) name: String,
     pub(crate) decorations: Option<DecoFn>,
     pub(crate) gutter: Option<GutterFn>,
+    pub(crate) block: Option<BlockFn>,
     pub(crate) read_only: Option<RangeFn>,
     pub(crate) commands: Vec<Command>,
     pub(crate) keys: Vec<KeyBinding>,
@@ -255,6 +265,12 @@ impl Extension {
     /// Contribute gutter markers, recomputed from the current [`Snapshot`] each render.
     pub fn gutter_markers(mut self, f: impl Fn(&Snapshot) -> Vec<GutterMark> + 'static) -> Self {
         self.gutter = Some(Rc::new(f));
+        self
+    }
+    /// Contribute [`BlockWidget`]s — full-width widgets rendered on reserved rows below a line
+    /// (inline panels, images, blame). Recomputed from the current [`Snapshot`] each render.
+    pub fn block_widgets(mut self, f: impl Fn(&Snapshot) -> Vec<BlockWidget> + 'static) -> Self {
+        self.block = Some(Rc::new(f));
         self
     }
     /// Declare read-only byte ranges — edits overlapping them are vetoed.

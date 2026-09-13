@@ -38,13 +38,15 @@ pub(crate) fn foldable(src: &str) -> Vec<(usize, usize)> {
 }
 
 /// One visual row: a slice `[start, end)` (char columns) of buffer `line`. `first` marks the
-/// line's first row (which shows the line number + fold arrow in the gutter).
+/// line's first row (line number + fold arrow); `gap` marks a blank row reserved below a line
+/// for a block widget (rendered by the view, not text).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Row {
     pub line: usize,
     pub start: usize,
     pub end: usize,
     pub first: bool,
+    pub gap: bool,
 }
 
 /// Buffer-line ↔ visual-row mapping for a fold set + wrap width.
@@ -63,6 +65,7 @@ impl DisplayMap {
         regions: &[(usize, usize)],
         char_lens: &[usize],
         wrap_cols: usize,
+        gaps: &[usize],
     ) -> Self {
         let mut hidden = vec![false; line_count];
         for &(head, last) in regions {
@@ -83,16 +86,20 @@ impl DisplayMap {
             row0[line] = rows.len();
             let len = char_lens.get(line).copied().unwrap_or(0);
             if wrap_cols == 0 || len <= wrap_cols {
-                rows.push(Row { line, start: 0, end: len, first: true });
+                rows.push(Row { line, start: 0, end: len, first: true, gap: false });
             } else {
                 let mut s = 0;
                 let mut first = true;
                 while s < len {
                     let e = (s + wrap_cols).min(len);
-                    rows.push(Row { line, start: s, end: e, first });
+                    rows.push(Row { line, start: s, end: e, first, gap: false });
                     s = e;
                     first = false;
                 }
+            }
+            // Reserve blank rows below the line for a block widget.
+            for _ in 0..gaps.get(line).copied().unwrap_or(0) {
+                rows.push(Row { line, start: 0, end: 0, first: false, gap: true });
             }
         }
         DisplayMap { rows, row0, hidden }
@@ -115,14 +122,32 @@ impl DisplayMap {
     /// The visual row at `row` (clamped).
     pub(crate) fn row_at(&self, row: usize) -> Row {
         let row = row.min(self.rows.len().saturating_sub(1));
-        self.rows.get(row).copied().unwrap_or(Row { line: 0, start: 0, end: 0, first: true })
+        self.rows
+            .get(row)
+            .copied()
+            .unwrap_or(Row { line: 0, start: 0, end: 0, first: true, gap: false })
     }
 
-    /// Place `(line, col)` → `(display_row, x_col_within_row)`.
+    /// The first reserved gap-row index directly below `line`, if any (block-widget anchor).
+    pub(crate) fn gap_row_of(&self, line: usize) -> Option<usize> {
+        let start = self.row0.get(line).copied()?;
+        for (i, r) in self.rows.iter().enumerate().skip(start) {
+            if r.line != line {
+                break;
+            }
+            if r.gap {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Place `(line, col)` → `(display_row, x_col_within_row)` (never on a gap row).
     pub(crate) fn place(&self, line: usize, col: usize) -> (usize, usize) {
         let mut i = self.row0.get(line).copied().unwrap_or(0);
         while i + 1 < self.rows.len()
             && self.rows[i + 1].line == line
+            && !self.rows[i + 1].gap
             && self.rows[i].end <= col
         {
             i += 1;
@@ -148,7 +173,7 @@ mod tests {
 
     #[test]
     fn folding_hides_lines() {
-        let m = DisplayMap::new(5, &folds(&[0]), &[(0, 2)], &[8, 6, 6, 1, 0], 0);
+        let m = DisplayMap::new(5, &folds(&[0]), &[(0, 2)], &[8, 6, 6, 1, 0], 0, &[]);
         assert_eq!(m.rows(), 3);
         assert!(m.is_hidden(1) && m.is_hidden(2));
         assert_eq!(m.line_at_row(1), 3);
@@ -157,11 +182,11 @@ mod tests {
     #[test]
     fn wrapping_splits_a_long_line() {
         // One 25-char line, wrap at 10 → 3 rows.
-        let m = DisplayMap::new(1, &folds(&[]), &[], &[25], 10);
+        let m = DisplayMap::new(1, &folds(&[]), &[], &[25], 10, &[]);
         assert_eq!(m.rows(), 3);
-        assert_eq!(m.row_at(0), Row { line: 0, start: 0, end: 10, first: true });
-        assert_eq!(m.row_at(1), Row { line: 0, start: 10, end: 20, first: false });
-        assert_eq!(m.row_at(2), Row { line: 0, start: 20, end: 25, first: false });
+        assert_eq!(m.row_at(0), Row { line: 0, start: 0, end: 10, first: true, gap: false });
+        assert_eq!(m.row_at(1), Row { line: 0, start: 10, end: 20, first: false, gap: false });
+        assert_eq!(m.row_at(2), Row { line: 0, start: 20, end: 25, first: false, gap: false });
         // col 14 lands on row 1, x-col 4.
         assert_eq!(m.place(0, 14), (1, 4));
         assert_eq!(m.place(0, 0), (0, 0));
@@ -170,7 +195,7 @@ mod tests {
 
     #[test]
     fn no_wrap_is_one_row_per_line() {
-        let m = DisplayMap::new(3, &folds(&[]), &[], &[4, 4, 4], 0);
+        let m = DisplayMap::new(3, &folds(&[]), &[], &[4, 4, 4], 0, &[]);
         assert_eq!(m.rows(), 3);
         assert_eq!(m.place(2, 3), (2, 3));
     }
