@@ -18,15 +18,25 @@ use pebbles::prelude::Signal;
 /// The kind of a completion item — drives the leading glyph/color in the popup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompletionKind {
+    /// A language keyword.
     Keyword,
+    /// A free function.
     Function,
+    /// A method on a type.
     Method,
+    /// A local or variable binding.
     Variable,
+    /// A struct/record field.
     Field,
+    /// A type / class / struct name.
     Type,
+    /// A module / namespace.
     Module,
+    /// A constant value.
     Constant,
+    /// A snippet with tabstops (`${1:…}` / `$0`).
     Snippet,
+    /// Plain text (e.g. a word-in-document suggestion).
     Text,
 }
 
@@ -119,9 +129,13 @@ pub type SignatureProvider = Rc<dyn Fn(&str, usize) -> Option<SignatureHelp>>;
 /// The severity of a [`Diagnostic`] — drives the underline color + gutter marker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Severity {
+    /// An error (red).
     Error,
+    /// A warning (amber).
     Warning,
+    /// Informational (blue).
     Info,
+    /// A subtle hint (muted).
     Hint,
 }
 
@@ -130,7 +144,9 @@ pub enum Severity {
 pub struct Diagnostic {
     /// The flagged byte range.
     pub range: (usize, usize),
+    /// How serious it is (drives the color).
     pub severity: Severity,
+    /// The human-readable message (shown on hover / in the Problems list).
     pub message: String,
 }
 

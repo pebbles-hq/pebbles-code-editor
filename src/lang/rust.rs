@@ -3,7 +3,6 @@
 use super::scan::{Scan, is_ident_continue, is_ident_start};
 use super::{Language, Token, TokenKind};
 
-
 /// A Rust highlighter.
 pub struct Rust;
 
@@ -168,4 +167,3 @@ impl Language for Rust {
         out
     }
 }
-

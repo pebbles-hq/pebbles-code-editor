@@ -3,7 +3,6 @@
 use super::scan::{Scan, is_ident_continue, is_ident_start};
 use super::{Language, Token, TokenKind};
 
-
 /// A JSON highlighter (keys vs. string values, numbers, literals).
 pub struct Json;
 
@@ -74,4 +73,3 @@ impl Language for Json {
         out
     }
 }
-

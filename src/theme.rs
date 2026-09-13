@@ -15,16 +15,25 @@ use crate::lang::TokenKind;
 /// keywords bold, or deprecated identifiers underlined.
 #[derive(Clone, Copy, Debug)]
 pub struct TokenStyle {
+    /// The token's text color.
     pub color: Color,
+    /// Render bold.
     pub bold: bool,
+    /// Render italic.
     pub italic: bool,
+    /// Underline the token.
     pub underline: bool,
 }
 
 impl TokenStyle {
     /// A plain colored token (no weight/slant/underline).
     pub const fn color(color: Color) -> Self {
-        TokenStyle { color, bold: false, italic: false, underline: false }
+        TokenStyle {
+            color,
+            bold: false,
+            italic: false,
+            underline: false,
+        }
     }
     /// Render this token bold.
     pub fn bold(mut self) -> Self {
@@ -47,16 +56,27 @@ impl TokenStyle {
 /// [`EditorTheme`], so an IDE can offer a "syntax theme" picker separate from light/dark.
 #[derive(Clone)]
 pub struct HighlightStyle {
+    /// Language keywords.
     pub keyword: TokenStyle,
+    /// Type / class names.
     pub type_: TokenStyle,
+    /// String and char literals.
     pub string: TokenStyle,
+    /// Numeric literals.
     pub number: TokenStyle,
+    /// Comments.
     pub comment: TokenStyle,
+    /// Function / method names.
     pub function: TokenStyle,
+    /// Macros.
     pub macro_: TokenStyle,
+    /// Attributes / annotations / decorators.
     pub attribute: TokenStyle,
+    /// Constants.
     pub constant: TokenStyle,
+    /// Punctuation and operators.
     pub punctuation: TokenStyle,
+    /// Object/record properties.
     pub property: TokenStyle,
     /// Identifiers / whitespace / unclassified tokens.
     pub plain: TokenStyle,
@@ -90,15 +110,15 @@ impl HighlightStyle {
         let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
         let s = TokenStyle::color;
         HighlightStyle {
-            keyword: s(c(0xC5, 0x92, 0xF0)).bold(), // violet, bold
-            type_: s(c(0x6C, 0xD1, 0xC0)),          // teal
-            string: s(c(0x9E, 0xD8, 0x7A)),         // green
-            number: s(c(0xE6, 0xB4, 0x73)),         // amber
+            keyword: s(c(0xC5, 0x92, 0xF0)).bold(),   // violet, bold
+            type_: s(c(0x6C, 0xD1, 0xC0)),            // teal
+            string: s(c(0x9E, 0xD8, 0x7A)),           // green
+            number: s(c(0xE6, 0xB4, 0x73)),           // amber
             comment: s(c(0x5D, 0x67, 0x7A)).italic(), // muted slate, italic
-            function: s(c(0x76, 0xB2, 0xF0)),       // blue
-            macro_: s(c(0x6C, 0xD1, 0xC0)),         // teal
-            attribute: s(c(0xE6, 0xB4, 0x73)),      // amber
-            constant: s(c(0xE9, 0x8A, 0x8A)),       // soft red
+            function: s(c(0x76, 0xB2, 0xF0)),         // blue
+            macro_: s(c(0x6C, 0xD1, 0xC0)),           // teal
+            attribute: s(c(0xE6, 0xB4, 0x73)),        // amber
+            constant: s(c(0xE9, 0x8A, 0x8A)),         // soft red
             punctuation: s(c(0x9A, 0xA4, 0xB8)),
             property: s(c(0x76, 0xB2, 0xF0)),
             plain: s(c(0xD7, 0xDC, 0xE6)),
@@ -148,6 +168,7 @@ pub struct EditorTheme {
     pub selection_inactive: Color,
     /// Indent-guide vertical lines (and their brighter active variant on the caret's block).
     pub indent_guide: Color,
+    /// The brighter indent guide on the caret's indentation block.
     pub indent_guide_active: Color,
     /// Whitespace/EOL markers (middots, tab arrows, ¶) when rendering is on.
     pub whitespace: Color,
@@ -167,17 +188,23 @@ pub struct EditorTheme {
     pub accent: Color,
     /// Search-match highlight (all matches) and the current match (stronger).
     pub search_match: Color,
+    /// The current search match (stronger highlight).
     pub search_match_current: Color,
     /// Scrollbar thumb (idle) and hovered/active.
     pub scrollbar: Color,
+    /// The scrollbar thumb when hovered/active.
     pub scrollbar_active: Color,
     /// Diagnostic underline + gutter-dot colors by severity.
     pub diag_error: Color,
+    /// Warning diagnostic color.
     pub diag_warning: Color,
+    /// Info diagnostic color.
     pub diag_info: Color,
+    /// Hint diagnostic color.
     pub diag_hint: Color,
-    /// Inline-diff line band (added) + removed-line marker.
+    /// Inline-diff band for an added line.
     pub diff_added: Color,
+    /// Inline-diff marker for a removed line.
     pub diff_removed: Color,
     /// The syntax palette (swappable independently of the chrome above).
     pub syntax: HighlightStyle,
@@ -276,7 +303,10 @@ mod tests {
 
     #[test]
     fn token_style_builders_compose() {
-        let s = TokenStyle::color(Color::from_rgba8(1, 2, 3, 255)).bold().italic().underline();
+        let s = TokenStyle::color(Color::from_rgba8(1, 2, 3, 255))
+            .bold()
+            .italic()
+            .underline();
         assert!(s.bold && s.italic && s.underline);
     }
 
@@ -291,7 +321,10 @@ mod tests {
     #[test]
     fn theme_delegates_to_syntax() {
         let t = EditorTheme::dark();
-        assert_eq!(t.color(TokenKind::Keyword), t.syntax.color(TokenKind::Keyword));
+        assert_eq!(
+            t.color(TokenKind::Keyword),
+            t.syntax.color(TokenKind::Keyword)
+        );
         assert_eq!(t.style(TokenKind::Comment).italic, t.syntax.comment.italic);
     }
 
@@ -301,7 +334,13 @@ mod tests {
         let mut t = EditorTheme::dark();
         let dark_bg = t.background;
         t.syntax = HighlightStyle::light();
-        assert_eq!(t.color(TokenKind::Keyword), HighlightStyle::light().color(TokenKind::Keyword));
-        assert_eq!(t.background, dark_bg, "swapping syntax left the chrome untouched");
+        assert_eq!(
+            t.color(TokenKind::Keyword),
+            HighlightStyle::light().color(TokenKind::Keyword)
+        );
+        assert_eq!(
+            t.background, dark_bg,
+            "swapping syntax left the chrome untouched"
+        );
     }
 }

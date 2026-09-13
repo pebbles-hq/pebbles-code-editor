@@ -25,7 +25,11 @@ fn build(ws: &Workspace) -> (FileExplorer, Rc<HashMap<u64, usize>>) {
                 let id = tree.insert(parent, FsKind::File, *part);
                 id_to_file.insert(id, idx);
             } else {
-                acc = if acc.is_empty() { part.to_string() } else { format!("{acc}/{part}") };
+                acc = if acc.is_empty() {
+                    part.to_string()
+                } else {
+                    format!("{acc}/{part}")
+                };
                 let id = *folders
                     .entry(acc.clone())
                     .or_insert_with(|| tree.insert(parent, FsKind::Folder, *part));
@@ -85,7 +89,9 @@ fn render_explorer(p: &ExplorerProps) -> AnyWidget {
     column(children![
         header,
         expanded(scroll_view(
-            container().padding(EdgeInsets::symmetric(6.0, 0.0)).child(explorer.tree())
+            container()
+                .padding(EdgeInsets::symmetric(6.0, 0.0))
+                .child(explorer.tree())
         )),
     ])
     .cross_axis_alignment(CrossAxisAlignment::Stretch)

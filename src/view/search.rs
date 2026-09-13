@@ -10,7 +10,9 @@ use std::rc::Rc;
 use pebbles::prelude::*;
 
 use crate::commands::dispatch;
-use crate::edit::{Change, ChangeSet, Coalesce, EditorState, History, Selection, Selections, Transaction};
+use crate::edit::{
+    Change, ChangeSet, Coalesce, EditorState, History, Selection, Selections, Transaction,
+};
 use crate::geometry::{col_of, line_of};
 use crate::search::Options;
 use crate::view::Frame;
@@ -41,7 +43,11 @@ impl State {
 
 /// Highlight boxes for every match in the visible window; the current match gets a stronger
 /// fill so it stands out.
-pub(crate) fn match_layers(f: &Frame, matches: &[(usize, usize)], current: usize) -> Vec<AnyWidget> {
+pub(crate) fn match_layers(
+    f: &Frame,
+    matches: &[(usize, usize)],
+    current: usize,
+) -> Vec<AnyWidget> {
     let mut layers = Vec::new();
     let others = f.theme.search_match;
     let cur = f.theme.search_match_current;
@@ -56,10 +62,11 @@ pub(crate) fn match_layers(f: &Frame, matches: &[(usize, usize)], current: usize
             let w = (end_col.saturating_sub(start_col).max(1) as f64 * f.advance).max(2.0);
             layers.push(
                 Positioned::new(
-                    container()
-                        .width(w)
-                        .height(f.line_px)
-                        .decoration(BoxDecoration::new().color(color).radius(BorderRadius::all(2.0))),
+                    container().width(w).height(f.line_px).decoration(
+                        BoxDecoration::new()
+                            .color(color)
+                            .radius(BorderRadius::all(2.0)),
+                    ),
                 )
                 .left(x)
                 .top(f.pad_t + line as f64 * f.line_px)
@@ -83,7 +90,11 @@ pub(crate) fn bar(
     theme: &crate::theme::EditorTheme,
 ) -> AnyWidget {
     let count = matches.len();
-    let cur = if count == 0 { 0 } else { st.idx.peek().min(count - 1) };
+    let cur = if count == 0 {
+        0
+    } else {
+        st.idx.peek().min(count - 1)
+    };
 
     // Move the editor selection to match `i` (autoscroll follows the state change).
     let go = move |ms: &[(usize, usize)], i: usize| {
@@ -119,30 +130,41 @@ pub(crate) fn bar(
     // even when inactive, with a legible label that stays readable on both states.
     let fg = theme.foreground;
     let toggle_chip = move |on: bool, label: &str, sig: Signal<bool>| {
-        toggle(on, text(label.to_string()).size(12.0).weight(600.0).color(fg))
-            .variant(ToggleVariant::Outline)
-            .size(ToggleSize::Sm)
-            .on_changed(move || sig.set(!sig.peek()))
-            .into_widget()
+        toggle(
+            on,
+            text(label.to_string()).size(12.0).weight(600.0).color(fg),
+        )
+        .variant(ToggleVariant::Outline)
+        .size(ToggleSize::Sm)
+        .on_changed(move || sig.set(!sig.peek()))
+        .into_widget()
     };
     let (m_prev, m_next) = (matches.clone(), matches.clone());
     let find_row = row(children![
         expanded(query_field),
         gap_w(8.0),
-        text(format!("{}/{}", if count == 0 { 0 } else { cur + 1 }, count))
-            .size(12.0)
-            .color(theme.gutter_fg),
+        text(format!(
+            "{}/{}",
+            if count == 0 { 0 } else { cur + 1 },
+            count
+        ))
+        .size(12.0)
+        .color(theme.gutter_fg),
         gap_w(6.0),
-        icon_button(IconKind::ChevronUp).size(16.0).on_pressed(move || {
-            if !m_prev.is_empty() {
-                go(&m_prev, (st.idx.peek() + m_prev.len() - 1) % m_prev.len());
-            }
-        }),
-        icon_button(IconKind::ChevronDown).size(16.0).on_pressed(move || {
-            if !m_next.is_empty() {
-                go(&m_next, (st.idx.peek() + 1) % m_next.len());
-            }
-        }),
+        icon_button(IconKind::ChevronUp)
+            .size(16.0)
+            .on_pressed(move || {
+                if !m_prev.is_empty() {
+                    go(&m_prev, (st.idx.peek() + m_prev.len() - 1) % m_prev.len());
+                }
+            }),
+        icon_button(IconKind::ChevronDown)
+            .size(16.0)
+            .on_pressed(move || {
+                if !m_next.is_empty() {
+                    go(&m_next, (st.idx.peek() + 1) % m_next.len());
+                }
+            }),
         gap_w(6.0),
         toggle_chip(st.case.peek(), "Aa", st.case),
         gap_w(4.0),
@@ -171,8 +193,10 @@ pub(crate) fn bar(
         let replace_row = row(children![
             expanded(replace_field),
             gap_w(6.0),
-            button("Replace").size(ButtonSize::Sm).variant(ButtonVariant::Secondary).on_pressed(
-                move || {
+            button("Replace")
+                .size(ButtonSize::Sm)
+                .variant(ButtonVariant::Secondary)
+                .on_pressed(move || {
                     let i = st.idx.peek().min(m_one.len().saturating_sub(1));
                     if let Some(&(a, b)) = m_one.get(i) {
                         let rep = st.replace.peek();
@@ -188,11 +212,12 @@ pub(crate) fn bar(
                         );
                         goal.set(col_of(&state.peek().text(), state.peek().primary().head));
                     }
-                }
-            ),
+                }),
             gap_w(6.0),
-            button("All").size(ButtonSize::Sm).variant(ButtonVariant::Secondary).on_pressed(
-                move || {
+            button("All")
+                .size(ButtonSize::Sm)
+                .variant(ButtonVariant::Secondary)
+                .on_pressed(move || {
                     if m_all.is_empty() {
                         return;
                     }
@@ -212,8 +237,7 @@ pub(crate) fn bar(
                         Transaction::change(ChangeSet::from_changes(changes)),
                         Coalesce::Never,
                     );
-                }
-            ),
+                }),
         ])
         .cross_axis_alignment(CrossAxisAlignment::Center)
         .main_axis_size(MainAxisSize::Min);

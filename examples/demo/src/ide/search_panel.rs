@@ -59,7 +59,10 @@ fn render_search(p: &SearchProps) -> AnyWidget {
                         row(children![
                             icon(lucide::FILE).size(12.0).color(c.muted_foreground),
                             gap_w(6.0),
-                            text(f.path.clone()).size(12.0).weight(600.0).color(c.foreground),
+                            text(f.path.clone())
+                                .size(12.0)
+                                .weight(600.0)
+                                .color(c.foreground),
                         ])
                         .cross_axis_alignment(CrossAxisAlignment::Center),
                     )
@@ -105,7 +108,9 @@ fn render_search(p: &SearchProps) -> AnyWidget {
             .padding(EdgeInsets::symmetric(14.0, 0.0))
             .child(text(summary).size(11.5).color(c.muted_foreground)),
         gap_h(6.0),
-        expanded(scroll_view(column(groups).cross_axis_alignment(CrossAxisAlignment::Stretch))),
+        expanded(scroll_view(
+            column(groups).cross_axis_alignment(CrossAxisAlignment::Stretch)
+        )),
     ])
     .cross_axis_alignment(CrossAxisAlignment::Stretch)
     .into_widget()

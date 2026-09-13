@@ -40,8 +40,11 @@ pub enum TokenKind {
 /// A highlighted run: `[start, start+len)` bytes of the source, tagged `kind`.
 #[derive(Clone, Copy, Debug)]
 pub struct Token {
+    /// Byte offset of the run's start in the source.
     pub start: usize,
+    /// Length of the run in bytes.
     pub len: usize,
+    /// The token's semantic kind (drives its color).
     pub kind: TokenKind,
 }
 
@@ -109,11 +112,11 @@ pub fn bracket_tree(src: &str, brackets: &[(char, char)]) -> SyntaxNode {
         children: Vec::new(),
     };
     let mut stack: Vec<SyntaxNode> = Vec::new();
-    let attach = |stack: &mut Vec<SyntaxNode>, root: &mut SyntaxNode, node: SyntaxNode| {
-        match stack.last_mut() {
-            Some(parent) => parent.children.push(node),
-            None => root.children.push(node),
-        }
+    let attach = |stack: &mut Vec<SyntaxNode>, root: &mut SyntaxNode, node: SyntaxNode| match stack
+        .last_mut()
+    {
+        Some(parent) => parent.children.push(node),
+        None => root.children.push(node),
     };
     for (i, ch) in src.char_indices() {
         if brackets.iter().any(|(o, _)| *o == ch) {
@@ -176,18 +179,58 @@ mod tests {
     #[test]
     fn new_grammars_highlight_keywords() {
         // Each new grammar tags at least one keyword/comment run.
-        assert!(cpp().highlight("class Foo {};").iter().any(|t| t.kind == TokenKind::Keyword));
-        assert!(csharp().highlight("public class A {}").iter().any(|t| t.kind == TokenKind::Keyword));
-        assert!(kotlin().highlight("fun main() {}").iter().any(|t| t.kind == TokenKind::Keyword));
-        assert!(swift().highlight("func f() {}").iter().any(|t| t.kind == TokenKind::Keyword));
-        assert!(ruby().highlight("# note\ndef m; end").iter().any(|t| t.kind == TokenKind::Comment));
-        assert!(bash().highlight("# c\nif x; then :; fi").iter().any(|t| t.kind == TokenKind::Comment));
+        assert!(
+            cpp()
+                .highlight("class Foo {};")
+                .iter()
+                .any(|t| t.kind == TokenKind::Keyword)
+        );
+        assert!(
+            csharp()
+                .highlight("public class A {}")
+                .iter()
+                .any(|t| t.kind == TokenKind::Keyword)
+        );
+        assert!(
+            kotlin()
+                .highlight("fun main() {}")
+                .iter()
+                .any(|t| t.kind == TokenKind::Keyword)
+        );
+        assert!(
+            swift()
+                .highlight("func f() {}")
+                .iter()
+                .any(|t| t.kind == TokenKind::Keyword)
+        );
+        assert!(
+            ruby()
+                .highlight("# note\ndef m; end")
+                .iter()
+                .any(|t| t.kind == TokenKind::Comment)
+        );
+        assert!(
+            bash()
+                .highlight("# c\nif x; then :; fi")
+                .iter()
+                .any(|t| t.kind == TokenKind::Comment)
+        );
     }
 
     #[test]
     fn grammars_are_panic_free_on_garbage() {
         // An editor is full of half-typed / invalid source — scanners must never panic.
-        for g in [cpp(), csharp(), kotlin(), swift(), php(), ruby(), bash(), yaml(), toml()] {
+        for g in [
+            cpp(),
+            csharp(),
+            kotlin(),
+            swift(),
+            php(),
+            ruby(),
+            bash(),
+            yaml(),
+            toml(),
+        ] {
             let _ = g.highlight("\"unterminated /* nested ' `\u{1F600}\n\t weird");
             let _ = g.highlight("");
         }

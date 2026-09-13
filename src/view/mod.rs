@@ -84,7 +84,10 @@ impl Frame<'_> {
     /// (collapsed rows) and soft wrap (a column past the wrap point drops to the next row).
     pub(crate) fn xy(&self, line: usize, col: usize) -> (f64, f64) {
         let (row, xcol) = self.disp.place(line, col);
-        (self.pad_l + xcol as f64 * self.advance, self.pad_t + row as f64 * self.line_px)
+        (
+            self.pad_l + xcol as f64 * self.advance,
+            self.pad_t + row as f64 * self.line_px,
+        )
     }
     /// The y (px) of a display row index.
     pub(crate) fn row_y(&self, row: usize) -> f64 {
@@ -149,7 +152,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let preedit = create_signal(String::new()); // IME composition (preedit) text, shown at caret
     // Fold state: use the caller-bound signal (persists across mounts / tabs) if given, else a
     // private one. `create_signal` runs unconditionally so the hook order never churns.
-    let internal_folds = create_signal::<std::collections::BTreeSet<usize>>(std::collections::BTreeSet::new());
+    let internal_folds =
+        create_signal::<std::collections::BTreeSet<usize>>(std::collections::BTreeSet::new());
     let folds = p.folds.unwrap_or(internal_folds);
     // The live wrap-column width, shared with the (once-created) autoscroll effect via interior
     // mutability so it can map the caret to its display row without a stale capture.
@@ -195,14 +199,20 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                         .ranges()
                         .iter()
                         .map(|r| {
-                            Selection::range(crate::collab::map_pos(r.anchor, e), crate::collab::map_pos(r.head, e))
+                            Selection::range(
+                                crate::collab::map_pos(r.anchor, e),
+                                crate::collab::map_pos(r.head, e),
+                            )
                         })
                         .collect();
                     Selections::new(mapped, cur.selection.primary_index()).clamped(new.len())
                 }
                 None => cur.selection.clamped(new.len()),
             };
-            state.set(EditorState { doc: Rope::from_str(&new), selection: sel });
+            state.set(EditorState {
+                doc: Rope::from_str(&new),
+                selection: sel,
+            });
         }
         if let (Some(cb), Some(e)) = (&on_edit, &delta) {
             cb(e, remote);
@@ -246,7 +256,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // Language-derived editing config (owned, so it can travel into the 'static handler).
     let cfg = Rc::new(EditCfg {
         tab: indent_unit.clone(),
-        line_comment: p.language.as_ref().and_then(|l| l.line_comment().map(String::from)),
+        line_comment: p
+            .language
+            .as_ref()
+            .and_then(|l| l.line_comment().map(String::from)),
         brackets: p
             .language
             .as_ref()
@@ -277,7 +290,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             }
             if completion.peek().is_some() {
                 match k {
-                    KeyInput::Move { motion: Motion::Down, .. } => {
+                    KeyInput::Move {
+                        motion: Motion::Down,
+                        ..
+                    } => {
                         let mut s = completion.peek();
                         if let Some(sess) = &mut s {
                             sess.move_by(1);
@@ -285,7 +301,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                         completion.set(s);
                         return;
                     }
-                    KeyInput::Move { motion: Motion::Up, .. } => {
+                    KeyInput::Move {
+                        motion: Motion::Up, ..
+                    } => {
                         let mut s = completion.peek();
                         if let Some(sess) = &mut s {
                             sess.move_by(-1);
@@ -344,7 +362,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                         if let Some(target) = dp(&cur.text(), cur.primary().head) {
                             state.set(EditorState {
                                 doc: cur.doc.clone(),
-                                selection: Selections::single(Selection::caret(target.min(cur.len()))),
+                                selection: Selections::single(Selection::caret(
+                                    target.min(cur.len()),
+                                )),
                             });
                             history.peek().borrow_mut().break_group();
                         }
@@ -416,11 +436,15 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 let text = st.text();
                 let pr = st.primary();
                 let (a, b) = (pr.min(), pr.max());
-                let snap = Snapshot { text: &text, caret: pr.head, selection: (a, b) };
+                let snap = Snapshot {
+                    text: &text,
+                    caret: pr.head,
+                    selection: (a, b),
+                };
                 let blocked = ro_exts.iter().any(|e| {
-                    e.read_only.as_ref().is_some_and(|f| {
-                        f(&snap).iter().any(|&(lo, hi)| a <= hi && b >= lo)
-                    })
+                    e.read_only
+                        .as_ref()
+                        .is_some_and(|f| f(&snap).iter().any(|&(lo, hi)| a <= hi && b >= lo))
                 });
                 if blocked {
                     return;
@@ -437,8 +461,16 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     let src = st.text();
                     let pr = sels.primary();
                     let (a, b) = (pr.min(), pr.max());
-                    let snap = Snapshot { text: &src, caret: pr.head, selection: (a, b) };
-                    let mut edit = crate::collab::Edit { from: a, to: b, insert: text.clone() };
+                    let snap = Snapshot {
+                        text: &src,
+                        caret: pr.head,
+                        selection: (a, b),
+                    };
+                    let mut edit = crate::collab::Edit {
+                        from: a,
+                        to: b,
+                        insert: text.clone(),
+                    };
                     let mut vetoed = false;
                     for e in ro_exts.iter().filter_map(|e| e.edit_filter.as_ref()) {
                         match e(&snap, &edit) {
@@ -536,7 +568,12 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             if !focus.is_focused() {
                 return false;
             }
-            let ctx = crate::extensions::EditContext { state, history, code, goal };
+            let ctx = crate::extensions::EditContext {
+                state,
+                history,
+                code,
+                goal,
+            };
             crate::extensions::run_command_by_id(&key_exts, &kb.command, &ctx);
             true
         });
@@ -564,7 +601,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let line_count = src.split('\n').count().max(1);
     let char_lens: Vec<usize> = src.split('\n').map(|l| l.chars().count()).collect();
     // Inline diff against the base (added lines + removed markers), recomputed reactively.
-    let line_diff = p.diff_base.map(|base| crate::diff::diff_lines(&base.get(), &src));
+    let line_diff = p
+        .diff_base
+        .map(|base| crate::diff::diff_lines(&base.get(), &src));
 
     // ---- folding + soft wrap: buffer-line ↔ visual-row map ----
     // The whole view renders in VISUAL-ROW space (folded lines collapse, wrapped lines split).
@@ -599,7 +638,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     for b in &block_widgets {
         block_gaps[b.line] += (b.height / line_px).ceil().max(1.0) as usize;
     }
-    let fold_regions: std::rc::Rc<Vec<(usize, usize)>> = std::rc::Rc::new(crate::fold::foldable(&src));
+    let fold_regions: std::rc::Rc<Vec<(usize, usize)>> =
+        std::rc::Rc::new(crate::fold::foldable(&src));
     let disp = std::rc::Rc::new(crate::fold::DisplayMap::new(
         line_count,
         &folds.get(),
@@ -725,7 +765,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             .map(|l| l.highlight(win))
             .unwrap_or_default()
             .into_iter()
-            .map(|t| Token { start: t.start + ls, ..t })
+            .map(|t| Token {
+                start: t.start + ls,
+                ..t
+            })
             .collect();
         Rc::new(toks)
     } else {
@@ -756,29 +799,29 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
 
     // ---- extension contributions for this frame ----
     // Decorations + gutter markers are recomputed from the current snapshot each render.
-    let (ext_decos, ext_gutter_marks): (Vec<Decoration>, Vec<GutterMark>) = if p.extensions.is_empty()
-    {
-        (Vec::new(), Vec::new())
-    } else {
-        let snap = Snapshot {
-            text: &src,
-            caret: pcc,
-            selection: (primary.min(), primary.max()),
+    let (ext_decos, ext_gutter_marks): (Vec<Decoration>, Vec<GutterMark>) =
+        if p.extensions.is_empty() {
+            (Vec::new(), Vec::new())
+        } else {
+            let snap = Snapshot {
+                text: &src,
+                caret: pcc,
+                selection: (primary.min(), primary.max()),
+            };
+            let decos = p
+                .extensions
+                .iter()
+                .filter_map(|e| e.decorations.as_ref())
+                .flat_map(|f| f(&snap))
+                .collect();
+            let marks = p
+                .extensions
+                .iter()
+                .filter_map(|e| e.gutter.as_ref())
+                .flat_map(|f| f(&snap))
+                .collect();
+            (decos, marks)
         };
-        let decos = p
-            .extensions
-            .iter()
-            .filter_map(|e| e.decorations.as_ref())
-            .flat_map(|f| f(&snap))
-            .collect();
-        let marks = p
-            .extensions
-            .iter()
-            .filter_map(|e| e.gutter.as_ref())
-            .flat_map(|f| f(&snap))
-            .collect();
-        (decos, marks)
-    };
 
     // ---- the read-model the view builders share ----
     let frame = Frame {
@@ -818,7 +861,12 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // below and driven by the find bar's navigation/replace actions.
     let search_matches: Vec<(usize, usize)> = if find.open.get() > 0 {
         // Read the option signals so a toggle re-runs the search.
-        let (q, _, _, _) = (find.query.get(), find.case.get(), find.word.get(), find.regex.get());
+        let (q, _, _, _) = (
+            find.query.get(),
+            find.case.get(),
+            find.word.get(),
+            find.regex.get(),
+        );
         if q.is_empty() {
             Vec::new()
         } else {
@@ -940,12 +988,11 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             // The OTHER endpoint stays fixed while this handle drags.
             let fixed = if is_end { lo } else { hi };
             let handle = GestureDetector::new(
-                container()
-                    .width(14.0)
-                    .height(14.0)
-                    .decoration(
-                        BoxDecoration::new().color(theme.caret).radius(BorderRadius::all(7.0)),
-                    ),
+                container().width(14.0).height(14.0).decoration(
+                    BoxDecoration::new()
+                        .color(theme.caret)
+                        .radius(BorderRadius::all(7.0)),
+                ),
             )
             .cursor(Cursor::Pointer)
             .on_pan_update(action_event(move |e| {
@@ -1075,7 +1122,11 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         let b = p2b(&text, pos);
         let s = line_start(&text, b);
         let le = line_end(&text, b);
-        let e = if le < text.len() { next_char(&text, le) } else { le };
+        let e = if le < text.len() {
+            next_char(&text, le)
+        } else {
+            le
+        };
         state.set(EditorState {
             doc: cur.doc.clone(),
             selection: Selections::single(Selection::range(s, e)),
@@ -1109,7 +1160,11 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         None
     } else {
         p.height.map(|_| {
-            let max_cols = src.split('\n').map(|l| l.chars().count()).max().unwrap_or(0);
+            let max_cols = src
+                .split('\n')
+                .map(|l| l.chars().count())
+                .max()
+                .unwrap_or(0);
             pad_l * 2.0 + max_cols as f64 * advance
         })
     };
@@ -1221,14 +1276,38 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 apply_key(KeyInput::Cut, state, history, code, goal, read_only, &c_cut)
             }))
             .item(menu_item("Copy").on_select(move || {
-                apply_key(KeyInput::Copy, state, history, code, goal, read_only, &c_copy)
+                apply_key(
+                    KeyInput::Copy,
+                    state,
+                    history,
+                    code,
+                    goal,
+                    read_only,
+                    &c_copy,
+                )
             }))
             .item(menu_item("Paste").on_select(move || {
-                apply_key(KeyInput::Paste, state, history, code, goal, read_only, &c_paste)
+                apply_key(
+                    KeyInput::Paste,
+                    state,
+                    history,
+                    code,
+                    goal,
+                    read_only,
+                    &c_paste,
+                )
             }))
             .separator()
             .item(menu_item("Select All").on_select(move || {
-                apply_key(KeyInput::SelectAll, state, history, code, goal, read_only, &c_all)
+                apply_key(
+                    KeyInput::SelectAll,
+                    state,
+                    history,
+                    code,
+                    goal,
+                    read_only,
+                    &c_all,
+                )
             }))
             .into_widget()
     } else {
@@ -1272,7 +1351,16 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
 
     // Overlay the find/replace bar (top-right) when open.
     let code_area: AnyWidget = if find.open.get() > 0 {
-        let bar = search::bar(find, search_matches, state, history, code, goal, focus, theme);
+        let bar = search::bar(
+            find,
+            search_matches,
+            state,
+            history,
+            code,
+            goal,
+            focus,
+            theme,
+        );
         stack(children![code_area, bar]).into_widget()
     } else {
         code_area
@@ -1285,7 +1373,12 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             .iter()
             .flat_map(|e| e.commands.iter().cloned())
             .collect();
-        let ctx = crate::extensions::EditContext { state, history, code, goal };
+        let ctx = crate::extensions::EditContext {
+            state,
+            history,
+            code,
+            goal,
+        };
         let pal = extensions::palette(palette, commands, ctx, focus, theme);
         stack(children![code_area, pal]).into_widget()
     } else {
@@ -1313,13 +1406,11 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     }
     col.push(code_area);
 
-    let body = container()
-        .color(theme.background)
-        .child(
-            column(col)
-                .cross_axis_alignment(CrossAxisAlignment::Stretch)
-                .main_axis_size(MainAxisSize::Min),
-        );
+    let body = container().color(theme.background).child(
+        column(col)
+            .cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .main_axis_size(MainAxisSize::Min),
+    );
 
     // Accessibility: expose the editor as a multiline text input with the document as its
     // value, so screen readers announce it (name + role + content).

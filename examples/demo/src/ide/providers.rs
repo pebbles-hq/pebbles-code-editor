@@ -111,7 +111,9 @@ pub fn hover() -> HoverProvider {
         }
         let w = &src[s..e];
         Some(Hover {
-            contents: format!("{w}\n\nidentifier · demo hover\n(a real provider returns docs/types)"),
+            contents: format!(
+                "{w}\n\nidentifier · demo hover\n(a real provider returns docs/types)"
+            ),
             range: Some((s, e)),
         })
     })
@@ -143,7 +145,11 @@ pub fn definition() -> DefinitionProvider {
 
 pub fn format() -> FormatProvider {
     Rc::new(|src: &str| {
-        let mut out: String = src.lines().map(|l| l.trim_end()).collect::<Vec<_>>().join("\n");
+        let mut out: String = src
+            .lines()
+            .map(|l| l.trim_end())
+            .collect::<Vec<_>>()
+            .join("\n");
         if !out.ends_with('\n') {
             out.push('\n');
         }
@@ -190,7 +196,10 @@ pub fn compute_inlays(src: &str) -> Vec<InlayHint> {
             }
         }
         if e > start {
-            out.push(InlayHint { at: e, label: ": _".into() });
+            out.push(InlayHint {
+                at: e,
+                label: ": _".into(),
+            });
         }
     }
     out

@@ -39,6 +39,8 @@
 //!     code_editor(code).language(Box::new(Rust)).theme(EditorTheme::dark()).height(420.0)
 //! }
 //! ```
+#![deny(missing_docs)]
+#![forbid(unsafe_code)]
 
 pub mod edit;
 pub mod extensions;
@@ -47,15 +49,15 @@ pub mod providers;
 
 mod brackets;
 mod collab;
+mod commands;
+mod config;
 mod diff;
 mod fold;
 mod geometry;
 mod highlight;
-mod commands;
-mod config;
 mod search;
-mod view;
 mod theme;
+mod view;
 
 pub use collab::Edit;
 pub use config::{CodeEditor, code_editor};
@@ -77,4 +79,3 @@ pub(crate) const MONO: &str = "JetBrains Mono";
 /// Default advance width of one glyph, as a fraction of the font size (JetBrains Mono ≈ 0.6).
 /// Configurable via [`CodeEditor::advance_ratio`] so metrics are exact for any monospace font.
 pub(crate) const ADVANCE_RATIO: f64 = 0.6;
-

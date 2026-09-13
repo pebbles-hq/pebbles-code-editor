@@ -27,7 +27,11 @@ mod samples;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     Theme::dark().make_current();
     if let Ok(spec) = std::env::var("SHOT") {
-        return capture::shot(&spec, || ide::ide().into_widget(), theme().colors.background);
+        return capture::shot(
+            &spec,
+            || ide::ide().into_widget(),
+            theme().colors.background,
+        );
     }
     App::new(component(ide::ide))
         .title("Pebbles IDE")

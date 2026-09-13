@@ -23,7 +23,11 @@ pub fn bar(ws: Workspace) -> AnyWidget {
         let is_active = active == Some(idx);
         let dirty = ws.is_dirty(idx);
         let bg = if is_active { c.background } else { c.muted };
-        let fg = if is_active { c.foreground } else { c.muted_foreground };
+        let fg = if is_active {
+            c.foreground
+        } else {
+            c.muted_foreground
+        };
 
         // The label area (activates the tab).
         let ws_act = ws.clone();
@@ -44,7 +48,11 @@ pub fn bar(ws: Workspace) -> AnyWidget {
             container()
                 .width(8.0)
                 .height(8.0)
-                .decoration(BoxDecoration::new().color(fg).radius(BorderRadius::all(4.0)))
+                .decoration(
+                    BoxDecoration::new()
+                        .color(fg)
+                        .radius(BorderRadius::all(4.0)),
+                )
                 .into_widget()
         } else {
             icon_button(IconKind::Close)
@@ -59,14 +67,12 @@ pub fn bar(ws: Workspace) -> AnyWidget {
             container()
                 .height(38.0)
                 .padding(EdgeInsets::symmetric(12.0, 0.0))
-                .decoration(
-                    BoxDecoration::new().color(bg).border(Border::only(
-                        BorderSide::new(top, 2.0),
-                        BorderSide::new(c.border, 1.0),
-                        BorderSide::NONE,
-                        BorderSide::NONE,
-                    )),
-                )
+                .decoration(BoxDecoration::new().color(bg).border(Border::only(
+                    BorderSide::new(top, 2.0),
+                    BorderSide::new(c.border, 1.0),
+                    BorderSide::NONE,
+                    BorderSide::NONE,
+                )))
                 .child(
                     row(children![label, gap_w(8.0), trailer])
                         .cross_axis_alignment(CrossAxisAlignment::Center),
@@ -78,10 +84,8 @@ pub fn bar(ws: Workspace) -> AnyWidget {
     container()
         .height(38.0)
         .decoration(BoxDecoration::new().color(c.muted))
-        .child(
-            SingleChildScrollView::horizontal(
-                row(tabs).cross_axis_alignment(CrossAxisAlignment::Stretch),
-            ),
-        )
+        .child(SingleChildScrollView::horizontal(
+            row(tabs).cross_axis_alignment(CrossAxisAlignment::Stretch),
+        ))
         .into_widget()
 }

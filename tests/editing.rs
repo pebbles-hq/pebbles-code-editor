@@ -55,7 +55,10 @@ const ADV: f64 = 13.5 * 0.6;
 const LINE: f64 = 13.5 * 1.6;
 /// Window offset of column `col` on line `line` (with the gutter off).
 fn at(line: usize, col: usize) -> Offset {
-    Offset::new(14.0 + col as f64 * ADV, 10.0 + line as f64 * LINE + LINE / 2.0)
+    Offset::new(
+        14.0 + col as f64 * ADV,
+        10.0 + line as f64 * LINE + LINE / 2.0,
+    )
 }
 
 fn click(ui: &mut Ui, env: &mut TextEnv, pos: Offset) {
@@ -186,9 +189,20 @@ fn auto_close_inserts_skips_and_deletes_pairs() {
     key(&mut ui, &mut env, KeyInput::Insert(")".to_string()));
     assert_eq!(code.get(), "()", "typing the closer overtypes, not doubles");
     // Caret is now after ')'. Go back between the pair and backspace → both go.
-    key(&mut ui, &mut env, KeyInput::Move { motion: Motion::Left, extend: false });
+    key(
+        &mut ui,
+        &mut env,
+        KeyInput::Move {
+            motion: Motion::Left,
+            extend: false,
+        },
+    );
     key(&mut ui, &mut env, KeyInput::Backspace);
-    assert_eq!(code.get(), "", "backspace between an empty pair removes both");
+    assert_eq!(
+        code.get(),
+        "",
+        "backspace between an empty pair removes both"
+    );
 }
 
 #[test]
@@ -196,12 +210,18 @@ fn auto_close_wraps_the_selection() {
     let (mut ui, mut env, code) = harness("x");
     key(&mut ui, &mut env, KeyInput::SelectAll);
     key(&mut ui, &mut env, KeyInput::Insert("(".to_string()));
-    assert_eq!(code.get(), "(x)", "typing a bracket around a selection wraps it");
+    assert_eq!(
+        code.get(),
+        "(x)",
+        "typing a bracket around a selection wraps it"
+    );
 }
 
 #[test]
 fn completion_popup_types_navigates_and_accepts() {
-    use pebbles_code_editor::{CompletionContext, CompletionItem, CompletionKind, CompletionProvider};
+    use pebbles_code_editor::{
+        CompletionContext, CompletionItem, CompletionKind, CompletionProvider,
+    };
     use std::rc::Rc;
     pebbles::widgets::overlay::init();
     pebbles::core::focus::init();
@@ -225,14 +245,23 @@ fn completion_popup_types_navigates_and_accepts() {
     key(&mut ui, &mut env, KeyInput::Insert("p".to_string()));
     key(&mut ui, &mut env, KeyInput::Insert("r".to_string()));
     // Down selects the 2nd item ("print"); Enter accepts it, replacing the "pr" prefix.
-    key(&mut ui, &mut env, KeyInput::Move { motion: Motion::Down, extend: false });
+    key(
+        &mut ui,
+        &mut env,
+        KeyInput::Move {
+            motion: Motion::Down,
+            extend: false,
+        },
+    );
     key(&mut ui, &mut env, KeyInput::Enter);
     assert_eq!(code.get(), "print");
 }
 
 #[test]
 fn completion_accepts_a_snippet_with_caret_stop() {
-    use pebbles_code_editor::{CompletionContext, CompletionItem, CompletionKind, CompletionProvider};
+    use pebbles_code_editor::{
+        CompletionContext, CompletionItem, CompletionKind, CompletionProvider,
+    };
     use std::rc::Rc;
     pebbles::widgets::overlay::init();
     pebbles::core::focus::init();
@@ -265,7 +294,11 @@ fn find_bar_opens_and_captures_typing() {
     // The find field autofocuses, so keystrokes go to it — not the document.
     key(&mut ui, &mut env, KeyInput::Insert("foo".to_string()));
     key(&mut ui, &mut env, KeyInput::Enter);
-    assert_eq!(code.get(), "foo bar foo baz", "typing goes to the find field, not the doc");
+    assert_eq!(
+        code.get(),
+        "foo bar foo baz",
+        "typing goes to the find field, not the doc"
+    );
 }
 
 #[test]
@@ -332,12 +365,22 @@ fn diagnostics_inlay_hover_signature_render() {
         severity: Severity::Error,
         message: "bad".into(),
     }]);
-    let hints = create_root_signal(vec![InlayHint { at: 5, label: ": i32".into() }]);
+    let hints = create_root_signal(vec![InlayHint {
+        at: 5,
+        label: ": i32".into(),
+    }]);
     let hover: HoverProvider = Rc::new(|_s: &str, _b: usize| {
-        Some(Hover { contents: "an int".into(), range: None })
+        Some(Hover {
+            contents: "an int".into(),
+            range: None,
+        })
     });
     let sig: SignatureProvider = Rc::new(|_s: &str, _b: usize| {
-        Some(SignatureHelp { label: "fn f(x: i32)".into(), params: vec![], active: None })
+        Some(SignatureHelp {
+            label: "fn f(x: i32)".into(),
+            params: vec![],
+            active: None,
+        })
     });
     let mut ui = Ui::new();
     let mut env = TextEnv::new();
@@ -363,7 +406,10 @@ fn diagnostics_inlay_hover_signature_render() {
     ui.rebuild_if_dirty();
     ui.layout(&mut env, Size::new(600.0, 400.0));
     key(&mut ui, &mut env, KeyInput::Insert("(".to_string()));
-    assert!(ui.element_count() > 0, "provider overlays built without panicking");
+    assert!(
+        ui.element_count() > 0,
+        "provider overlays built without panicking"
+    );
 }
 
 #[test]
@@ -479,8 +525,14 @@ fn sticky_scroll_pins_and_navigates_to_scopes() {
     let mut env = TextEnv::new();
     let win = Size::new(600.0, 400.0);
     ui.mount_root(
-        View::new(white(), code_editor(code).height(200.0).sticky_scroll(true).autofocus())
-            .into_widget(),
+        View::new(
+            white(),
+            code_editor(code)
+                .height(200.0)
+                .sticky_scroll(true)
+                .autofocus(),
+        )
+        .into_widget(),
     );
     for _ in 0..3 {
         ui.rebuild_if_dirty();
@@ -488,10 +540,17 @@ fn sticky_scroll_pins_and_navigates_to_scopes() {
     }
     let v_offset = |ui: &Ui| {
         let id = ui.render_tree().find::<RenderScroll>().unwrap();
-        ui.render_tree().object_ref(id).downcast_ref::<RenderScroll>().unwrap().offset
+        ui.render_tree()
+            .object_ref(id)
+            .downcast_ref::<RenderScroll>()
+            .unwrap()
+            .offset
     };
     // Scroll deep into the nested block.
-    ui.dispatch_key(KeyInput::Move { motion: Motion::DocEnd, extend: false });
+    ui.dispatch_key(KeyInput::Move {
+        motion: Motion::DocEnd,
+        extend: false,
+    });
     for _ in 0..3 {
         ui.rebuild_if_dirty();
         ui.layout(&mut env, win);
@@ -515,7 +574,10 @@ fn sticky_scroll_pins_and_navigates_to_scopes() {
 #[test]
 fn minimap_click_scrolls_the_document() {
     use pebbles::render::RenderScroll;
-    let body: String = (0..300).map(|i| format!("line {i} of the doc")).collect::<Vec<_>>().join("\n");
+    let body: String = (0..300)
+        .map(|i| format!("line {i} of the doc"))
+        .collect::<Vec<_>>()
+        .join("\n");
     pebbles::widgets::overlay::init();
     pebbles::core::focus::init();
     let code = create_root_signal(body);
@@ -523,14 +585,21 @@ fn minimap_click_scrolls_the_document() {
     let mut env = TextEnv::new();
     let win = Size::new(600.0, 400.0);
     ui.mount_root(
-        View::new(white(), code_editor(code).height(200.0).minimap(true).autofocus()).into_widget(),
+        View::new(
+            white(),
+            code_editor(code).height(200.0).minimap(true).autofocus(),
+        )
+        .into_widget(),
     );
     for _ in 0..3 {
         ui.rebuild_if_dirty();
         ui.layout(&mut env, win);
     }
     let v_offset = |ui: &Ui| {
-        let id = ui.render_tree().find::<RenderScroll>().expect("vertical scroll");
+        let id = ui
+            .render_tree()
+            .find::<RenderScroll>()
+            .expect("vertical scroll");
         ui.render_tree()
             .object_ref(id)
             .downcast_ref::<RenderScroll>()
@@ -542,7 +611,10 @@ fn minimap_click_scrolls_the_document() {
     ui.dispatch_pointer_down(Offset::new(558.0, 175.0));
     ui.rebuild_if_dirty();
     ui.layout(&mut env, win);
-    assert!(v_offset(&ui) > 0.0, "minimap click scrolled the document down");
+    assert!(
+        v_offset(&ui) > 0.0,
+        "minimap click scrolled the document down"
+    );
 }
 
 #[test]
@@ -594,7 +666,11 @@ fn long_line_scrolls_horizontally_to_the_caret() {
         ui.render_tree()
             .find_all::<RenderScroll>()
             .into_iter()
-            .filter_map(|id| ui.render_tree().object_ref(id).downcast_ref::<RenderScroll>())
+            .filter_map(|id| {
+                ui.render_tree()
+                    .object_ref(id)
+                    .downcast_ref::<RenderScroll>()
+            })
             .map(|s| s.offset)
             .fold(0.0_f64, f64::max)
     };
@@ -606,14 +682,20 @@ fn long_line_scrolls_horizontally_to_the_caret() {
     });
     ui.rebuild_if_dirty();
     ui.layout(&mut env, win);
-    assert!(max_offset(&ui) > 0.0, "caret at end of a long line scrolled horizontally");
+    assert!(
+        max_offset(&ui) > 0.0,
+        "caret at end of a long line scrolled horizontally"
+    );
 }
 
 #[test]
 fn viewport_is_virtualized_for_large_docs() {
     // A 2000-line doc in a 200px viewport must render only a screenful of nodes, not 2000
     // lines' worth — the virtualization tripwire (render node count tracks the viewport).
-    let body: String = (0..2000).map(|i| format!("fn line_{i}() {{}}")).collect::<Vec<_>>().join("\n");
+    let body: String = (0..2000)
+        .map(|i| format!("fn line_{i}() {{}}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     pebbles::widgets::overlay::init();
     pebbles::core::focus::init();
     let code = create_root_signal(body);
@@ -625,28 +707,41 @@ fn viewport_is_virtualized_for_large_docs() {
         ui.layout(&mut env, Size::new(600.0, 400.0));
     }
     let nodes = ui.render_node_count();
-    assert!(nodes < 300, "expected a virtualized node count, got {nodes} for 2000 lines");
+    assert!(
+        nodes < 300,
+        "expected a virtualized node count, got {nodes} for 2000 lines"
+    );
 }
 
 #[test]
 fn keyboard_nav_autoscrolls_the_caret_into_view() {
     use pebbles::render::RenderScroll;
     // A short viewport over a tall document: moving to the end must scroll it into view.
-    let body: String = (0..100).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+    let body: String = (0..100)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     pebbles::widgets::overlay::init();
     pebbles::core::focus::init();
     let code = create_root_signal(body);
     let mut ui = Ui::new();
     let mut env = TextEnv::new();
     ui.mount_root(
-        View::new(white(), code_editor(code).height(120.0).gutter(false).autofocus()).into_widget(),
+        View::new(
+            white(),
+            code_editor(code).height(120.0).gutter(false).autofocus(),
+        )
+        .into_widget(),
     );
     for _ in 0..3 {
         ui.rebuild_if_dirty();
         ui.layout(&mut env, Size::new(600.0, 400.0));
     }
     let offset = |ui: &Ui| {
-        let id = ui.render_tree().find::<RenderScroll>().expect("a scroll view");
+        let id = ui
+            .render_tree()
+            .find::<RenderScroll>()
+            .expect("a scroll view");
         ui.render_tree()
             .object_ref(id)
             .downcast_ref::<RenderScroll>()
@@ -662,7 +757,10 @@ fn keyboard_nav_autoscrolls_the_caret_into_view() {
             extend: false,
         },
     );
-    assert!(offset(&ui) > 500.0, "caret at doc end scrolled the viewport down");
+    assert!(
+        offset(&ui) > 500.0,
+        "caret at doc end scrolled the viewport down"
+    );
     // Back to the top brings the offset home.
     key(
         &mut ui,
@@ -672,7 +770,11 @@ fn keyboard_nav_autoscrolls_the_caret_into_view() {
             extend: false,
         },
     );
-    assert_eq!(offset(&ui), 0.0, "caret at doc start scrolled back to the top");
+    assert_eq!(
+        offset(&ui),
+        0.0,
+        "caret at doc start scrolled back to the top"
+    );
 }
 
 #[test]
@@ -698,8 +800,12 @@ fn extension_decorations_render() {
     pebbles::core::focus::init();
     let code = create_root_signal(String::from("hello world"));
     // Decorate the first word on every render.
-    let ext = extension("highlight-first-word")
-        .decorations(|_snap| vec![Decoration::background((0, 5), Color::from_rgba8(0, 128, 255, 60))]);
+    let ext = extension("highlight-first-word").decorations(|_snap| {
+        vec![Decoration::background(
+            (0, 5),
+            Color::from_rgba8(0, 128, 255, 60),
+        )]
+    });
     let mut ui = Ui::new();
     let mut env = TextEnv::new();
     let before = {
@@ -738,12 +844,23 @@ fn command_palette_runs_a_command() {
         ui.layout(&mut env, Size::new(600.0, 400.0));
     }
     // Move the caret to the end so the insert lands after "abc".
-    key(&mut ui, &mut env, KeyInput::Move { motion: Motion::DocEnd, extend: false });
+    key(
+        &mut ui,
+        &mut env,
+        KeyInput::Move {
+            motion: Motion::DocEnd,
+            extend: false,
+        },
+    );
     // Open the palette, filter to the command, and run it with Enter.
     key(&mut ui, &mut env, KeyInput::CommandPalette);
     key(&mut ui, &mut env, KeyInput::Insert("bang".to_string()));
     key(&mut ui, &mut env, KeyInput::Enter);
-    assert_eq!(code.get(), "abc!", "the palette ran the command against the editor");
+    assert_eq!(
+        code.get(),
+        "abc!",
+        "the palette ran the command against the editor"
+    );
 }
 
 #[test]
@@ -763,11 +880,26 @@ fn read_only_range_vetoes_an_edit() {
     }
     // Caret is at 0 (inside the read-only range): typing is vetoed.
     key(&mut ui, &mut env, KeyInput::Insert("X".to_string()));
-    assert_eq!(code.get(), "locked text", "edit inside a read-only range is vetoed");
+    assert_eq!(
+        code.get(),
+        "locked text",
+        "edit inside a read-only range is vetoed"
+    );
     // Move past the guarded range: typing works again.
-    key(&mut ui, &mut env, KeyInput::Move { motion: Motion::DocEnd, extend: false });
+    key(
+        &mut ui,
+        &mut env,
+        KeyInput::Move {
+            motion: Motion::DocEnd,
+            extend: false,
+        },
+    );
     key(&mut ui, &mut env, KeyInput::Insert("!".to_string()));
-    assert_eq!(code.get(), "locked text!", "edit outside the read-only range applies");
+    assert_eq!(
+        code.get(),
+        "locked text!",
+        "edit outside the read-only range applies"
+    );
 }
 
 #[test]
@@ -834,7 +966,11 @@ fn extension_focus_hook_fires() {
         ui.rebuild_if_dirty();
         ui.layout(&mut env, Size::new(600.0, 400.0));
     }
-    assert_eq!(*last.borrow(), Some(true), "on_focus fired with focus gained");
+    assert_eq!(
+        *last.borrow(),
+        Some(true),
+        "on_focus fired with focus gained"
+    );
 }
 
 #[test]
@@ -848,11 +984,16 @@ fn extension_pointer_handler_reports_byte() {
     let code = create_root_signal(String::from("abcdef"));
     let hit: Rc<RefCell<Option<usize>>> = Rc::new(RefCell::new(None));
     let hit_c = hit.clone();
-    let ext = extension("click-watch").on_click(move |_snap, byte| *hit_c.borrow_mut() = Some(byte));
+    let ext =
+        extension("click-watch").on_click(move |_snap, byte| *hit_c.borrow_mut() = Some(byte));
     let mut ui = Ui::new();
     let mut env = TextEnv::new();
     ui.mount_root(
-        View::new(white(), code_editor(code).gutter(false).extension(ext).autofocus()).into_widget(),
+        View::new(
+            white(),
+            code_editor(code).gutter(false).extension(ext).autofocus(),
+        )
+        .into_widget(),
     );
     for _ in 0..3 {
         ui.rebuild_if_dirty();
@@ -860,7 +1001,11 @@ fn extension_pointer_handler_reports_byte() {
     }
     // Click at column 3 on line 0.
     click(&mut ui, &mut env, at(0, 3));
-    assert_eq!(*hit.borrow(), Some(3), "on_click reported the byte under the pointer");
+    assert_eq!(
+        *hit.borrow(),
+        Some(3),
+        "on_click reported the byte under the pointer"
+    );
 }
 
 #[test]
@@ -872,7 +1017,9 @@ fn extension_keybinding_runs_a_command() {
     let code = create_root_signal(String::from("abc"));
     // A command bound to Ctrl+B that appends "!" at the caret.
     let ext = extension("bang")
-        .command(Command::new("edit.bang", "Insert Bang", |ctx| ctx.insert("!")))
+        .command(Command::new("edit.bang", "Insert Bang", |ctx| {
+            ctx.insert("!")
+        }))
         .keybinding("Ctrl+B", "edit.bang");
     let mut ui = Ui::new();
     let mut env = TextEnv::new();
@@ -882,8 +1029,20 @@ fn extension_keybinding_runs_a_command() {
         ui.layout(&mut env, Size::new(600.0, 400.0));
     }
     // Caret to the end, then fire the bound chord through the shortcut registry.
-    key(&mut ui, &mut env, KeyInput::Move { motion: Motion::DocEnd, extend: false });
-    let mods = Mods { shift: false, ctrl: true, alt: false, meta: false };
+    key(
+        &mut ui,
+        &mut env,
+        KeyInput::Move {
+            motion: Motion::DocEnd,
+            extend: false,
+        },
+    );
+    let mods = Mods {
+        shift: false,
+        ctrl: true,
+        alt: false,
+        meta: false,
+    };
     let consumed = pebbles::core::shortcuts::dispatch(ui.window_id(), mods, ShortcutKey::Char('b'));
     ui.rebuild_if_dirty();
     ui.layout(&mut env, Size::new(600.0, 400.0));
@@ -923,7 +1082,10 @@ fn theme_extension_composes_and_renders() {
         ui.rebuild_if_dirty();
         ui.layout(&mut env, Size::new(600.0, 400.0));
     }
-    assert!(ui.element_count() > 0, "theme-extension editor rendered without panicking");
+    assert!(
+        ui.element_count() > 0,
+        "theme-extension editor rendered without panicking"
+    );
 }
 
 #[test]
@@ -948,7 +1110,10 @@ fn font_and_spacing_config_render() {
         ui.rebuild_if_dirty();
         ui.layout(&mut env, Size::new(600.0, 400.0));
     }
-    assert!(ui.element_count() > 0, "font/line-height/letter-spacing editor rendered");
+    assert!(
+        ui.element_count() > 0,
+        "font/line-height/letter-spacing editor rendered"
+    );
 }
 
 #[test]
@@ -969,7 +1134,11 @@ fn letter_spacing_widens_the_hit_grid() {
     ui.mount_root(
         View::new(
             white(),
-            code_editor(code).gutter(false).letter_spacing(2.0).extension(ext).autofocus(),
+            code_editor(code)
+                .gutter(false)
+                .letter_spacing(2.0)
+                .extension(ext)
+                .autofocus(),
         )
         .into_widget(),
     );
@@ -981,7 +1150,11 @@ fn letter_spacing_widens_the_hit_grid() {
     let adv = 13.5 * 0.6 + 2.0;
     let pos = Offset::new(14.0 + 3.0 * adv, 10.0 + 13.5 * 1.6 / 2.0);
     click(&mut ui, &mut env, pos);
-    assert_eq!(*hit.borrow(), Some(3), "hit-testing used the letter-spaced advance");
+    assert_eq!(
+        *hit.borrow(),
+        Some(3),
+        "hit-testing used the letter-spaced advance"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1000,16 +1173,34 @@ fn ime_preedit_shows_then_commits() {
     key(&mut ui, &mut env, KeyInput::Insert("感".to_string()));
     assert_eq!(code.get(), "感", "commit inserts the final text");
     key(&mut ui, &mut env, KeyInput::Insert("じ".to_string()));
-    assert_eq!(code.get(), "感じ", "typing continues normally after composition");
+    assert_eq!(
+        code.get(),
+        "感じ",
+        "typing continues normally after composition"
+    );
 }
 
 #[test]
 fn drag_and_drop_moves_selected_text() {
     let (mut ui, mut env, code) = mouse_harness("abcdef");
     // Select "abc" (bytes 0..3).
-    key(&mut ui, &mut env, KeyInput::Move { motion: Motion::DocStart, extend: false });
+    key(
+        &mut ui,
+        &mut env,
+        KeyInput::Move {
+            motion: Motion::DocStart,
+            extend: false,
+        },
+    );
     for _ in 0..3 {
-        key(&mut ui, &mut env, KeyInput::Move { motion: Motion::Right, extend: true });
+        key(
+            &mut ui,
+            &mut env,
+            KeyInput::Move {
+                motion: Motion::Right,
+                extend: true,
+            },
+        );
     }
     // Press inside the selection (arms the text drag), then drag to the end and drop.
     let inside = at(0, 1);
@@ -1024,15 +1215,33 @@ fn drag_and_drop_moves_selected_text() {
     }
     ui.rebuild_if_dirty();
     ui.layout(&mut env, Size::new(600.0, 400.0));
-    assert_eq!(code.get(), "defabc", "the selected text moved to the drop point");
+    assert_eq!(
+        code.get(),
+        "defabc",
+        "the selected text moved to the drop point"
+    );
 }
 
 #[test]
 fn click_inside_selection_collapses_it() {
     let (mut ui, mut env, code) = mouse_harness("abcdef");
-    key(&mut ui, &mut env, KeyInput::Move { motion: Motion::DocStart, extend: false });
+    key(
+        &mut ui,
+        &mut env,
+        KeyInput::Move {
+            motion: Motion::DocStart,
+            extend: false,
+        },
+    );
     for _ in 0..3 {
-        key(&mut ui, &mut env, KeyInput::Move { motion: Motion::Right, extend: true });
+        key(
+            &mut ui,
+            &mut env,
+            KeyInput::Move {
+                motion: Motion::Right,
+                extend: true,
+            },
+        );
     }
     // A plain click inside the selection (press + tap, no drag) collapses to a caret there,
     // so typing replaces nothing.
@@ -1042,7 +1251,11 @@ fn click_inside_selection_collapses_it() {
     ui.rebuild_if_dirty();
     ui.layout(&mut env, Size::new(600.0, 400.0));
     key(&mut ui, &mut env, KeyInput::Insert("X".to_string()));
-    assert_eq!(code.get(), "aXbcdef", "click collapsed the selection instead of replacing it");
+    assert_eq!(
+        code.get(),
+        "aXbcdef",
+        "click collapsed the selection instead of replacing it"
+    );
 }
 
 #[test]
@@ -1053,13 +1266,20 @@ fn a11y_label_editor_renders() {
     let mut ui = Ui::new();
     let mut env = TextEnv::new();
     ui.mount_root(
-        View::new(white(), code_editor(code).a11y_label("Source code").autofocus()).into_widget(),
+        View::new(
+            white(),
+            code_editor(code).a11y_label("Source code").autofocus(),
+        )
+        .into_widget(),
     );
     for _ in 0..3 {
         ui.rebuild_if_dirty();
         ui.layout(&mut env, Size::new(600.0, 400.0));
     }
-    assert!(ui.element_count() > 0, "a11y-wrapped editor renders (TextInput semantics node)");
+    assert!(
+        ui.element_count() > 0,
+        "a11y-wrapped editor renders (TextInput semantics node)"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1110,14 +1330,25 @@ fn remote_edit_remaps_the_caret() {
         ui.layout(&mut env, Size::new(600.0, 400.0));
     }
     // Caret to the end (byte 5).
-    key(&mut ui, &mut env, KeyInput::Move { motion: Motion::DocEnd, extend: false });
+    key(
+        &mut ui,
+        &mut env,
+        KeyInput::Move {
+            motion: Motion::DocEnd,
+            extend: false,
+        },
+    );
     // A remote collaborator inserts "XX" at the start.
     code.set("XXhello".to_string());
     ui.rebuild_if_dirty();
     ui.layout(&mut env, Size::new(600.0, 400.0));
     // The caret remapped 5 -> 7, so typing lands at the end (not mid-word).
     key(&mut ui, &mut env, KeyInput::Insert("!".to_string()));
-    assert_eq!(code.get(), "XXhello!", "the local caret followed the remote insert");
+    assert_eq!(
+        code.get(),
+        "XXhello!",
+        "the local caret followed the remote insert"
+    );
 }
 
 #[test]
@@ -1125,7 +1356,9 @@ fn large_file_renders() {
     pebbles::widgets::overlay::init();
     pebbles::core::focus::init();
     // A big document (well past the large-file threshold) must render (window-only tokenize).
-    let big: String = (0..8000).map(|i| format!("let x{i} = {i}; // line {i}\n")).collect();
+    let big: String = (0..8000)
+        .map(|i| format!("let x{i} = {i}; // line {i}\n"))
+        .collect();
     let code = create_root_signal(big);
     let mut ui = Ui::new();
     let mut env = TextEnv::new();
@@ -1143,7 +1376,10 @@ fn large_file_renders() {
         ui.rebuild_if_dirty();
         ui.layout(&mut env, Size::new(600.0, 400.0));
     }
-    assert!(ui.element_count() > 0, "large file renders via window-only tokenization");
+    assert!(
+        ui.element_count() > 0,
+        "large file renders via window-only tokenization"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1171,7 +1407,14 @@ fn closing_bracket_reindents_the_line() {
         ui.rebuild_if_dirty();
         ui.layout(&mut env, Size::new(600.0, 400.0));
     }
-    key(&mut ui, &mut env, KeyInput::Move { motion: Motion::DocEnd, extend: false });
+    key(
+        &mut ui,
+        &mut env,
+        KeyInput::Move {
+            motion: Motion::DocEnd,
+            extend: false,
+        },
+    );
     key(&mut ui, &mut env, KeyInput::Insert("}".to_string()));
     // 8 spaces dedented by one 4-space level -> 4 spaces, then `}`.
     assert_eq!(code.get(), "fn f() {\n    }");
@@ -1185,8 +1428,14 @@ fn selection_handles_render_with_a_selection() {
     let mut ui = Ui::new();
     let mut env = TextEnv::new();
     ui.mount_root(
-        View::new(white(), code_editor(code).gutter(false).selection_handles(true).autofocus())
-            .into_widget(),
+        View::new(
+            white(),
+            code_editor(code)
+                .gutter(false)
+                .selection_handles(true)
+                .autofocus(),
+        )
+        .into_widget(),
     );
     for _ in 0..3 {
         ui.rebuild_if_dirty();
@@ -1194,11 +1443,28 @@ fn selection_handles_render_with_a_selection() {
     }
     let before = ui.element_count();
     // Select "abc" — two draggable handles (start + end) should now render.
-    key(&mut ui, &mut env, KeyInput::Move { motion: Motion::DocStart, extend: false });
+    key(
+        &mut ui,
+        &mut env,
+        KeyInput::Move {
+            motion: Motion::DocStart,
+            extend: false,
+        },
+    );
     for _ in 0..3 {
-        key(&mut ui, &mut env, KeyInput::Move { motion: Motion::Right, extend: true });
+        key(
+            &mut ui,
+            &mut env,
+            KeyInput::Move {
+                motion: Motion::Right,
+                extend: true,
+            },
+        );
     }
-    assert!(ui.element_count() > before, "selection handles rendered for the selection");
+    assert!(
+        ui.element_count() > before,
+        "selection handles rendered for the selection"
+    );
 }
 
 #[test]
@@ -1212,7 +1478,10 @@ fn folding_collapses_and_expands() {
     ui.rebuild_if_dirty();
     ui.layout(&mut env, Size::new(600.0, 400.0));
     let folded = ui.element_count();
-    assert!(folded < before, "folding hid the body lines ({before} -> {folded})");
+    assert!(
+        folded < before,
+        "folding hid the body lines ({before} -> {folded})"
+    );
     // Click again to unfold.
     ui.dispatch_tap(arrow);
     ui.rebuild_if_dirty();
@@ -1227,8 +1496,13 @@ fn extension_edit_filter_transforms_typing() {
     pebbles::core::focus::init();
     let code = create_root_signal(String::new());
     // A filter that upper-cases every inserted character.
-    let ext = extension("shout")
-        .filter_edit(|_snap, e| Some(Edit { insert: e.insert.to_uppercase(), from: e.from, to: e.to }));
+    let ext = extension("shout").filter_edit(|_snap, e| {
+        Some(Edit {
+            insert: e.insert.to_uppercase(),
+            from: e.from,
+            to: e.to,
+        })
+    });
     let mut ui = Ui::new();
     let mut env = TextEnv::new();
     ui.mount_root(View::new(white(), code_editor(code).extension(ext).autofocus()).into_widget());
@@ -1250,9 +1524,7 @@ fn diff_view_bands_added_lines() {
     let base = create_root_signal(String::from("a\nc")); // "b" is an addition vs base
     let mut ui = Ui::new();
     let mut env = TextEnv::new();
-    ui.mount_root(
-        View::new(white(), code_editor(code).diff_base(base).autofocus()).into_widget(),
-    );
+    ui.mount_root(View::new(white(), code_editor(code).diff_base(base).autofocus()).into_widget());
     for _ in 0..3 {
         ui.rebuild_if_dirty();
         ui.layout(&mut env, Size::new(600.0, 400.0));
@@ -1262,7 +1534,10 @@ fn diff_view_bands_added_lines() {
     base.set(String::from("a\nb\nc"));
     ui.rebuild_if_dirty();
     ui.layout(&mut env, Size::new(600.0, 400.0));
-    assert!(with_diff > ui.element_count(), "the added-line band rendered for the diff");
+    assert!(
+        with_diff > ui.element_count(),
+        "the added-line band rendered for the diff"
+    );
 }
 
 #[test]
@@ -1295,5 +1570,8 @@ fn block_widget_reserves_a_row() {
         ui.rebuild_if_dirty();
         ui.layout(&mut env, Size::new(600.0, 400.0));
     }
-    assert!(ui.element_count() > before, "the block widget rendered on its reserved row");
+    assert!(
+        ui.element_count() > before,
+        "the block widget rendered on its reserved row"
+    );
 }

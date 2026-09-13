@@ -21,7 +21,10 @@ pub(crate) fn to_spans(
     let push = |text: &str, kind: TokenKind, spans: &mut Vec<TextSpan>| {
         if !text.is_empty() {
             let st = theme.style(kind);
-            let mut sp = span(text.to_string()).color(st.color).size(fs as f32).font_family(font_family);
+            let mut sp = span(text.to_string())
+                .color(st.color)
+                .size(fs as f32)
+                .font_family(font_family);
             if st.bold {
                 sp = sp.bold();
             }
@@ -63,7 +66,9 @@ pub(crate) fn merge_tokens(lex: &[Token], sem: &[Token]) -> Vec<Token> {
     let mut sem_sorted = sem.to_vec();
     sem_sorted.sort_by_key(|t| t.start);
     let covered = |s: usize, e: usize| -> bool {
-        sem_sorted.iter().any(|t| t.start < e && t.start + t.len > s)
+        sem_sorted
+            .iter()
+            .any(|t| t.start < e && t.start + t.len > s)
     };
     let mut out: Vec<Token> = lex
         .iter()
@@ -86,7 +91,11 @@ pub(crate) fn slice_tokens(tokens: &[Token], from: usize, to: usize) -> Vec<Toke
             // `then_some` evaluates its argument eagerly, so guard with `if` to avoid an
             // `e - s` underflow for tokens entirely outside `from..to` (per-line slicing).
             if e > s {
-                Some(Token { start: s - from, len: e - s, kind: t.kind })
+                Some(Token {
+                    start: s - from,
+                    len: e - s,
+                    kind: t.kind,
+                })
             } else {
                 None
             }
@@ -101,13 +110,28 @@ mod tests {
     #[test]
     fn semantic_tokens_override_lexical() {
         let lex = vec![
-            Token { start: 0, len: 3, kind: TokenKind::Keyword },
-            Token { start: 4, len: 3, kind: TokenKind::Plain },
+            Token {
+                start: 0,
+                len: 3,
+                kind: TokenKind::Keyword,
+            },
+            Token {
+                start: 4,
+                len: 3,
+                kind: TokenKind::Plain,
+            },
         ];
-        let sem = vec![Token { start: 4, len: 3, kind: TokenKind::Type }];
+        let sem = vec![Token {
+            start: 4,
+            len: 3,
+            kind: TokenKind::Type,
+        }];
         let m = merge_tokens(&lex, &sem);
         assert!(m.iter().any(|t| t.start == 4 && t.kind == TokenKind::Type));
         assert!(!m.iter().any(|t| t.start == 4 && t.kind == TokenKind::Plain));
-        assert!(m.iter().any(|t| t.start == 0 && t.kind == TokenKind::Keyword));
+        assert!(
+            m.iter()
+                .any(|t| t.start == 0 && t.kind == TokenKind::Keyword)
+        );
     }
 }

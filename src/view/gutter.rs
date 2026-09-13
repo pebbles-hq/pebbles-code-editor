@@ -25,7 +25,10 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
     let mut marks: HashMap<usize, Color> = HashMap::new();
     if let Some(sig) = f.p.diagnostics {
         for d in sig.get() {
-            marks.insert(line_of(f.src, d.range.0), severity_color(f.theme, d.severity));
+            marks.insert(
+                line_of(f.src, d.range.0),
+                severity_color(f.theme, d.severity),
+            );
         }
     }
     for m in f.ext_gutter_marks {
@@ -44,10 +47,11 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
         if let Some(&color) = marks.get(&n) {
             nums.push(
                 Positioned::new(
-                    container()
-                        .width(4.0)
-                        .height(f.line_px * 0.6)
-                        .decoration(BoxDecoration::new().color(color).radius(BorderRadius::all(2.0))),
+                    container().width(4.0).height(f.line_px * 0.6).decoration(
+                        BoxDecoration::new()
+                            .color(color)
+                            .radius(BorderRadius::all(2.0)),
+                    ),
                 )
                 .left(2.0)
                 .top(y + f.line_px * 0.2)
@@ -64,9 +68,13 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
                     .height(f.line_px)
                     .alignment(Alignment::CENTER)
                     .child(
-                        icon(if is_folded { IconKind::ChevronRight } else { IconKind::ChevronDown })
-                            .size((f.fs * 0.95).max(12.0))
-                            .color(f.theme.gutter_fg),
+                        icon(if is_folded {
+                            IconKind::ChevronRight
+                        } else {
+                            IconKind::ChevronDown
+                        })
+                        .size((f.fs * 0.95).max(12.0))
+                        .color(f.theme.gutter_fg),
                     ),
             )
             .cursor(Cursor::Pointer)
@@ -78,7 +86,10 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
                 });
             }));
             nums.push(
-                Positioned::new(arrow).left(gutter_w - arrow_w).top(y).into_widget(),
+                Positioned::new(arrow)
+                    .left(gutter_w - arrow_w)
+                    .top(y)
+                    .into_widget(),
             );
         }
         let active = n == f.cl;

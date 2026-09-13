@@ -235,7 +235,10 @@ pub struct Selections {
 impl Selections {
     /// A single selection/caret.
     pub fn single(sel: Selection) -> Self {
-        Selections { ranges: vec![sel], primary: 0 }
+        Selections {
+            ranges: vec![sel],
+            primary: 0,
+        }
     }
 
     /// Build from ranges with `primary` the index of the main one, normalizing (sort + merge
@@ -263,7 +266,10 @@ impl Selections {
             .iter()
             .position(|s| s.min() <= ph && ph <= s.max())
             .unwrap_or(merged.len() - 1);
-        Selections { ranges: merged, primary }
+        Selections {
+            ranges: merged,
+            primary,
+        }
     }
 
     /// The primary (main) selection — the one status/current-line/autoscroll follow.
@@ -744,7 +750,11 @@ mod tests {
     fn selections_primary_tracks_through_merge() {
         // The primary was the range at head 8; after merge it points at the merged range.
         let sels = Selections::new(
-            vec![Selection::caret(0), Selection::range(8, 4), Selection::range(6, 9)],
+            vec![
+                Selection::caret(0),
+                Selection::range(8, 4),
+                Selection::range(6, 9),
+            ],
             1, // primary = the (8,4) range, head at 8
         );
         assert_eq!(sels.len(), 2);
@@ -779,8 +789,16 @@ mod tests {
             selection: Selections::new(vec![Selection::caret(0), Selection::caret(1)], 0),
         };
         let cs = ChangeSet::from_changes(vec![
-            Change { from: 0, to: 0, insert: "X".into() },
-            Change { from: 1, to: 1, insert: "X".into() },
+            Change {
+                from: 0,
+                to: 0,
+                insert: "X".into(),
+            },
+            Change {
+                from: 1,
+                to: 1,
+                insert: "X".into(),
+            },
         ]);
         let tx = Transaction::change_and_select(
             cs,

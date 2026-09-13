@@ -167,7 +167,11 @@ pub(crate) fn next_word(src: &str, byte: usize) -> usize {
 pub(crate) fn word_at(src: &str, byte: usize) -> (usize, usize) {
     let b = byte.min(src.len());
     let on_word = src[b..].chars().next().is_some_and(is_word)
-        || (b > 0 && src[prev_char(src, b)..b].chars().next().is_some_and(is_word));
+        || (b > 0
+            && src[prev_char(src, b)..b]
+                .chars()
+                .next()
+                .is_some_and(is_word));
     if on_word {
         let mut s = b;
         while s > 0 {
@@ -199,7 +203,9 @@ pub(crate) fn find_from(src: &str, needle: &str, from: usize) -> Option<usize> {
         return None;
     }
     let from = from.min(src.len());
-    src.get(from..).and_then(|s| s.find(needle)).map(|i| from + i)
+    src.get(from..)
+        .and_then(|s| s.find(needle))
+        .map(|i| from + i)
 }
 
 // ---------------------------------------------------------------------------

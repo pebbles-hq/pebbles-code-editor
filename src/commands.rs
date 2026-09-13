@@ -98,7 +98,10 @@ pub(crate) fn apply_key(
     };
     // Replace every selection (or insert at every caret) with `ins`.
     let replace = |ins: &str, coalesce: Coalesce| {
-        edit_ranges(&|r: Selection| (r.min(), r.max(), ins.to_string()), coalesce);
+        edit_ranges(
+            &|r: Selection| (r.min(), r.max(), ins.to_string()),
+            coalesce,
+        );
     };
     // Move all cursors (edits nothing, records no history); ends any typing run.
     let select_many = |next: Selections| {
@@ -135,8 +138,16 @@ pub(crate) fn apply_key(
                             code,
                             Transaction::change_and_select(
                                 ChangeSet::from_changes(vec![
-                                    Change { from: ls, to: ls + cut, insert: String::new() },
-                                    Change { from: head, to: head, insert: s.clone() },
+                                    Change {
+                                        from: ls,
+                                        to: ls + cut,
+                                        insert: String::new(),
+                                    },
+                                    Change {
+                                        from: head,
+                                        to: head,
+                                        insert: s.clone(),
+                                    },
                                 ]),
                                 Selections::single(Selection::caret(head - cut + s.len())),
                             ),
@@ -154,8 +165,7 @@ pub(crate) fn apply_key(
                 let ch = s.chars().next().unwrap();
                 let is_quote = matches!(ch, '"' | '\'' | '`');
                 let opener = cfg.brackets.iter().find(|(o, _)| *o == ch).copied();
-                let closer_or_quote =
-                    cfg.brackets.iter().any(|(_, c)| *c == ch) || is_quote;
+                let closer_or_quote = cfg.brackets.iter().any(|(_, c)| *c == ch) || is_quote;
                 let head = primary.head;
                 let at_caret = src.get(head..).and_then(|s| s.chars().next());
                 if closer_or_quote && at_caret == Some(ch) {
@@ -168,16 +178,30 @@ pub(crate) fn apply_key(
                     // Don't pair a quote right after a word char (apostrophes in `don't`).
                     let after_word = is_quote
                         && head > 0
-                        && src[..head].chars().next_back().is_some_and(|p| p.is_alphanumeric());
+                        && src[..head]
+                            .chars()
+                            .next_back()
+                            .is_some_and(|p| p.is_alphanumeric());
                     if !after_word {
                         let (lo, hi) = (primary.min(), primary.max());
                         let (cs, caret) = if primary.is_empty() {
-                            (ChangeSet::insert(head, format!("{o}{c}")), head + o.len_utf8())
+                            (
+                                ChangeSet::insert(head, format!("{o}{c}")),
+                                head + o.len_utf8(),
+                            )
                         } else {
                             (
                                 ChangeSet::from_changes(vec![
-                                    Change { from: lo, to: lo, insert: o.to_string() },
-                                    Change { from: hi, to: hi, insert: c.to_string() },
+                                    Change {
+                                        from: lo,
+                                        to: lo,
+                                        insert: o.to_string(),
+                                    },
+                                    Change {
+                                        from: hi,
+                                        to: hi,
+                                        insert: c.to_string(),
+                                    },
                                 ]),
                                 hi + o.len_utf8(),
                             )
@@ -240,9 +264,11 @@ pub(crate) fn apply_key(
                         .collect();
                     // Language-aware: add a level after any of the language's opening brackets
                     // (or a `:`, for Python-style block headers).
-                    let opens_block = cur.trim_end().chars().next_back().is_some_and(|c| {
-                        c == ':' || cfg.brackets.iter().any(|&(o, _)| o == c)
-                    });
+                    let opens_block = cur
+                        .trim_end()
+                        .chars()
+                        .next_back()
+                        .is_some_and(|c| c == ':' || cfg.brackets.iter().any(|&(o, _)| o == c));
                     if opens_block {
                         indent.push_str(tab);
                     }
@@ -333,7 +359,11 @@ pub(crate) fn apply_key(
             let moved: Vec<Selection> = ranges
                 .iter()
                 .map(|&r| {
-                    let col = if is_multi { col_of(&src, r.head) } else { goal.peek() };
+                    let col = if is_multi {
+                        col_of(&src, r.head)
+                    } else {
+                        goal.peek()
+                    };
                     let target = match motion {
                         Motion::Left => prev_char(&src, r.head),
                         Motion::Right => next_char(&src, r.head),
@@ -376,7 +406,8 @@ pub(crate) fn apply_key(
             } else {
                 let needle = &src[primary.min()..primary.max()];
                 let from = ranges.iter().map(|r| r.max()).max().unwrap_or(0);
-                if let Some(start) = find_from(&src, needle, from).or_else(|| find_from(&src, needle, 0))
+                if let Some(start) =
+                    find_from(&src, needle, from).or_else(|| find_from(&src, needle, 0))
                 {
                     let end = start + needle.len();
                     if !ranges.iter().any(|r| r.min() == start && r.max() == end) {
@@ -574,4 +605,3 @@ pub(crate) fn apply_key(
         }
     }
 }
-

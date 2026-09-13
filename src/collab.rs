@@ -8,8 +8,11 @@
 /// A pure insert has `from == to`; a pure delete has an empty `insert`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Edit {
+    /// Start byte of the replaced range in the OLD text.
     pub from: usize,
+    /// End byte (exclusive) of the replaced range in the OLD text.
     pub to: usize,
+    /// The text inserted in place of `from..to`.
     pub insert: String,
 }
 
@@ -38,7 +41,11 @@ pub(crate) fn diff(old: &str, new: &str) -> Option<Edit> {
     let to = byte(&o, o.len() - j, old.len());
     let ins_start = byte(&n, i, new.len());
     let ins_end = byte(&n, n.len() - j, new.len());
-    Some(Edit { from, to, insert: new[ins_start..ins_end].to_string() })
+    Some(Edit {
+        from,
+        to,
+        insert: new[ins_start..ins_end].to_string(),
+    })
 }
 
 /// Map a byte position from the OLD text to the NEW text across `e`.
@@ -61,7 +68,11 @@ mod tests {
     fn diff_insert_in_middle() {
         assert_eq!(
             diff("abcf", "abcdef"),
-            Some(Edit { from: 3, to: 3, insert: "de".into() })
+            Some(Edit {
+                from: 3,
+                to: 3,
+                insert: "de".into()
+            })
         );
     }
 
@@ -69,13 +80,24 @@ mod tests {
     fn diff_delete() {
         assert_eq!(
             diff("hello world", "hello"),
-            Some(Edit { from: 5, to: 11, insert: String::new() })
+            Some(Edit {
+                from: 5,
+                to: 11,
+                insert: String::new()
+            })
         );
     }
 
     #[test]
     fn diff_replace_and_none() {
-        assert_eq!(diff("cat", "cot"), Some(Edit { from: 1, to: 2, insert: "o".into() }));
+        assert_eq!(
+            diff("cat", "cot"),
+            Some(Edit {
+                from: 1,
+                to: 2,
+                insert: "o".into()
+            })
+        );
         assert_eq!(diff("same", "same"), None);
     }
 
@@ -83,12 +105,23 @@ mod tests {
     fn diff_is_char_boundary_safe() {
         // Inserting after a multi-byte char must land on a boundary.
         let e = diff("café", "café!").unwrap();
-        assert_eq!(e, Edit { from: 5, to: 5, insert: "!".into() });
+        assert_eq!(
+            e,
+            Edit {
+                from: 5,
+                to: 5,
+                insert: "!".into()
+            }
+        );
     }
 
     #[test]
     fn map_pos_shifts_after_insert() {
-        let e = Edit { from: 3, to: 3, insert: "de".into() }; // "abcf" -> "abcdef"
+        let e = Edit {
+            from: 3,
+            to: 3,
+            insert: "de".into(),
+        }; // "abcf" -> "abcdef"
         assert_eq!(map_pos(2, &e), 2); // before the edit — unchanged
         assert_eq!(map_pos(3, &e), 3); // at the insert point
         assert_eq!(map_pos(4, &e), 6); // after — shifted by +2
@@ -96,7 +129,11 @@ mod tests {
 
     #[test]
     fn map_pos_across_delete() {
-        let e = Edit { from: 5, to: 11, insert: String::new() }; // delete "  world"
+        let e = Edit {
+            from: 5,
+            to: 11,
+            insert: String::new(),
+        }; // delete "  world"
         assert_eq!(map_pos(11, &e), 5);
         assert_eq!(map_pos(8, &e), 5); // inside the deletion collapses to `from`
     }

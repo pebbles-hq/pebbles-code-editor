@@ -99,19 +99,34 @@ Its source (`examples/demo/src/ide/`) is domain-split — `workspace` (state), `
 `tabs`, `editor_pane`, `search_panel`, `settings`, `problems`, `statusbar`, `providers` —
 one concern per file, so it doubles as a worked example of structuring a Pebbles app.
 
-## Status & roadmap
+## Status
 
-The editing engine, highlighting, gutter, selection, caret, and mouse are working today.
-Known limitations and what's next:
+Feature-complete for its scope and used within the Pebbles ecosystem via a git dependency;
+**not yet published to crates.io** (pre-1.0 — any `0.x` release may break). The full feature
+list is in [`CHANGELOG.md`](CHANGELOG.md); the design and layering are in
+[`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-- **Undo / redo** and IME composition.
-- **Caret blink** and viewport scroll-to-caret on keyboard navigation.
-- Horizontal scrolling for very long lines (they currently extend past the viewport).
-- Bracket matching, code folding, search / replace, multiple selections.
-- A completion / diagnostics surface an LSP client can drive.
-- Glyph-accurate metrics (v1 uses a monospace advance ratio; fine for mono fonts, and
-  the one spot to refine for proportional or ligature-heavy fonts).
+Shipped: multi-cursor editing with undo/redo, 17-language highlighting, folding, soft wrap,
+search/replace, the full IntelliSense provider set (completion/hover/signature/diagnostics/
+inlay/definition/format + snippets), an extension/plugin API, full theming, IME, drag-and-drop,
+screen-reader semantics, OT/CRDT-ready collab hooks, large-file mode, inline diff, and
+scroll/fold view-state persistence.
+
+Known scope limits (larger, niche follow-ups): a side-by-side **merge** view (inline diff is
+done), mid-line **inline** replace-widgets (block widgets are done), and a full bidi **caret**
+on the monospace grid (bidi text already displays correctly).
+
+## Quality
+
+- **No `unsafe`** (`#![forbid(unsafe_code)]`) and **every public item documented**
+  (`#![deny(missing_docs)]`).
+- **Panic-free on malformed input** — guarded by [`tests/robustness.rs`]; ~100 unit + e2e tests.
+- **CI** enforces `fmt`, `clippy -D warnings`, tests, and `doc -D warnings` on every push/PR.
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the module map, conventions, and the pre-push gates.
 
 ## License
 
-MIT OR Apache-2.0.
+Licensed under the [Apache License, Version 2.0](LICENSE).

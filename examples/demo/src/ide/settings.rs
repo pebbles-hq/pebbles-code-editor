@@ -58,16 +58,20 @@ pub fn panel(s: Settings) -> AnyWidget {
     let font_row = row(children![
         column(children![
             text("Font size").size(13.0).color(c.foreground),
-            text("editor text size (px)").size(11.0).color(c.muted_foreground),
+            text("editor text size (px)")
+                .size(11.0)
+                .color(c.muted_foreground),
         ])
         .main_axis_size(MainAxisSize::Min),
         spacer(),
         icon_button(IconKind::Minus)
             .size(15.0)
             .on_pressed(move || font.set((font.peek() - 0.5).max(9.0))),
-        container()
-            .padding(EdgeInsets::symmetric(8.0, 0.0))
-            .child(text(format!("{:.1}", font.get())).size(12.5).color(c.foreground)),
+        container().padding(EdgeInsets::symmetric(8.0, 0.0)).child(
+            text(format!("{:.1}", font.get()))
+                .size(12.5)
+                .color(c.foreground)
+        ),
         icon_button(IconKind::Plus)
             .size(15.0)
             .on_pressed(move || font.set((font.peek() + 0.5).min(28.0))),

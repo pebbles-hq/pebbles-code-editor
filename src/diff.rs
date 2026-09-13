@@ -49,7 +49,11 @@ pub(crate) fn diff_lines(base: &str, cur: &str) -> LineDiff {
         }
     }
     let removed_at_end = i < n;
-    LineDiff { added, removed_before, removed_at_end }
+    LineDiff {
+        added,
+        removed_before,
+        removed_at_end,
+    }
 }
 
 #[cfg(test)]

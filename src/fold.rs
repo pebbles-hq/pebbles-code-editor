@@ -86,20 +86,38 @@ impl DisplayMap {
             row0[line] = rows.len();
             let len = char_lens.get(line).copied().unwrap_or(0);
             if wrap_cols == 0 || len <= wrap_cols {
-                rows.push(Row { line, start: 0, end: len, first: true, gap: false });
+                rows.push(Row {
+                    line,
+                    start: 0,
+                    end: len,
+                    first: true,
+                    gap: false,
+                });
             } else {
                 let mut s = 0;
                 let mut first = true;
                 while s < len {
                     let e = (s + wrap_cols).min(len);
-                    rows.push(Row { line, start: s, end: e, first, gap: false });
+                    rows.push(Row {
+                        line,
+                        start: s,
+                        end: e,
+                        first,
+                        gap: false,
+                    });
                     s = e;
                     first = false;
                 }
             }
             // Reserve blank rows below the line for a block widget.
             for _ in 0..gaps.get(line).copied().unwrap_or(0) {
-                rows.push(Row { line, start: 0, end: 0, first: false, gap: true });
+                rows.push(Row {
+                    line,
+                    start: 0,
+                    end: 0,
+                    first: false,
+                    gap: true,
+                });
             }
         }
         DisplayMap { rows, row0, hidden }
@@ -122,10 +140,13 @@ impl DisplayMap {
     /// The visual row at `row` (clamped).
     pub(crate) fn row_at(&self, row: usize) -> Row {
         let row = row.min(self.rows.len().saturating_sub(1));
-        self.rows
-            .get(row)
-            .copied()
-            .unwrap_or(Row { line: 0, start: 0, end: 0, first: true, gap: false })
+        self.rows.get(row).copied().unwrap_or(Row {
+            line: 0,
+            start: 0,
+            end: 0,
+            first: true,
+            gap: false,
+        })
     }
 
     /// The first reserved gap-row index directly below `line`, if any (block-widget anchor).
@@ -184,9 +205,36 @@ mod tests {
         // One 25-char line, wrap at 10 → 3 rows.
         let m = DisplayMap::new(1, &folds(&[]), &[], &[25], 10, &[]);
         assert_eq!(m.rows(), 3);
-        assert_eq!(m.row_at(0), Row { line: 0, start: 0, end: 10, first: true, gap: false });
-        assert_eq!(m.row_at(1), Row { line: 0, start: 10, end: 20, first: false, gap: false });
-        assert_eq!(m.row_at(2), Row { line: 0, start: 20, end: 25, first: false, gap: false });
+        assert_eq!(
+            m.row_at(0),
+            Row {
+                line: 0,
+                start: 0,
+                end: 10,
+                first: true,
+                gap: false
+            }
+        );
+        assert_eq!(
+            m.row_at(1),
+            Row {
+                line: 0,
+                start: 10,
+                end: 20,
+                first: false,
+                gap: false
+            }
+        );
+        assert_eq!(
+            m.row_at(2),
+            Row {
+                line: 0,
+                start: 20,
+                end: 25,
+                first: false,
+                gap: false
+            }
+        );
         // col 14 lands on row 1, x-col 4.
         assert_eq!(m.place(0, 14), (1, 4));
         assert_eq!(m.place(0, 0), (0, 0));

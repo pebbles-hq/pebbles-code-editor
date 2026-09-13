@@ -18,7 +18,12 @@ pub fn bar(ws: Workspace, s: Settings) -> AnyWidget {
         .cross_axis_alignment(CrossAxisAlignment::Center)
         .into_widget()
     };
-    let txt = |label: String| text(label).size(11.5).color(c.primary_foreground).into_widget();
+    let txt = |label: String| {
+        text(label)
+            .size(11.5)
+            .color(c.primary_foreground)
+            .into_widget()
+    };
 
     let (lang, problems, dirty) = match ws.active.get() {
         Some(idx) => {
@@ -39,7 +44,11 @@ pub fn bar(ws: Workspace, s: Settings) -> AnyWidget {
                 gap_w(16.0),
                 seg(lucide::TRIANGLE_ALERT, problems.to_string()),
                 spacer(),
-                txt(if dirty { "● unsaved".to_string() } else { "saved".to_string() }),
+                txt(if dirty {
+                    "● unsaved".to_string()
+                } else {
+                    "saved".to_string()
+                }),
                 gap_w(16.0),
                 txt("Spaces: 4".to_string()),
                 gap_w(16.0),
@@ -49,7 +58,11 @@ pub fn bar(ws: Workspace, s: Settings) -> AnyWidget {
                 gap_w(16.0),
                 txt(lang),
                 gap_w(16.0),
-                txt(if s.plugins.get() { "Plugins: on".to_string() } else { "Plugins: off".to_string() }),
+                txt(if s.plugins.get() {
+                    "Plugins: on".to_string()
+                } else {
+                    "Plugins: off".to_string()
+                }),
             ])
             .cross_axis_alignment(CrossAxisAlignment::Center),
         )

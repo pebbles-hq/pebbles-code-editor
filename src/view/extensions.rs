@@ -34,11 +34,15 @@ pub(crate) fn decoration_layers(f: &Frame, decos: &[Decoration]) -> Vec<AnyWidge
     }
     // Range backgrounds + underlines.
     for d in decos {
-        for line in line_of(f.src, d.range.0).max(f.first_line)
-            ..=line_of(f.src, d.range.1).min(f.last_line)
+        for line in
+            line_of(f.src, d.range.0).max(f.first_line)..=line_of(f.src, d.range.1).min(f.last_line)
         {
             let (la, lb) = (line_of(f.src, d.range.0), line_of(f.src, d.range.1));
-            let start_col = if line == la { col_of(f.src, d.range.0) } else { 0 };
+            let start_col = if line == la {
+                col_of(f.src, d.range.0)
+            } else {
+                0
+            };
             let end_col = if line == lb {
                 col_of(f.src, d.range.1)
             } else {
@@ -50,10 +54,11 @@ pub(crate) fn decoration_layers(f: &Frame, decos: &[Decoration]) -> Vec<AnyWidge
             if let Some(bg) = d.style.background {
                 layers.push(
                     Positioned::new(
-                        container()
-                            .width(w)
-                            .height(f.line_px)
-                            .decoration(BoxDecoration::new().color(bg).radius(BorderRadius::all(2.0))),
+                        container().width(w).height(f.line_px).decoration(
+                            BoxDecoration::new()
+                                .color(bg)
+                                .radius(BorderRadius::all(2.0)),
+                        ),
                     )
                     .left(x)
                     .top(y)
@@ -153,7 +158,11 @@ pub(crate) fn palette(
             container()
                 .height(26.0)
                 .padding(EdgeInsets::symmetric(8.0, 0.0))
-                .decoration(BoxDecoration::new().color(bg).radius(BorderRadius::all(4.0)))
+                .decoration(
+                    BoxDecoration::new()
+                        .color(bg)
+                        .radius(BorderRadius::all(4.0)),
+                )
                 .alignment(Alignment::CENTER_LEFT)
                 .child(
                     text(cmd.title().to_string())

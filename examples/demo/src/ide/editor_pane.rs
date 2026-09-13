@@ -37,11 +37,15 @@ fn sample_extensions() -> Vec<Extension> {
                 ctx.replace(a, b, up);
             }
         }))
-        .command(Command::new("edit.wrap-println", "Wrap Selection in println!", |ctx| {
-            let (a, b) = ctx.selection();
-            let inner = ctx.text()[a..b].to_string();
-            ctx.replace(a, b, format!("println!(\"{{}}\", {inner});"));
-        }))
+        .command(Command::new(
+            "edit.wrap-println",
+            "Wrap Selection in println!",
+            |ctx| {
+                let (a, b) = ctx.selection();
+                let inner = ctx.text()[a..b].to_string();
+                ctx.replace(a, b, format!("println!(\"{{}}\", {inner});"));
+            },
+        ))
         .keybinding("Ctrl+U", "edit.upper");
     let theming = extension("accent-tweaks").theme(|mut t| {
         t.syntax.string = t.syntax.string.bold();
@@ -64,7 +68,11 @@ fn sample_extensions() -> Vec<Extension> {
                             .color(Color::from_rgba8(255, 190, 60, 255)),
                     )
                     .into_widget();
-                BlockWidget { line, height: 24.0, widget: panel }
+                BlockWidget {
+                    line,
+                    height: 24.0,
+                    widget: panel,
+                }
             })
             .collect()
     });
@@ -96,7 +104,11 @@ pub fn pane(ws: Workspace, s: Settings, height: f64) -> AnyWidget {
         .on_scroll(move |px| scroll.set(px))
         .folds(f.folds)
         .diff_base(f.saved) // inline diff of unsaved edits (git-gutter style)
-        .theme(if s.light.get() { EditorTheme::light() } else { EditorTheme::dark() })
+        .theme(if s.light.get() {
+            EditorTheme::light()
+        } else {
+            EditorTheme::dark()
+        })
         .height(height.max(120.0))
         .font_size(s.font_size.get())
         .line_height(if relaxed { 2.0 } else { 1.6 })
@@ -107,7 +119,11 @@ pub fn pane(ws: Workspace, s: Settings, height: f64) -> AnyWidget {
         .sticky_scroll(s.sticky.get())
         .indent_guides(s.guides.get())
         .render_whitespace(s.whitespace.get())
-        .rulers(if s.ruler.get() { vec![80usize] } else { Vec::new() })
+        .rulers(if s.ruler.get() {
+            vec![80usize]
+        } else {
+            Vec::new()
+        })
         .completion(providers::completion())
         .hover(providers::hover())
         .signature_help(providers::signature())
@@ -119,10 +135,7 @@ pub fn pane(ws: Workspace, s: Settings, height: f64) -> AnyWidget {
         editor = editor.extensions(sample_extensions());
     }
 
-    container()
-        .color(c.background)
-        .child(editor)
-        .into_widget()
+    container().color(c.background).child(editor).into_widget()
 }
 
 /// The empty-state shown when no file is open.

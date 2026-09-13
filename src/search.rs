@@ -29,11 +29,7 @@ pub(crate) fn find_all(src: &str, query: &str, opts: &Options) -> Vec<(usize, us
 
 /// Whether `[start, end)` is bounded by non-word chars (or doc edges) — the whole-word test.
 fn is_whole_word(src: &str, start: usize, end: usize) -> bool {
-    let before_ok = start == 0
-        || !src[..start]
-            .chars()
-            .next_back()
-            .is_some_and(is_word);
+    let before_ok = start == 0 || !src[..start].chars().next_back().is_some_and(is_word);
     let after_ok = end >= src.len() || !src[end..].chars().next().is_some_and(is_word);
     before_ok && after_ok
 }
@@ -55,7 +51,14 @@ fn literal_matches(src: &str, query: &str, opts: &Options) -> Vec<(usize, usize)
         // for the common case; for correctness on any input we compare lowercased strings and
         // map the lowercased index back — since lowercasing can change byte length, we instead
         // walk char windows. Simpler + robust: use the regex engine's case-insensitive flag.
-        return regex_matches(src, &regex::escape(query), &Options { regex: true, ..*opts });
+        return regex_matches(
+            src,
+            &regex::escape(query),
+            &Options {
+                regex: true,
+                ..*opts
+            },
+        );
     }
     out
 }

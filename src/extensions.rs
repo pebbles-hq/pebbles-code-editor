@@ -44,7 +44,9 @@ pub struct DecoStyle {
 /// the fixed grid — they'd need line reflow.
 #[derive(Clone, Copy, Debug)]
 pub struct Decoration {
+    /// The byte range `[start, end)` the decoration styles.
     pub range: (usize, usize),
+    /// How the range is styled (background / underline / line background).
     pub style: DecoStyle,
 }
 
@@ -84,15 +86,20 @@ impl Decoration {
 /// A colored marker in the gutter for a line (breakpoints, VCS gutter, diagnostics, …).
 #[derive(Clone, Copy, Debug)]
 pub struct GutterMark {
+    /// The 0-based buffer line to mark.
     pub line: usize,
+    /// The dot color.
     pub color: Color,
 }
 
 /// A block widget: a full-width `widget` rendered on its own row(s) directly below `line`,
 /// reserving `height` logical px of vertical space (inline error panels, images, blame, …).
 pub struct BlockWidget {
+    /// The 0-based buffer line the widget renders below.
     pub line: usize,
+    /// Reserved height in logical px (rounded up to whole rows).
     pub height: f64,
+    /// The widget to render on the reserved row(s).
     pub widget: AnyWidget,
 }
 
@@ -102,11 +109,17 @@ pub struct BlockWidget {
 /// (e.g. a "2-space indent" plugin) without the caller wiring every knob.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ConfigPatch {
+    /// Override the indent width (columns).
     pub tab_size: Option<usize>,
+    /// Override indent-with-spaces vs. a tab character.
     pub insert_spaces: Option<bool>,
+    /// Override the indent-guides toggle.
     pub indent_guides: Option<bool>,
+    /// Override the render-whitespace toggle.
     pub render_whitespace: Option<bool>,
+    /// Override the bracket-matching toggle.
     pub match_brackets: Option<bool>,
+    /// Override the auto-close-brackets toggle.
     pub auto_close: Option<bool>,
 }
 
@@ -147,8 +160,10 @@ impl EditContext {
             ),
             Coalesce::Never,
         );
-        self.goal
-            .set(col_of(&self.state.peek().text(), self.state.peek().primary().head));
+        self.goal.set(col_of(
+            &self.state.peek().text(),
+            self.state.peek().primary().head,
+        ));
     }
     /// Insert `text` at the caret (replacing any selection).
     pub fn insert(&self, text: impl Into<String>) {
@@ -175,7 +190,11 @@ pub struct Command {
 
 impl Command {
     /// Create a command: a stable `id`, a human `title` (shown in the palette), and the action.
-    pub fn new(id: impl Into<String>, title: impl Into<String>, run: impl Fn(&EditContext) + 'static) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        title: impl Into<String>,
+        run: impl Fn(&EditContext) + 'static,
+    ) -> Self {
         Command {
             id: id.into(),
             title: title.into(),
@@ -274,7 +293,10 @@ impl Extension {
         self
     }
     /// Declare read-only byte ranges — edits overlapping them are vetoed.
-    pub fn read_only_ranges(mut self, f: impl Fn(&Snapshot) -> Vec<(usize, usize)> + 'static) -> Self {
+    pub fn read_only_ranges(
+        mut self,
+        f: impl Fn(&Snapshot) -> Vec<(usize, usize)> + 'static,
+    ) -> Self {
         self.read_only = Some(Rc::new(f));
         self
     }

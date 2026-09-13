@@ -49,4 +49,3 @@ pub(crate) fn is_ident_start(b: u8) -> bool {
 pub(crate) fn is_ident_continue(b: u8) -> bool {
     b == b'_' || b.is_ascii_alphanumeric() || b >= 0x80
 }
-

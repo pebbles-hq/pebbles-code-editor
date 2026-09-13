@@ -78,7 +78,16 @@ pub fn ide() -> AnyWidget {
     ws.open_file(0);
     ws.open_file(3);
 
-    component_props(render_shell, ShellProps { ws, s: settings, panel, problems_open }).into_widget()
+    component_props(
+        render_shell,
+        ShellProps {
+            ws,
+            s: settings,
+            panel,
+            problems_open,
+        },
+    )
+    .into_widget()
 }
 
 /// The reactive shell's props (state created once in [`ide`]).
@@ -103,8 +112,11 @@ fn shell(
 
     // Available editor height = window − chrome − (problems dock, if open).
     let win_h = media_query().size.height;
-    let editor_h =
-        win_h - MENUBAR_H - TABBAR_H - STATUS_H - if problems_open.get() { PROBLEMS_H } else { 0.0 };
+    let editor_h = win_h
+        - MENUBAR_H
+        - TABBAR_H
+        - STATUS_H
+        - if problems_open.get() { PROBLEMS_H } else { 0.0 };
 
     // Sidebar content for the selected activity.
     let sidebar_body = match panel.get() {
@@ -131,12 +143,16 @@ fn shell(
         editor_col.push(
             container()
                 .height(PROBLEMS_H)
-                .decoration(BoxDecoration::new().color(c.background).border(Border::only(
-                    BorderSide::new(c.border, 1.0),
-                    BorderSide::NONE,
-                    BorderSide::NONE,
-                    BorderSide::NONE,
-                )))
+                .decoration(
+                    BoxDecoration::new()
+                        .color(c.background)
+                        .border(Border::only(
+                            BorderSide::new(c.border, 1.0),
+                            BorderSide::NONE,
+                            BorderSide::NONE,
+                            BorderSide::NONE,
+                        )),
+                )
                 .child(problems::dock(ws.clone()))
                 .into_widget(),
         );
@@ -175,7 +191,11 @@ fn activity_bar(panel: Signal<Panel>, problems_open: Signal<bool>) -> AnyWidget 
     let c = theme().colors;
     let item = move |ic: pebbles::render::IconData, p: Panel| {
         let active = panel.get() == p;
-        let col = if active { c.foreground } else { c.muted_foreground };
+        let col = if active {
+            c.foreground
+        } else {
+            c.muted_foreground
+        };
         GestureDetector::new(
             container()
                 .width(48.0)
@@ -184,7 +204,14 @@ fn activity_bar(panel: Signal<Panel>, problems_open: Signal<bool>) -> AnyWidget 
                     BorderSide::NONE,
                     BorderSide::NONE,
                     BorderSide::NONE,
-                    BorderSide::new(if active { c.accent } else { Color::from_rgba8(0, 0, 0, 0) }, 2.0),
+                    BorderSide::new(
+                        if active {
+                            c.accent
+                        } else {
+                            Color::from_rgba8(0, 0, 0, 0)
+                        },
+                        2.0,
+                    ),
                 )))
                 .alignment(Alignment::CENTER)
                 .child(icon(ic).size(21.0).color(col)),
@@ -201,11 +228,11 @@ fn activity_bar(panel: Signal<Panel>, problems_open: Signal<bool>) -> AnyWidget 
                 .width(48.0)
                 .height(46.0)
                 .alignment(Alignment::CENTER)
-                .child(
-                    icon(lucide::PANEL_BOTTOM)
-                        .size(20.0)
-                        .color(if on { c.foreground } else { c.muted_foreground }),
-                ),
+                .child(icon(lucide::PANEL_BOTTOM).size(20.0).color(if on {
+                    c.foreground
+                } else {
+                    c.muted_foreground
+                })),
         )
         .cursor(Cursor::Pointer)
         .on_tap(action(move || problems_open.set(!problems_open.peek())))
@@ -268,14 +295,44 @@ fn menu_bar(ws: Workspace, s: Settings, problems_open: Signal<bool>) -> AnyWidge
     ];
 
     let edit_menu = vec![
-        menu_item("Undo").shortcut("Ctrl+Z").on_select(|| { dispatch_key(KeyInput::Undo); }).into(),
-        menu_item("Redo").shortcut("Ctrl+Y").on_select(|| { dispatch_key(KeyInput::Redo); }).into(),
+        menu_item("Undo")
+            .shortcut("Ctrl+Z")
+            .on_select(|| {
+                dispatch_key(KeyInput::Undo);
+            })
+            .into(),
+        menu_item("Redo")
+            .shortcut("Ctrl+Y")
+            .on_select(|| {
+                dispatch_key(KeyInput::Redo);
+            })
+            .into(),
         menu_separator(),
-        menu_item("Find").shortcut("Ctrl+F").on_select(|| { dispatch_key(KeyInput::Find); }).into(),
-        menu_item("Replace").shortcut("Ctrl+H").on_select(|| { dispatch_key(KeyInput::Replace); }).into(),
-        menu_item("Command Palette").shortcut("Ctrl+P").on_select(|| { dispatch_key(KeyInput::CommandPalette); }).into(),
+        menu_item("Find")
+            .shortcut("Ctrl+F")
+            .on_select(|| {
+                dispatch_key(KeyInput::Find);
+            })
+            .into(),
+        menu_item("Replace")
+            .shortcut("Ctrl+H")
+            .on_select(|| {
+                dispatch_key(KeyInput::Replace);
+            })
+            .into(),
+        menu_item("Command Palette")
+            .shortcut("Ctrl+P")
+            .on_select(|| {
+                dispatch_key(KeyInput::CommandPalette);
+            })
+            .into(),
         menu_separator(),
-        menu_item("Format Document").shortcut("Shift+Alt+F").on_select(|| { dispatch_key(KeyInput::Format); }).into(),
+        menu_item("Format Document")
+            .shortcut("Shift+Alt+F")
+            .on_select(|| {
+                dispatch_key(KeyInput::Format);
+            })
+            .into(),
     ];
 
     let (mm, sk, gd) = (s.minimap, s.sticky, s.guides);
@@ -287,7 +344,9 @@ fn menu_bar(ws: Workspace, s: Settings, problems_open: Signal<bool>) -> AnyWidge
         menu_check("Whitespace", wp.get(), move |v| wp.set(v)),
         menu_separator(),
         menu_check("Light theme", lt.get(), move |v| lt.set(v)),
-        menu_check("Problems panel", problems_open.get(), move |v| problems_open.set(v)),
+        menu_check("Problems panel", problems_open.get(), move |v| {
+            problems_open.set(v)
+        }),
     ];
 
     container()
@@ -302,9 +361,12 @@ fn menu_bar(ws: Workspace, s: Settings, problems_open: Signal<bool>) -> AnyWidge
         .alignment(Alignment::CENTER_LEFT)
         .child(
             row(children![
-                container()
-                    .padding(EdgeInsets::symmetric(8.0, 0.0))
-                    .child(text("Pebbles IDE").size(12.5).weight(700.0).color(c.foreground)),
+                container().padding(EdgeInsets::symmetric(8.0, 0.0)).child(
+                    text("Pebbles IDE")
+                        .size(12.5)
+                        .weight(700.0)
+                        .color(c.foreground)
+                ),
                 menubar()
                     .menu("File", file_menu)
                     .menu("Edit", edit_menu)

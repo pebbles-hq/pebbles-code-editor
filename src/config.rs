@@ -15,7 +15,6 @@ use crate::providers::{
 use crate::theme::EditorTheme;
 use crate::view::render_editor;
 
-
 /// Build a code editor bound to `code`. Configure fluently, then drop it into any tree.
 pub fn code_editor(code: Signal<String>) -> CodeEditor {
     CodeEditor {
@@ -284,6 +283,8 @@ impl CodeEditor {
         self.extensions.extend(exts);
         self
     }
+    /// Overlay provider/LSP **semantic tokens** on top of the lexical highlighting (a reactive
+    /// list). Semantic tokens win on any overlap and re-highlight when the signal changes.
     pub fn semantic_tokens(mut self, tokens: Signal<Vec<Token>>) -> Self {
         self.semantic = Some(tokens);
         self

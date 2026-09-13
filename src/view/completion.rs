@@ -90,7 +90,9 @@ pub(crate) fn accept(
     session: Signal<Option<Session>>,
 ) {
     let Some(s) = session.peek() else { return };
-    let Some(item) = s.items.get(s.selected) else { return };
+    let Some(item) = s.items.get(s.selected) else {
+        return;
+    };
     let caret = state.peek().primary().head;
     let (text, caret_off) = expand_snippet(&item.insert);
     let tx = Transaction::change_and_select(

@@ -10,10 +10,13 @@ name = "pebbles-code-editor"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.90"
-description = "Embeddable, syntax-highlighting code editor widget for the Pebbles GUI framework — a custom editing engine with pluggable languages, a gutter, selection, and swappable themes. Part of the Pebbles ecosystem."
+description = "Embeddable, syntax-highlighting code editor widget for the Pebbles GUI framework — a custom editing engine with pluggable languages, multi-cursor, folding, soft wrap, IntelliSense provider hooks, an extension API, and full theming. The foundation to build an IDE on. Part of the Pebbles ecosystem."
 authors = ["Reyco Seguma"]
 license = "Apache-2.0"
 repository = "https://github.com/pebbles-hq/pebbles-code-editor"
+readme = "README.md"
+keywords = ["editor", "code-editor", "syntax", "gui", "pebbles"]
+categories = ["gui", "text-editors"]
 
 [dependencies]
 pebbles = { git = "https://github.com/pebbles-hq/pebbles" }

@@ -32,7 +32,11 @@ pub fn dock(ws: Workspace) -> AnyWidget {
                 gap_w(8.0),
                 container()
                     .padding(EdgeInsets::symmetric(6.0, 1.0))
-                    .decoration(BoxDecoration::new().color(c.border).radius(BorderRadius::all(8.0)))
+                    .decoration(
+                        BoxDecoration::new()
+                            .color(c.border)
+                            .radius(BorderRadius::all(8.0))
+                    )
                     .child(text(diags.len().to_string()).size(10.5).color(c.foreground)),
             ])
             .cross_axis_alignment(CrossAxisAlignment::Center),
@@ -43,7 +47,11 @@ pub fn dock(ws: Workspace) -> AnyWidget {
         rows.push(
             container()
                 .padding(EdgeInsets::all(12.0))
-                .child(text("No problems detected.").size(12.0).color(c.muted_foreground))
+                .child(
+                    text("No problems detected.")
+                        .size(12.0)
+                        .color(c.muted_foreground),
+                )
                 .into_widget(),
         );
     } else {
@@ -68,7 +76,9 @@ pub fn dock(ws: Workspace) -> AnyWidget {
                             gap_w(8.0),
                             text(d.message.clone()).size(12.0).color(c.foreground),
                             gap_w(8.0),
-                            text(format!("[Ln {line}]")).size(11.5).color(c.muted_foreground),
+                            text(format!("[Ln {line}]"))
+                                .size(11.5)
+                                .color(c.muted_foreground),
                         ])
                         .cross_axis_alignment(CrossAxisAlignment::Center),
                     )
@@ -79,7 +89,9 @@ pub fn dock(ws: Workspace) -> AnyWidget {
 
     column(children![
         header,
-        expanded(scroll_view(column(rows).cross_axis_alignment(CrossAxisAlignment::Stretch))),
+        expanded(scroll_view(
+            column(rows).cross_axis_alignment(CrossAxisAlignment::Stretch)
+        )),
     ])
     .cross_axis_alignment(CrossAxisAlignment::Stretch)
     .into_widget()

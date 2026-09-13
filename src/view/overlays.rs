@@ -60,7 +60,11 @@ fn diff_bands(f: &Frame, layers: &mut Vec<AnyWidget>) {
     }
     if d.removed_at_end && f.line_visible(f.line_count.saturating_sub(1)) {
         let last = f.line_count.saturating_sub(1);
-        layers.push(band(f.y_of(last) + f.line_px - 2.0, 2.0, f.theme.diff_removed));
+        layers.push(band(
+            f.y_of(last) + f.line_px - 2.0,
+            2.0,
+            f.theme.diff_removed,
+        ));
     }
 }
 
@@ -158,10 +162,11 @@ fn word_occurrences(f: &Frame, layers: &mut Vec<AnyWidget>) {
         let w = word.chars().count() as f64 * f.advance;
         layers.push(
             Positioned::new(
-                container()
-                    .width(w)
-                    .height(f.line_px)
-                    .decoration(BoxDecoration::new().color(color).radius(BorderRadius::all(2.0))),
+                container().width(w).height(f.line_px).decoration(
+                    BoxDecoration::new()
+                        .color(color)
+                        .radius(BorderRadius::all(2.0)),
+                ),
             )
             .left(x)
             .top(y)
@@ -172,7 +177,11 @@ fn word_occurrences(f: &Frame, layers: &mut Vec<AnyWidget>) {
 
 /// Selection rectangles — one set per non-empty range (multi-cursor), clipped to the window.
 fn selection(f: &Frame, layers: &mut Vec<AnyWidget>) {
-    let color = if f.focused { f.theme.selection } else { f.theme.selection_inactive };
+    let color = if f.focused {
+        f.theme.selection
+    } else {
+        f.theme.selection_inactive
+    };
     for r in f.sels.ranges() {
         let (lo, hi) = (r.min(), r.max());
         if lo == hi {
@@ -185,7 +194,11 @@ fn selection(f: &Frame, layers: &mut Vec<AnyWidget>) {
                 continue;
             }
             let start_col = if line == la { ca } else { 0 };
-            let end_col = if line == lb { cb } else { line_char_len(f.src, line) };
+            let end_col = if line == lb {
+                cb
+            } else {
+                line_char_len(f.src, line)
+            };
             let extend_nl = line != lb; // hint the wrapped newline on the line's last segment
             let segs = f.segments(line);
             let last = segs.len().saturating_sub(1);
@@ -222,7 +235,11 @@ fn bracket_match(f: &Frame, layers: &mut Vec<AnyWidget>) {
     if !f.p.match_brackets || f.has_primary_sel {
         return;
     }
-    let brs = f.p.language.as_ref().map(|l| l.brackets()).unwrap_or(DEFAULT_BRACKETS);
+    let brs =
+        f.p.language
+            .as_ref()
+            .map(|l| l.brackets())
+            .unwrap_or(DEFAULT_BRACKETS);
     if let Some((a, b)) = find_bracket_match(f.src, brs, f.pcc) {
         for pos in [a, b] {
             let l = line_of(f.src, pos);
@@ -348,7 +365,11 @@ fn diagnostics(f: &Frame, layers: &mut Vec<AnyWidget>) {
                 continue;
             }
             let start_col = if line == la { ca } else { 0 };
-            let end_col = if line == lb { cb } else { line_char_len(f.src, line) };
+            let end_col = if line == lb {
+                cb
+            } else {
+                line_char_len(f.src, line)
+            };
             // Underline per visual segment so it follows wrapped rows.
             for (row, seg) in f.segments(line) {
                 let s = start_col.max(seg.start);

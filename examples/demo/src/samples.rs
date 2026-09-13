@@ -48,8 +48,18 @@ pub struct Seed {
 /// A small polyglot project the IDE opens on launch — folders, several languages, a long
 /// Rust file (virtualization/minimap/sticky), TODOs (diagnostics) and `let`s (inlay hints).
 pub fn project() -> Vec<Seed> {
-    let by_name = |name: &str| SAMPLES.iter().find(|s| s.name == name).map(|s| s.src).unwrap_or("");
-    let seed = |path, lang, content: &str| Seed { path, lang, content: content.to_string() };
+    let by_name = |name: &str| {
+        SAMPLES
+            .iter()
+            .find(|s| s.name == name)
+            .map(|s| s.src)
+            .unwrap_or("")
+    };
+    let seed = |path, lang, content: &str| Seed {
+        path,
+        lang,
+        content: content.to_string(),
+    };
     vec![
         seed(
             "README.md",
@@ -79,7 +89,11 @@ pub fn project() -> Vec<Seed> {
              #[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn adds() {\n        \
              let sum = add(2, 3);\n        assert_eq!(sum, 5);\n    }\n}\n",
         ),
-        Seed { path: "src/processors.rs", lang: "Rust", content: big() },
+        Seed {
+            path: "src/processors.rs",
+            lang: "Rust",
+            content: big(),
+        },
         seed("examples/server.go", "Go", by_name("Go")),
         seed("scripts/primes.py", "Python", by_name("Python")),
         seed("web/store.ts", "TypeScript", by_name("TypeScript")),

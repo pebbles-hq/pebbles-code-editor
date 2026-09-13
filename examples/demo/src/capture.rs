@@ -222,7 +222,14 @@ pub fn shot(
             }
             // Insert a right-to-left (Arabic) comment to check bidi display.
             "rtl" => {
-                dispatch(&mut ui, &mut env, KeyInput::Move { motion: Motion::DocEnd, extend: false });
+                dispatch(
+                    &mut ui,
+                    &mut env,
+                    KeyInput::Move {
+                        motion: Motion::DocEnd,
+                        extend: false,
+                    },
+                );
                 dispatch(&mut ui, &mut env, KeyInput::Enter);
                 for ch in "// مرحبا بالعالم hello".chars() {
                     dispatch(&mut ui, &mut env, KeyInput::Insert(ch.to_string()));
@@ -230,7 +237,14 @@ pub fn shot(
             }
             // Type a fresh line so the inline diff (vs last-saved) shows a green added band.
             "diff" => {
-                dispatch(&mut ui, &mut env, KeyInput::Move { motion: Motion::DocEnd, extend: false });
+                dispatch(
+                    &mut ui,
+                    &mut env,
+                    KeyInput::Move {
+                        motion: Motion::DocEnd,
+                        extend: false,
+                    },
+                );
                 dispatch(&mut ui, &mut env, KeyInput::Enter);
                 for ch in "let added = true;".chars() {
                     dispatch(&mut ui, &mut env, KeyInput::Insert(ch.to_string()));
@@ -271,7 +285,9 @@ pub fn shot(
                     tap(&mut ui, &mut env, 270.0, 150.0);
                     tap(&mut ui, &mut env, 24.0, 57.0); // back to Explorer
                     // Open several files by tapping rows.
-                    for y in [94.0, 116.0, 182.0, 205.0, 227.0, 271.0, 316.0, 360.0, 382.0, 427.0] {
+                    for y in [
+                        94.0, 116.0, 182.0, 205.0, 227.0, 271.0, 316.0, 360.0, 382.0, 427.0,
+                    ] {
                         tap(&mut ui, &mut env, 140.0, y);
                     }
                     // Double-click + right-click an explorer row (rename / context menu), cancel.

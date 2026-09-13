@@ -3,7 +3,6 @@
 use super::scan::{Scan, is_ident_continue, is_ident_start};
 use super::{Language, Token, TokenKind};
 
-
 /// A Python highlighter.
 pub struct Python;
 
@@ -127,4 +126,3 @@ impl Language for Python {
         out
     }
 }
-
