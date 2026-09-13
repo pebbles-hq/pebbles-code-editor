@@ -19,9 +19,16 @@ src/
                  multi-cursor Selections, and undo/redo History. No widgets, no I/O.
 
   # ── language / syntax ──────────────────────────────────────────────────
-  lang.rs        The Language trait + Token/TokenKind, the structural SyntaxNode tree
-                 (bracket_tree), and the bundled grammars (Rust, the CLike family, Python,
-                 JSON, Plain). Pure functions of source text; panic-free on any input.
+  lang/
+    mod.rs       The Language trait + Token/TokenKind, the structural SyntaxNode tree
+                 (bracket_tree), Plain, and the grammar re-exports.
+    scan.rs      Shared scanner primitives: a UTF-8-safe byte cursor + ident classifiers.
+    rust.rs      The Rust highlighter.
+    clike.rs     The C-family scanner (Grammar/CLike + the `grammar!` macro) — JS/TS/Go/
+                 C/C++/C#/Java/Kotlin/Swift/PHP/Ruby/Shell/YAML/TOML.
+    python.rs    The Python highlighter.
+    json.rs      The JSON highlighter.
+                 (All pure functions of source text; panic-free on any input.)
 
   # ── coordinate + text helpers (pure, shared) ───────────────────────────
   geometry.rs    Buffer navigation (byte ↔ line/column, word/line motions) and the
