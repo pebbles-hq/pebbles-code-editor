@@ -67,6 +67,7 @@ pub fn pane(ws: Workspace, s: Settings, height: f64) -> AnyWidget {
     let relaxed = s.relaxed.get();
     let mut editor = code_editor(code)
         .language(providers::lang_for(lang))
+        .a11y_label(format!("{} editor", f.path))
         .theme(if s.light.get() { EditorTheme::light() } else { EditorTheme::dark() })
         .height(height.max(120.0))
         .font_size(s.font_size.get())

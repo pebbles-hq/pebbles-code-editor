@@ -85,6 +85,11 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let goal = create_signal(0usize); // preserved column for Up/Down
     let blink_stamp = create_signal(0.0_f64); // loop time of the last edit/move — caret solid then
     let drag_anchor = create_signal::<Option<Offset>>(None); // pointer-down pos for column select
+    // Text drag-and-drop: the source range armed on a press inside the selection, the live
+    // drop byte during the drag, and whether an actual drag (vs a click) happened.
+    let text_drag = create_signal::<Option<(usize, usize)>>(None);
+    let drop_byte = create_signal::<Option<usize>>(None);
+    let dragged = create_signal(false);
     let scroll_top = create_signal(0.0_f64); // live vertical scroll offset (drives virtualization)
     // Tokenization cache: (source, tokens). Re-tokenizes only when the text changes, so
     // scrolling (which re-renders the window) never re-parses the document.
@@ -98,6 +103,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let completion = create_signal::<Option<completion::Session>>(None); // autocomplete popup
     let hover_pos = create_signal::<Option<Offset>>(None); // pointer pos for hover tooltip
     let sig_help = create_signal::<Option<crate::providers::SignatureHelp>>(None); // signature help
+    let preedit = create_signal(String::new()); // IME composition (preedit) text, shown at caret
     // Find/replace state.
     let find = search::State {
         open: create_signal(0u8),
@@ -170,6 +176,16 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         // instead of moving focus. When the completion popup is open it intercepts navigation
         // keys; otherwise keys flow to the command engine, and typing re-queries completion.
         focus.register_code_editor(Rc::new(move |k: KeyInput| {
+            // IME composition: a Preedit shows the in-progress (underlined) text at the caret;
+            // it is NOT committed until an Insert (from Ime::Commit). Any other key ends the
+            // composition (the commit Insert clears it here, then inserts the committed text).
+            if let KeyInput::Preedit(s) = &k {
+                preedit.set(s.clone());
+                return;
+            }
+            if !preedit.peek().is_empty() {
+                preedit.set(String::new());
+            }
             if completion.peek().is_some() {
                 match k {
                     KeyInput::Move { motion: Motion::Down, .. } => {
@@ -623,6 +639,54 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 .into_widget(),
         );
     }
+    // IME composition: the in-progress preedit text, tinted + underlined at the caret.
+    let pre = preedit.get();
+    if !pre.is_empty() {
+        let x = pad_l + cc as f64 * advance;
+        let y = pad_t + cl as f64 * line_px;
+        let w = (pre.chars().count() as f64 * advance).max(2.0);
+        layers.push(
+            Positioned::new(
+                container()
+                    .width(w)
+                    .height(line_px)
+                    .decoration(BoxDecoration::new().color(theme.selection)),
+            )
+            .left(x)
+            .top(y)
+            .into_widget(),
+        );
+        layers.push(
+            Positioned::new(
+                text(pre)
+                    .size(fs as f32)
+                    .line_height(lh as f32)
+                    .font_family(&p.font_family)
+                    .color(theme.foreground)
+                    .underline(),
+            )
+            .left(x)
+            .top(y)
+            .into_widget(),
+        );
+    }
+    // Text drag-and-drop: a drop caret at the target byte while dragging a selection.
+    if let Some(d) = drop_byte.get() {
+        let d = d.min(src.len());
+        let x = pad_l + col_of(&src, d) as f64 * advance;
+        let y = pad_t + line_of(&src, d) as f64 * line_px;
+        layers.push(
+            Positioned::new(
+                container()
+                    .width(2.0)
+                    .height(line_px)
+                    .decoration(BoxDecoration::new().color(theme.caret)),
+            )
+            .left(x)
+            .top(y)
+            .into_widget(),
+        );
+    }
     let grid = stack(layers)
         .fit(StackFit::Expand)
         .alignment(Alignment::TOP_LEFT);
@@ -647,6 +711,58 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         goal.set(col_of(&text, b));
         // A click/drag ends any typing run, so the next keystroke starts a new undo step.
         history.peek().borrow_mut().break_group();
+    };
+    // If `pos` falls inside the primary (non-empty) selection, return that range — used to arm
+    // a text drag-and-drop instead of starting a new selection.
+    let sel_range_at = move |pos: Offset| -> Option<(usize, usize)> {
+        let cur = state.peek();
+        let pr = cur.selection.primary();
+        let (a, b) = (pr.min(), pr.max());
+        if a == b {
+            return None;
+        }
+        let text = cur.text();
+        let byte = pos_to_byte(&text, pos, pad_l, pad_t, advance, line_px);
+        (byte >= a && byte <= b).then_some((a, b))
+    };
+    // Drop the dragged range `(a,b)` at byte `dst` — move it (or copy with Ctrl held), as one
+    // undo step, leaving the moved text selected. No-op if dropped inside the source.
+    let drop_text = move |a: usize, b: usize, dst: usize, copy: bool| {
+        let cur = state.peek();
+        let text = cur.text();
+        if b > text.len() || a >= b {
+            return;
+        }
+        let slice = text[a..b].to_string();
+        let (new, cs, ce) = if copy {
+            let mut s = String::with_capacity(text.len() + slice.len());
+            s.push_str(&text[..dst]);
+            s.push_str(&slice);
+            s.push_str(&text[dst..]);
+            (s, dst, dst + slice.len())
+        } else {
+            if dst > a && dst < b {
+                return; // dropped inside the source — nothing to do
+            }
+            let without = format!("{}{}", &text[..a], &text[b..]);
+            let adj = if dst >= b { dst - (b - a) } else { dst };
+            let mut s = String::with_capacity(text.len());
+            s.push_str(&without[..adj]);
+            s.push_str(&slice);
+            s.push_str(&without[adj..]);
+            (s, adj, adj + slice.len())
+        };
+        dispatch(
+            state,
+            history,
+            code,
+            Transaction::change_and_select(
+                ChangeSet::replace(0, text.len(), new),
+                Selections::single(Selection::range(cs, ce)),
+            ),
+            Coalesce::Never,
+        );
+        goal.set(col_of(&state.peek().text(), state.peek().primary().head));
     };
     // Double-click selects the word under the pointer (new single selection).
     let word_select = move |pos: Offset| {
@@ -715,9 +831,16 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             let alt = pebbles::core::keyboard::alt_held();
             let shift = pebbles::core::keyboard::shift_held();
             drag_anchor.set(Some(e.position)); // remember where a drag begins
+            dragged.set(false);
             if shift && alt {
                 // Shift+Alt starts a column drag — don't place/add a caret on the press.
+                text_drag.set(None);
+            } else if !shift && !alt && sel_range_at(e.position).is_some() {
+                // Press inside the selection: arm a text drag; keep the selection (a drag moves
+                // it, a plain click collapses it — handled in on_pan_end / on_tap).
+                text_drag.set(sel_range_at(e.position));
             } else {
+                text_drag.set(None);
                 hit(e.position, shift, alt);
             }
             if click_exts.iter().any(|x| x.on_click.is_some()) {
@@ -741,11 +864,40 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         .on_pan_update(action_event(move |e| {
             let alt = pebbles::core::keyboard::alt_held();
             let shift = pebbles::core::keyboard::shift_held();
-            if shift && alt {
+            if text_drag.peek().is_some() {
+                // Dragging the selection: track the drop point (a drop caret renders at it).
+                dragged.set(true);
+                let text = state.peek().text();
+                drop_byte.set(Some(pos_to_byte(&text, e.position, pad_l, pad_t, advance, line_px)));
+            } else if shift && alt {
                 let from = drag_anchor.peek().unwrap_or(e.position);
                 column_select(from, e.position);
             } else {
                 hit(e.position, true, false);
+            }
+        }))
+        .on_pan_end(action_event(move |e| {
+            if let Some((a, b)) = text_drag.peek() {
+                if dragged.peek() {
+                    let text = state.peek().text();
+                    let dst = pos_to_byte(&text, e.position, pad_l, pad_t, advance, line_px);
+                    let copy = pebbles::core::keyboard::ctrl_held()
+                        || pebbles::core::keyboard::meta_held();
+                    drop_text(a, b, dst, copy);
+                } else {
+                    hit(e.position, false, false); // a press+release with no real drag → collapse
+                }
+                text_drag.set(None);
+                drop_byte.set(None);
+                dragged.set(false);
+            }
+        }))
+        .on_tap(action_event(move |e| {
+            // A click inside the selection (no drag) collapses it to the caret.
+            if text_drag.peek().is_some() {
+                hit(e.position, false, false);
+                text_drag.set(None);
+                drop_byte.set(None);
             }
         }))
         .on_double_tap(action_event(move |e| word_select(e.position)))
@@ -859,12 +1011,17 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     }
     col.push(code_area);
 
-    container()
+    let body = container()
         .color(theme.background)
         .child(
             column(col)
                 .cross_axis_alignment(CrossAxisAlignment::Stretch)
                 .main_axis_size(MainAxisSize::Min),
-        )
+        );
+
+    // Accessibility: expose the editor as a multiline text input with the document as its
+    // value, so screen readers announce it (name + role + content).
+    semantics(SemanticsRole::TextInput, p.a11y_label.clone(), body)
+        .value(src.clone())
         .into_widget()
 }

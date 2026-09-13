@@ -23,6 +23,9 @@
 //! - **Line-number gutter** with an active-line marker, **current-line highlight**,
 //!   selection, and a blinking caret.
 //! - Swappable **themes** ([`EditorTheme`]).
+//! - **Input & a11y** — IME composition (CJK / dead keys via `KeyInput::Preedit`), drag-and-drop
+//!   text (move, or copy with Ctrl/Cmd), and a screen-reader `TextInput` semantics node with a
+//!   configurable `.a11y_label()`.
 //!
 //! ```ignore
 //! use pebbles::prelude::*;

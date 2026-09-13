@@ -983,3 +983,81 @@ fn letter_spacing_widens_the_hit_grid() {
     click(&mut ui, &mut env, pos);
     assert_eq!(*hit.borrow(), Some(3), "hit-testing used the letter-spaced advance");
 }
+
+// ---------------------------------------------------------------------------
+// Input, a11y & platform (§9)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ime_preedit_shows_then_commits() {
+    let (mut ui, mut env, code) = harness("");
+    // Composition updates must NOT mutate the buffer...
+    key(&mut ui, &mut env, KeyInput::Preedit("か".to_string()));
+    assert_eq!(code.get(), "", "preedit does not touch the document");
+    key(&mut ui, &mut env, KeyInput::Preedit("かん".to_string()));
+    assert_eq!(code.get(), "");
+    // ...until the commit arrives as an Insert (from Ime::Commit), which clears the preedit.
+    key(&mut ui, &mut env, KeyInput::Insert("感".to_string()));
+    assert_eq!(code.get(), "感", "commit inserts the final text");
+    key(&mut ui, &mut env, KeyInput::Insert("じ".to_string()));
+    assert_eq!(code.get(), "感じ", "typing continues normally after composition");
+}
+
+#[test]
+fn drag_and_drop_moves_selected_text() {
+    let (mut ui, mut env, code) = mouse_harness("abcdef");
+    // Select "abc" (bytes 0..3).
+    key(&mut ui, &mut env, KeyInput::Move { motion: Motion::DocStart, extend: false });
+    for _ in 0..3 {
+        key(&mut ui, &mut env, KeyInput::Move { motion: Motion::Right, extend: true });
+    }
+    // Press inside the selection (arms the text drag), then drag to the end and drop.
+    let inside = at(0, 1);
+    let dropat = at(0, 6);
+    ui.dispatch_pointer_down(inside);
+    ui.rebuild_if_dirty();
+    ui.layout(&mut env, Size::new(600.0, 400.0));
+    if let Some(t) = ui.pan_target_at(inside) {
+        ui.dispatch_pan_start(t, inside);
+        ui.dispatch_pan_update(t, dropat);
+        ui.dispatch_pan_end(t, dropat);
+    }
+    ui.rebuild_if_dirty();
+    ui.layout(&mut env, Size::new(600.0, 400.0));
+    assert_eq!(code.get(), "defabc", "the selected text moved to the drop point");
+}
+
+#[test]
+fn click_inside_selection_collapses_it() {
+    let (mut ui, mut env, code) = mouse_harness("abcdef");
+    key(&mut ui, &mut env, KeyInput::Move { motion: Motion::DocStart, extend: false });
+    for _ in 0..3 {
+        key(&mut ui, &mut env, KeyInput::Move { motion: Motion::Right, extend: true });
+    }
+    // A plain click inside the selection (press + tap, no drag) collapses to a caret there,
+    // so typing replaces nothing.
+    let inside = at(0, 1);
+    ui.dispatch_pointer_down(inside);
+    ui.dispatch_tap(inside);
+    ui.rebuild_if_dirty();
+    ui.layout(&mut env, Size::new(600.0, 400.0));
+    key(&mut ui, &mut env, KeyInput::Insert("X".to_string()));
+    assert_eq!(code.get(), "aXbcdef", "click collapsed the selection instead of replacing it");
+}
+
+#[test]
+fn a11y_label_editor_renders() {
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from("fn main() {}"));
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(
+        View::new(white(), code_editor(code).a11y_label("Source code").autofocus()).into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    assert!(ui.element_count() > 0, "a11y-wrapped editor renders (TextInput semantics node)");
+}

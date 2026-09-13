@@ -52,6 +52,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         format: None,
         extensions: Vec::new(),
         title: None,
+        a11y_label: None,
     }
 }
 
@@ -90,6 +91,7 @@ pub struct CodeEditor {
     format: Option<FormatProvider>,
     extensions: Vec<Extension>,
     title: Option<String>,
+    a11y_label: Option<String>,
 }
 
 impl CodeEditor {
@@ -271,6 +273,12 @@ impl CodeEditor {
         self.title = Some(title.into());
         self
     }
+    /// The accessible name announced by screen readers (default "Code editor"). The editor
+    /// exposes itself as a multiline text input with this label and its content as the value.
+    pub fn a11y_label(mut self, label: impl Into<String>) -> Self {
+        self.a11y_label = Some(label.into());
+        self
+    }
 }
 
 impl IntoWidget for CodeEditor {
@@ -317,6 +325,7 @@ pub(crate) struct Props {
     pub(crate) format: Option<FormatProvider>,
     pub(crate) extensions: Vec<Extension>,
     pub(crate) title: Option<String>,
+    pub(crate) a11y_label: String,
 }
 
 impl From<CodeEditor> for Props {
@@ -389,6 +398,7 @@ impl From<CodeEditor> for Props {
             format: e.format,
             extensions: e.extensions,
             title: e.title,
+            a11y_label: e.a11y_label.unwrap_or_else(|| "Code editor".to_string()),
         }
     }
 }
