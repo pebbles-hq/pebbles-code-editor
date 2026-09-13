@@ -7,6 +7,35 @@ pub struct Sample {
     pub src: &'static str,
 }
 
+/// A long, deeply-nested Rust file — generated at runtime so you can see virtualization,
+/// the minimap, sticky scroll, and autoscroll on a real-sized document. Contains `TODO`s
+/// (diagnostics), `let` bindings (inlay hints), and nesting (indent guides / sticky).
+pub fn big() -> String {
+    let mut s = String::from(
+        "//! A long sample — scroll to see virtualization, the minimap, sticky scroll,\n\
+         //! and autoscroll. It has TODOs (diagnostics), `let`s (inlay hints), and nesting.\n\n\
+         use std::collections::HashMap;\n\n",
+    );
+    for i in 0..40 {
+        s.push_str(&format!(
+            "/// Processor number {i}, part of the demo pipeline stage {i}.\n\
+             pub struct Processor{i} {{\n    id: u32,\n    name: String,\n}}\n\n\
+             impl Processor{i} {{\n    pub fn new(name: &str) -> Self {{\n        \
+             // TODO: validate the name is non-empty\n        let id = {i};\n        \
+             let label = name.to_string();\n        Processor{i} {{ id, name: label }}\n    }}\n\n    \
+             pub fn run(&self, input: &[u8]) -> usize {{\n        let mut total = 0;\n        \
+             for byte in input {{\n            if *byte > 0 {{\n                \
+             total += *byte as usize; // accumulate this processor's running total\n            }}\n        }}\n        \
+             total\n    }}\n}}\n\n"
+        ));
+    }
+    s.push_str(
+        "fn main() {\n    let p = Processor0::new(\"demo\");\n    \
+         println!(\"result = {}\", p.run(&[1, 2, 3, 4, 5]));\n}\n",
+    );
+    s
+}
+
 pub const SAMPLES: &[Sample] = &[
     Sample {
         name: "Rust",
