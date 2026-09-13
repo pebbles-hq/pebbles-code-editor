@@ -7,8 +7,14 @@ use pebbles::prelude::*;
 use pebbles::render::paint::kurbo;
 use pebbles::render::{Scene, TextEnv};
 use vello::util::RenderContext;
-use vello_hybrid::{RenderSize, RenderTargetConfig, Renderer as HybRenderer, Resources, Scene as HybScene, TextureBindings};
-use wgpu::{Extent3d, TexelCopyBufferInfo, TexelCopyBufferLayout, TexelCopyTextureInfo, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages};
+use vello_hybrid::{
+    RenderSize, RenderTargetConfig, Renderer as HybRenderer, Resources, Scene as HybScene,
+    TextureBindings,
+};
+use wgpu::{
+    Extent3d, TexelCopyBufferInfo, TexelCopyBufferLayout, TexelCopyTextureInfo, TextureDescriptor,
+    TextureDimension, TextureFormat, TextureUsages,
+};
 
 struct Gpu {
     device: wgpu::Device,
@@ -22,15 +28,30 @@ impl Gpu {
         let mut ctx = RenderContext::new();
         let dev_id = pollster::block_on(ctx.device(None)).expect("no compatible GPU device");
         let handle = ctx.devices.remove(dev_id);
-        let (renderer, resources) =
-            HybRenderer::new(&handle.device, &RenderTargetConfig { format: TextureFormat::Rgba8Unorm, width: w, height: h });
-        Gpu { device: handle.device, queue: handle.queue, renderer, resources }
+        let (renderer, resources) = HybRenderer::new(
+            &handle.device,
+            &RenderTargetConfig {
+                format: TextureFormat::Rgba8Unorm,
+                width: w,
+                height: h,
+            },
+        );
+        Gpu {
+            device: handle.device,
+            queue: handle.queue,
+            renderer,
+            resources,
+        }
     }
 
     fn rasterize(&mut self, scene: &Scene, w: u32, h: u32, base: Color) -> Vec<u8> {
         let texture = self.device.create_texture(&TextureDescriptor {
             label: Some("shot"),
-            size: Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            size: Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
@@ -40,16 +61,33 @@ impl Gpu {
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut hyb = HybScene::new(w.min(u32::from(u16::MAX)) as u16, h.min(u32::from(u16::MAX)) as u16);
+        let mut hyb = HybScene::new(
+            w.min(u32::from(u16::MAX)) as u16,
+            h.min(u32::from(u16::MAX)) as u16,
+        );
         let [r, g, b, _] = base.components;
         hyb.set_paint(Color::new([r, g, b, 1.0]));
         hyb.fill_rect(&kurbo::Rect::new(0.0, 0.0, f64::from(w), f64::from(h)));
         scene.flush(&mut hyb, &mut self.resources);
         let bindings = TextureBindings::new();
 
-        let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let mut enc = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         self.renderer
-            .render(&hyb, &mut self.resources, &self.device, &self.queue, &mut enc, &RenderSize { width: w, height: h }, &view, &bindings)
+            .render(
+                &hyb,
+                &mut self.resources,
+                &self.device,
+                &self.queue,
+                &mut enc,
+                &RenderSize {
+                    width: w,
+                    height: h,
+                },
+                &view,
+                &bindings,
+            )
             .expect("render");
         self.queue.submit([enc.finish()]);
 
@@ -61,11 +99,29 @@ impl Gpu {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let mut enc = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         enc.copy_texture_to_buffer(
-            TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            TexelCopyBufferInfo { buffer: &buffer, layout: TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded), rows_per_image: Some(h) } },
-            Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded),
+                    rows_per_image: Some(h),
+                },
+            },
+            Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
         self.queue.submit([enc.finish()]);
 
@@ -74,7 +130,9 @@ impl Gpu {
         slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
-        self.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
         rx.recv().expect("map").expect("mapped");
         let mapped = slice.get_mapped_range();
         let mut out = Vec::with_capacity((unpadded * h) as usize);
@@ -104,7 +162,11 @@ fn scene_for(ui: &mut Ui, env: &mut TextEnv, w: u32, h: u32) -> Scene {
 }
 
 /// `SHOT=<w>:<h>:<out.rgba>` — render the demo app once and dump tight RGBA.
-pub fn shot(spec: &str, root: fn() -> AnyWidget, base: Color) -> Result<(), Box<dyn std::error::Error>> {
+pub fn shot(
+    spec: &str,
+    root: fn() -> AnyWidget,
+    base: Color,
+) -> Result<(), Box<dyn std::error::Error>> {
     let p: Vec<&str> = spec.split(':').collect();
     let (w, h, out) = (p[0].parse::<u32>()?, p[1].parse::<u32>()?, p[2]);
     pebbles::widgets::overlay::init();

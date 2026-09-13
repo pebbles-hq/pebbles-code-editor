@@ -86,16 +86,27 @@ struct Scan<'a> {
 
 impl<'a> Scan<'a> {
     fn new(src: &'a str) -> Self {
-        Scan { s: src.as_bytes(), pos: 0 }
+        Scan {
+            s: src.as_bytes(),
+            pos: 0,
+        }
     }
     fn done(&self) -> bool {
         self.pos >= self.s.len()
     }
     fn peek(&self) -> u8 {
-        if self.pos < self.s.len() { self.s[self.pos] } else { 0 }
+        if self.pos < self.s.len() {
+            self.s[self.pos]
+        } else {
+            0
+        }
     }
     fn peek2(&self) -> u8 {
-        if self.pos + 1 < self.s.len() { self.s[self.pos + 1] } else { 0 }
+        if self.pos + 1 < self.s.len() {
+            self.s[self.pos + 1]
+        } else {
+            0
+        }
     }
     /// Advance one UTF-8 char (never lands mid-codepoint).
     fn bump(&mut self) {
@@ -124,12 +135,14 @@ fn is_ident_continue(b: u8) -> bool {
 pub struct Rust;
 
 const RUST_KEYWORDS: &[&str] = &[
-    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "fn",
-    "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "self",
-    "Self", "static", "struct", "super", "trait", "type", "union", "unsafe", "use", "where", "while", "yield",
-    "macro", "box",
+    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
+    "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref",
+    "return", "self", "Self", "static", "struct", "super", "trait", "type", "union", "unsafe",
+    "use", "where", "while", "yield", "macro", "box",
 ];
-const RUST_CONSTS: &[&str] = &["true", "false", "None", "Some", "Ok", "Err", "Option", "Result"];
+const RUST_CONSTS: &[&str] = &[
+    "true", "false", "None", "Some", "Ok", "Err", "Option", "Result",
+];
 
 impl Language for Rust {
     fn name(&self) -> &str {
@@ -225,7 +238,9 @@ impl Language for Rust {
                 // number
                 b'0'..=b'9' => {
                     while !sc.done()
-                        && (sc.peek().is_ascii_alphanumeric() || sc.peek() == b'.' || sc.peek() == b'_')
+                        && (sc.peek().is_ascii_alphanumeric()
+                            || sc.peek() == b'.'
+                            || sc.peek() == b'_')
                     {
                         sc.bump();
                     }
@@ -258,7 +273,11 @@ impl Language for Rust {
                 }
                 // operators / punctuation — group a run of ASCII punctuation
                 _ if b.is_ascii_punctuation() => {
-                    while !sc.done() && sc.peek().is_ascii_punctuation() && sc.peek() != b'"' && sc.peek() != b'\'' {
+                    while !sc.done()
+                        && sc.peek().is_ascii_punctuation()
+                        && sc.peek() != b'"'
+                        && sc.peek() != b'\''
+                    {
                         sc.bump();
                     }
                     out.push(Token::new(start, sc.pos - start, TokenKind::Punctuation));
@@ -346,7 +365,9 @@ impl Language for CLike {
                 }
                 b'0'..=b'9' => {
                     while !sc.done()
-                        && (sc.peek().is_ascii_alphanumeric() || sc.peek() == b'.' || sc.peek() == b'_')
+                        && (sc.peek().is_ascii_alphanumeric()
+                            || sc.peek() == b'.'
+                            || sc.peek() == b'_')
                     {
                         sc.bump();
                     }
@@ -361,7 +382,9 @@ impl Language for CLike {
                         TokenKind::Keyword
                     } else if g.constants.contains(&word) {
                         TokenKind::Constant
-                    } else if g.types.contains(&word) || word.chars().next().is_some_and(|c| c.is_uppercase()) {
+                    } else if g.types.contains(&word)
+                        || word.chars().next().is_some_and(|c| c.is_uppercase())
+                    {
                         TokenKind::Type
                     } else if sc.peek() == b'(' {
                         TokenKind::Function
@@ -373,7 +396,10 @@ impl Language for CLike {
                     }
                 }
                 _ if b.is_ascii_punctuation() => {
-                    while !sc.done() && sc.peek().is_ascii_punctuation() && !matches!(sc.peek(), b'"' | b'\'' | b'`') {
+                    while !sc.done()
+                        && sc.peek().is_ascii_punctuation()
+                        && !matches!(sc.peek(), b'"' | b'\'' | b'`')
+                    {
                         sc.bump();
                     }
                     out.push(Token::new(start, sc.pos - start, TokenKind::Punctuation));
@@ -404,29 +430,222 @@ macro_rules! grammar {
     };
 }
 
-grammar!(javascript, "JavaScript",
-    kw = ["const","let","var","function","return","if","else","for","while","do","switch","case","break","continue","new","class","extends","super","this","typeof","instanceof","in","of","try","catch","finally","throw","async","await","yield","delete","void","export","import","from","as","default","static","get","set"],
-    ty = [], c = ["true","false","null","undefined","NaN","Infinity"], hash = false);
+grammar!(
+    javascript,
+    "JavaScript",
+    kw = [
+        "const",
+        "let",
+        "var",
+        "function",
+        "return",
+        "if",
+        "else",
+        "for",
+        "while",
+        "do",
+        "switch",
+        "case",
+        "break",
+        "continue",
+        "new",
+        "class",
+        "extends",
+        "super",
+        "this",
+        "typeof",
+        "instanceof",
+        "in",
+        "of",
+        "try",
+        "catch",
+        "finally",
+        "throw",
+        "async",
+        "await",
+        "yield",
+        "delete",
+        "void",
+        "export",
+        "import",
+        "from",
+        "as",
+        "default",
+        "static",
+        "get",
+        "set"
+    ],
+    ty = [],
+    c = ["true", "false", "null", "undefined", "NaN", "Infinity"],
+    hash = false
+);
 
-grammar!(typescript, "TypeScript",
-    kw = ["const","let","var","function","return","if","else","for","while","do","switch","case","break","continue","new","class","extends","implements","interface","enum","type","super","this","typeof","instanceof","keyof","in","of","try","catch","finally","throw","async","await","yield","export","import","from","as","default","public","private","protected","readonly","static","abstract","declare","namespace","get","set"],
-    ty = ["string","number","boolean","any","void","unknown","never","object","symbol","bigint"],
-    c = ["true","false","null","undefined"], hash = false);
+grammar!(
+    typescript,
+    "TypeScript",
+    kw = [
+        "const",
+        "let",
+        "var",
+        "function",
+        "return",
+        "if",
+        "else",
+        "for",
+        "while",
+        "do",
+        "switch",
+        "case",
+        "break",
+        "continue",
+        "new",
+        "class",
+        "extends",
+        "implements",
+        "interface",
+        "enum",
+        "type",
+        "super",
+        "this",
+        "typeof",
+        "instanceof",
+        "keyof",
+        "in",
+        "of",
+        "try",
+        "catch",
+        "finally",
+        "throw",
+        "async",
+        "await",
+        "yield",
+        "export",
+        "import",
+        "from",
+        "as",
+        "default",
+        "public",
+        "private",
+        "protected",
+        "readonly",
+        "static",
+        "abstract",
+        "declare",
+        "namespace",
+        "get",
+        "set"
+    ],
+    ty = [
+        "string", "number", "boolean", "any", "void", "unknown", "never", "object", "symbol",
+        "bigint"
+    ],
+    c = ["true", "false", "null", "undefined"],
+    hash = false
+);
 
-grammar!(go, "Go",
-    kw = ["package","import","func","var","const","type","struct","interface","map","chan","go","defer","return","if","else","for","range","switch","case","default","break","continue","fallthrough","select","goto"],
-    ty = ["int","int8","int16","int32","int64","uint","uint8","uint16","uint32","uint64","float32","float64","string","bool","byte","rune","error","any"],
-    c = ["true","false","nil","iota"], hash = false);
+grammar!(
+    go,
+    "Go",
+    kw = [
+        "package",
+        "import",
+        "func",
+        "var",
+        "const",
+        "type",
+        "struct",
+        "interface",
+        "map",
+        "chan",
+        "go",
+        "defer",
+        "return",
+        "if",
+        "else",
+        "for",
+        "range",
+        "switch",
+        "case",
+        "default",
+        "break",
+        "continue",
+        "fallthrough",
+        "select",
+        "goto"
+    ],
+    ty = [
+        "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64",
+        "float32", "float64", "string", "bool", "byte", "rune", "error", "any"
+    ],
+    c = ["true", "false", "nil", "iota"],
+    hash = false
+);
 
-grammar!(c_lang, "C",
-    kw = ["auto","break","case","char","const","continue","default","do","double","else","enum","extern","float","for","goto","if","inline","int","long","register","return","short","signed","sizeof","static","struct","switch","typedef","union","unsigned","void","volatile","while"],
-    ty = ["size_t","uint8_t","uint16_t","uint32_t","uint64_t","int8_t","int16_t","int32_t","int64_t","bool","FILE"],
-    c = ["NULL","true","false"], hash = false);
+grammar!(
+    c_lang,
+    "C",
+    kw = [
+        "auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else",
+        "enum", "extern", "float", "for", "goto", "if", "inline", "int", "long", "register",
+        "return", "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union",
+        "unsigned", "void", "volatile", "while"
+    ],
+    ty = [
+        "size_t", "uint8_t", "uint16_t", "uint32_t", "uint64_t", "int8_t", "int16_t", "int32_t",
+        "int64_t", "bool", "FILE"
+    ],
+    c = ["NULL", "true", "false"],
+    hash = false
+);
 
-grammar!(java, "Java",
-    kw = ["public","private","protected","class","interface","enum","extends","implements","import","package","static","final","abstract","void","new","return","if","else","for","while","do","switch","case","break","continue","try","catch","finally","throw","throws","this","super","synchronized","volatile","transient","instanceof"],
-    ty = ["int","long","short","byte","char","boolean","float","double","String","Object","void","var"],
-    c = ["true","false","null"], hash = false);
+grammar!(
+    java,
+    "Java",
+    kw = [
+        "public",
+        "private",
+        "protected",
+        "class",
+        "interface",
+        "enum",
+        "extends",
+        "implements",
+        "import",
+        "package",
+        "static",
+        "final",
+        "abstract",
+        "void",
+        "new",
+        "return",
+        "if",
+        "else",
+        "for",
+        "while",
+        "do",
+        "switch",
+        "case",
+        "break",
+        "continue",
+        "try",
+        "catch",
+        "finally",
+        "throw",
+        "throws",
+        "this",
+        "super",
+        "synchronized",
+        "volatile",
+        "transient",
+        "instanceof"
+    ],
+    ty = [
+        "int", "long", "short", "byte", "char", "boolean", "float", "double", "String", "Object",
+        "void", "var"
+    ],
+    c = ["true", "false", "null"],
+    hash = false
+);
 
 // ---------------------------------------------------------------------------
 // Python
@@ -436,9 +655,10 @@ grammar!(java, "Java",
 pub struct Python;
 
 const PY_KEYWORDS: &[&str] = &[
-    "def", "class", "return", "if", "elif", "else", "for", "while", "break", "continue", "pass", "import",
-    "from", "as", "with", "try", "except", "finally", "raise", "yield", "lambda", "global", "nonlocal", "del",
-    "assert", "async", "await", "in", "is", "not", "and", "or", "match", "case",
+    "def", "class", "return", "if", "elif", "else", "for", "while", "break", "continue", "pass",
+    "import", "from", "as", "with", "try", "except", "finally", "raise", "yield", "lambda",
+    "global", "nonlocal", "del", "assert", "async", "await", "in", "is", "not", "and", "or",
+    "match", "case",
 ];
 const PY_CONSTS: &[&str] = &["True", "False", "None", "self", "cls"];
 
@@ -469,7 +689,8 @@ impl Language for Python {
                 }
                 b'"' | b'\'' => {
                     let q = b;
-                    let triple = sc.peek2() == q && (sc.pos + 2 < sc.s.len() && sc.s[sc.pos + 2] == q);
+                    let triple =
+                        sc.peek2() == q && (sc.pos + 2 < sc.s.len() && sc.s[sc.pos + 2] == q);
                     if triple {
                         sc.bump();
                         sc.bump();
@@ -503,7 +724,10 @@ impl Language for Python {
                     out.push(Token::new(start, sc.pos - start, TokenKind::Str));
                 }
                 b'0'..=b'9' => {
-                    while !sc.done() && (sc.peek().is_ascii_alphanumeric() || sc.peek() == b'.' || sc.peek() == b'_')
+                    while !sc.done()
+                        && (sc.peek().is_ascii_alphanumeric()
+                            || sc.peek() == b'.'
+                            || sc.peek() == b'_')
                     {
                         sc.bump();
                     }
@@ -530,7 +754,10 @@ impl Language for Python {
                     }
                 }
                 _ if b.is_ascii_punctuation() => {
-                    while !sc.done() && sc.peek().is_ascii_punctuation() && !matches!(sc.peek(), b'"' | b'\'') {
+                    while !sc.done()
+                        && sc.peek().is_ascii_punctuation()
+                        && !matches!(sc.peek(), b'"' | b'\'')
+                    {
                         sc.bump();
                     }
                     out.push(Token::new(start, sc.pos - start, TokenKind::Punctuation));
@@ -582,8 +809,11 @@ impl Language for Json {
                     while look < sc.s.len() && (sc.s[look] == b' ' || sc.s[look] == b'\t') {
                         look += 1;
                     }
-                    let kind =
-                        if look < sc.s.len() && sc.s[look] == b':' { TokenKind::Property } else { TokenKind::Str };
+                    let kind = if look < sc.s.len() && sc.s[look] == b':' {
+                        TokenKind::Property
+                    } else {
+                        TokenKind::Str
+                    };
                     out.push(Token::new(start, sc.pos - start, kind));
                 }
                 b'-' | b'0'..=b'9' => {

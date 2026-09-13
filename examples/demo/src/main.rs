@@ -50,16 +50,24 @@ fn app() -> AnyWidget {
             column(children![
                 row(children![
                     column(children![
-                        text("Pebbles Code Editor").size(22.0).bold().color(c.foreground),
+                        text("Pebbles Code Editor")
+                            .size(22.0)
+                            .bold()
+                            .color(c.foreground),
                         gap_h(3.0),
-                        text("A custom editing engine — highlighting for every language, editable.")
-                            .size(13.0)
-                            .color(c.muted_foreground),
+                        text(
+                            "A custom editing engine — highlighting for every language, editable."
+                        )
+                        .size(13.0)
+                        .color(c.muted_foreground),
                     ])
                     .cross_axis_alignment(CrossAxisAlignment::Start)
                     .main_axis_size(MainAxisSize::Min),
                     spacer(),
-                    text("Language").size(12.5).weight(600.0).color(c.muted_foreground),
+                    text("Language")
+                        .size(12.5)
+                        .weight(600.0)
+                        .color(c.muted_foreground),
                     gap_w(10.0),
                     dropdown,
                 ])
@@ -83,5 +91,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(spec) = std::env::var("SHOT") {
         return capture::shot(&spec, app, theme().colors.background);
     }
-    App::new(component(app)).title("Pebbles Code Editor").size(1100, 780).background(theme().colors.background).run()
+    App::new(component(app))
+        .title("Pebbles Code Editor")
+        .size(1100, 780)
+        .background(theme().colors.background)
+        .run()
 }
