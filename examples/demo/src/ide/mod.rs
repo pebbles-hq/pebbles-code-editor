@@ -40,18 +40,29 @@ const PROBLEMS_H: f64 = 180.0;
 
 /// The IDE root component.
 pub fn ide() -> AnyWidget {
-    // Build the project file set once (each file gets a live buffer signal).
+    // Build the project file set once. Each file gets a live buffer signal and its own
+    // diagnostics/inlays signals kept current by a single per-file effect — created ONCE here
+    // (never inside a per-render helper), so nothing churns the hook order as you navigate.
     let files: Files = Rc::new(
         samples::project()
             .into_iter()
             .map(|s| {
                 let content = create_signal(s.content.clone());
+                let diagnostics = create_signal(providers::compute_diagnostics(&s.content));
+                let inlays = create_signal(providers::compute_inlays(&s.content));
+                create_effect(move || {
+                    let src = content.get();
+                    diagnostics.set(providers::compute_diagnostics(&src));
+                    inlays.set(providers::compute_inlays(&src));
+                });
                 FileEntry {
                     path: s.path.to_string(),
                     name: s.path.rsplit('/').next().unwrap_or(s.path).to_string(),
                     lang: s.lang,
                     content,
                     saved: create_signal(s.content),
+                    diagnostics,
+                    inlays,
                 }
             })
             .collect(),

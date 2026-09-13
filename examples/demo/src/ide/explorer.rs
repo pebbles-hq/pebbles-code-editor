@@ -39,9 +39,20 @@ fn build(ws: &Workspace) -> (FileExplorer, Rc<HashMap<u64, usize>>) {
     (explorer, Rc::new(id_to_file))
 }
 
-/// The Explorer panel: a header, the explorer's own toolbar, and its tree — with an effect
-/// that opens the file under the active row.
+struct ExplorerProps {
+    ws: Workspace,
+}
+
+/// The Explorer panel — a component so its tree signal, `FileExplorer` state, and the
+/// open-on-activate effect are created once (in its own hook scope), not on every shell render.
 pub fn panel(ws: Workspace) -> AnyWidget {
+    component_props(render_explorer, ExplorerProps { ws }).into_widget()
+}
+
+/// A header, the explorer's own toolbar, and its tree — with an effect that opens the file
+/// under the active row.
+fn render_explorer(p: &ExplorerProps) -> AnyWidget {
+    let ws = p.ws.clone();
     let c = theme().colors;
     let (explorer, id_to_file) = build(&ws);
 

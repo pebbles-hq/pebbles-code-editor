@@ -4,9 +4,11 @@
 use std::rc::Rc;
 
 use pebbles::prelude::*;
+use pebbles_code_editor::{Diagnostic, InlayHint};
 
-/// One file in the project. `content` is the live buffer; `original` is the on-load text used
-/// for the dirty (•) indicator.
+/// One file in the project. `content` is the live buffer; `saved` is the last-saved text used
+/// for the dirty (•) indicator. `diagnostics`/`inlays` are derived once (an effect per file in
+/// `ide()`), so panels can read them without creating any per-render signals.
 pub struct FileEntry {
     pub path: String,
     pub name: String,
@@ -14,6 +16,8 @@ pub struct FileEntry {
     pub content: Signal<String>,
     /// The last-saved text (dirty = `content != saved`); "Save" resets it to `content`.
     pub saved: Signal<String>,
+    pub diagnostics: Signal<Vec<Diagnostic>>,
+    pub inlays: Signal<Vec<InlayHint>>,
 }
 
 /// The immutable project file set (content mutates through each entry's signal).

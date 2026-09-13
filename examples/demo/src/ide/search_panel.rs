@@ -6,7 +6,18 @@ use pebbles::prelude::*;
 use super::widgets::{list_row, section};
 use super::workspace::Workspace;
 
+struct SearchProps {
+    ws: Workspace,
+}
+
+/// The Search panel — a component so its `query` signal lives in its own hook scope (stable
+/// across shell re-renders), not recreated per render.
 pub fn panel(ws: Workspace) -> AnyWidget {
+    component_props(render_search, SearchProps { ws }).into_widget()
+}
+
+fn render_search(p: &SearchProps) -> AnyWidget {
+    let ws = p.ws.clone();
     let c = theme().colors;
     let query = create_signal(String::new());
 

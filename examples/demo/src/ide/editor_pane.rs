@@ -60,15 +60,9 @@ pub fn pane(ws: Workspace, s: Settings, height: f64) -> AnyWidget {
     let f = &ws.files[idx];
     let code = f.content;
     let lang = f.lang;
-
-    // Diagnostics + inlays derived reactively from the buffer.
-    let diagnostics = create_signal(providers::compute_diagnostics(&code.peek()));
-    let inlays = create_signal(providers::compute_inlays(&code.peek()));
-    create_effect(move || {
-        let src = code.get();
-        diagnostics.set(providers::compute_diagnostics(&src));
-        inlays.set(providers::compute_inlays(&src));
-    });
+    // Diagnostics + inlays are derived once per file in `ide()` (no per-render signals here).
+    let diagnostics = f.diagnostics;
+    let inlays = f.inlays;
 
     let relaxed = s.relaxed.get();
     let mut editor = code_editor(code)

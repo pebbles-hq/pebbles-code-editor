@@ -17,19 +17,13 @@ pub fn section(title: &str) -> AnyWidget {
         .into_widget()
 }
 
-/// A clickable list row that highlights on hover (and, when `active`, stays highlighted).
-/// `child` is the row content; `on_tap` fires on press.
+/// A clickable list row. Built on the framework's `pressable` (which owns its own hover/press
+/// tint in its own component scope), so this stays a plain builder with no local signals —
+/// safe to call any number of times per render. `active` rows keep an accent background.
 pub fn list_row(active: bool, child: AnyWidget, on_tap: impl Fn() + 'static) -> AnyWidget {
     let c = theme().colors;
-    let hovered = create_signal(false);
-    let bg = if active {
-        c.accent
-    } else if hovered.get() {
-        c.muted
-    } else {
-        Color::from_rgba8(0, 0, 0, 0)
-    };
-    GestureDetector::new(
+    let bg = if active { c.accent } else { Color::from_rgba8(0, 0, 0, 0) };
+    pressable(
         container()
             .height(26.0)
             .padding(EdgeInsets::symmetric(8.0, 0.0))
@@ -37,9 +31,7 @@ pub fn list_row(active: bool, child: AnyWidget, on_tap: impl Fn() + 'static) -> 
             .alignment(Alignment::CENTER_LEFT)
             .child(child),
     )
-    .cursor(Cursor::Pointer)
-    .on_tap(action(on_tap))
-    .on_hover_enter(action(move || hovered.set(true)))
-    .on_hover_exit(action(move || hovered.set(false)))
+    .radius(5.0)
+    .on_tap(on_tap)
     .into_widget()
 }

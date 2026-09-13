@@ -204,6 +204,43 @@ pub fn shot(
             "palette" => {
                 dispatch(&mut ui, &mut env, KeyInput::CommandPalette);
             }
+            // A navigation soak: hammer panel switches, file opens, typing and hovering, to
+            // catch hook-order churn (a panel that creates signals per render would crash or
+            // leak). Passes if it completes with a bounded live-signal count.
+            "soak" => {
+                let size = Size::new(f64::from(w), f64::from(h));
+                let step = |ui: &mut Ui, env: &mut TextEnv| {
+                    ui.rebuild_if_dirty();
+                    ui.layout(env, size);
+                };
+                let click = |ui: &mut Ui, env: &mut TextEnv, x: f64, y: f64| {
+                    ui.dispatch_pointer_down(Offset::new(x, y));
+                    step(ui, env);
+                };
+                #[cfg(debug_assertions)]
+                let baseline = pebbles::core::census_signals();
+                for i in 0..150 {
+                    click(&mut ui, &mut env, 24.0, 103.0); // activity: Search
+                    click(&mut ui, &mut env, 24.0, 149.0); // activity: Settings
+                    click(&mut ui, &mut env, 24.0, 57.0); // activity: Explorer
+                    click(&mut ui, &mut env, 130.0, 205.0); // explorer row (open a file)
+                    click(&mut ui, &mut env, 130.0, 271.0); // explorer row (open another)
+                    click(&mut ui, &mut env, 600.0, 200.0); // click in the editor
+                    dispatch(&mut ui, &mut env, KeyInput::Insert("x".to_string()));
+                    dispatch(&mut ui, &mut env, KeyInput::Backspace);
+                    ui.dispatch_hover(Offset::new(500.0 + (i % 40) as f64, 180.0));
+                    step(&mut ui, &mut env);
+                }
+                #[cfg(debug_assertions)]
+                {
+                    let after = pebbles::core::census_signals();
+                    println!("soak: signals {baseline} -> {after}");
+                    assert!(
+                        after <= baseline + 200,
+                        "signal leak: {baseline} -> {after} (hook churn not fixed)"
+                    );
+                }
+            }
             _ => {}
         }
     }
