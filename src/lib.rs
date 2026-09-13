@@ -43,6 +43,7 @@ mod geometry;
 mod highlight;
 mod commands;
 mod config;
+mod search;
 mod view;
 mod theme;
 

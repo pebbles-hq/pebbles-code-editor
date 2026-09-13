@@ -45,6 +45,10 @@ src/
                  inlay hints, definition, format). Data only — the app supplies the callbacks
                  and reactive signals; the editor renders the UI and wires the interactions.
 
+  # ── search ─────────────────────────────────────────────────────────────
+  search.rs      Pure find logic: match collection with case / whole-word / regex options
+                 (the widget + replace actions live in view/search.rs).
+
   # ── configuration (public API) ─────────────────────────────────────────
   config.rs      The `code_editor()` builder + fluent `CodeEditor` config, and the resolved
                  `Props` the view consumes. The crate's front door.
@@ -60,6 +64,7 @@ src/
                  rects, bracket-match boxes, highlighted text, inlay hints, diagnostic
                  underlines, whitespace markers, carets.
     completion.rs The autocomplete popup: session state, trigger/accept, snippet expansion.
+    search.rs    The find/replace bar widget + match-highlight overlay layers.
     gutter.rs    The virtualized line-number gutter (+ diagnostic marker dots).
     minimap.rs   The scaled document overview (one canvas node) + click/drag-to-scroll.
     sticky.rs    Sticky scroll — indentation-derived pinned scope headers.

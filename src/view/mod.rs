@@ -12,6 +12,7 @@ mod completion;
 mod gutter;
 mod minimap;
 mod overlays;
+mod search;
 mod sticky;
 
 use std::cell::RefCell;
@@ -60,6 +61,8 @@ pub(crate) struct Frame<'a> {
     pub(crate) first_line: usize,
     pub(crate) last_line: usize,
     pub(crate) caret_on: bool,
+    /// Highlight other occurrences of the selected word (off while the find bar is open).
+    pub(crate) highlight_word_matches: bool,
 }
 
 /// The editor component: wires reactive state, computes the [`Frame`], and assembles the
@@ -87,6 +90,16 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let completion = create_signal::<Option<completion::Session>>(None); // autocomplete popup
     let hover_pos = create_signal::<Option<Offset>>(None); // pointer pos for hover tooltip
     let sig_help = create_signal::<Option<crate::providers::SignatureHelp>>(None); // signature help
+    // Find/replace state.
+    let find = search::State {
+        open: create_signal(0u8),
+        query: create_signal(String::new()),
+        replace: create_signal(String::new()),
+        case: create_signal(false),
+        word: create_signal(false),
+        regex: create_signal(false),
+        idx: create_signal(0usize),
+    };
     let focus = create_focus();
 
     // Two-way binding: if the caller replaces `code` from the outside (e.g. loads a file),
@@ -103,9 +116,16 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         }
     });
 
-    // One-time: grab focus on mount if requested.
+    // Grab focus on mount if requested — but only ONCE, so it never steals focus back from a
+    // child input (the find bar's query field) on later re-renders.
+    let did_autofocus = create_signal(false);
     if p.autofocus {
-        create_effect(move || focus.request_focus());
+        create_effect(move || {
+            if !did_autofocus.peek() {
+                focus.request_focus();
+                did_autofocus.set(true);
+            }
+        });
     }
 
     // Register the key handler (semantic edit commands from the framework).
@@ -166,6 +186,23 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 }
             }
             match &k {
+                // Find / replace: open the bar (it autofocuses its query field). Escape (while
+                // the editor is focused) closes it.
+                KeyInput::Find => {
+                    find.open.set(1);
+                    // Release focus so the bar's query field (autofocus) can take it.
+                    pebbles::core::focus::set_focus(None);
+                    return;
+                }
+                KeyInput::Replace => {
+                    find.open.set(2);
+                    pebbles::core::focus::set_focus(None);
+                    return;
+                }
+                KeyInput::Escape if find.open.peek() > 0 => {
+                    find.open.set(0);
+                    return;
+                }
                 KeyInput::TriggerCompletion => {
                     if let Some(pv) = &provider {
                         completion::trigger(state, completion, pv, true);
@@ -377,11 +414,30 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         first_line,
         last_line,
         caret_on,
+        highlight_word_matches: find.open.get() == 0,
     };
 
     // Overlay layers on the monospace grid (current-line, rulers, guides, selection, bracket
     // match, text, whitespace, carets), plus the completion popup when open.
+    // Find matches for the current query/options (only while the bar is open) — highlighted
+    // below and driven by the find bar's navigation/replace actions.
+    let search_matches: Vec<(usize, usize)> = if find.open.get() > 0 {
+        // Read the option signals so a toggle re-runs the search.
+        let (q, _, _, _) = (find.query.get(), find.case.get(), find.word.get(), find.regex.get());
+        if q.is_empty() {
+            Vec::new()
+        } else {
+            crate::search::find_all(&src, &q, &find.options())
+        }
+    } else {
+        Vec::new()
+    };
+
     let mut layers = overlays::build(&frame);
+    if !search_matches.is_empty() {
+        let cur = find.idx.peek().min(search_matches.len() - 1);
+        layers.extend(search::match_layers(&frame, &search_matches, cur));
+    }
     if let Some(sess) = completion.peek() {
         layers.push(completion::popup(&sess, &frame));
     }
@@ -595,6 +651,14 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             .decoration(BoxDecoration::new().color(theme.background))
             .child(body)
             .into_widget(),
+    };
+
+    // Overlay the find/replace bar (top-right) when open.
+    let code_area: AnyWidget = if find.open.get() > 0 {
+        let bar = search::bar(find, search_matches, state, history, code, goal, focus, theme);
+        stack(children![code_area, bar]).into_widget()
+    } else {
+        code_area
     };
 
     // ---- chrome: optional title/status bar above the code area, all inside a bordered card ----

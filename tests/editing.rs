@@ -257,6 +257,26 @@ fn completion_accepts_a_snippet_with_caret_stop() {
 }
 
 #[test]
+fn find_bar_opens_and_captures_typing() {
+    let (mut ui, mut env, code) = harness("foo bar foo baz");
+    let before = ui.element_count();
+    key(&mut ui, &mut env, KeyInput::Find);
+    assert!(ui.element_count() > before, "find bar rendered");
+    // The find field autofocuses, so keystrokes go to it — not the document.
+    key(&mut ui, &mut env, KeyInput::Insert("foo".to_string()));
+    key(&mut ui, &mut env, KeyInput::Enter);
+    assert_eq!(code.get(), "foo bar foo baz", "typing goes to the find field, not the doc");
+}
+
+#[test]
+fn replace_bar_opens() {
+    let (mut ui, mut env, _code) = harness("x");
+    let before = ui.element_count();
+    key(&mut ui, &mut env, KeyInput::Replace);
+    assert!(ui.element_count() > before, "replace bar rendered");
+}
+
+#[test]
 fn go_to_definition_moves_the_caret() {
     use pebbles_code_editor::DefinitionProvider;
     use std::rc::Rc;

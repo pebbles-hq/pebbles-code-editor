@@ -6,6 +6,8 @@
 //!   Shift+Alt-drag for a column selection, double/triple-click for word/line, Esc collapses.
 //! - Rendering: virtualization, minimap, sticky scroll, indent guides, whitespace, rulers,
 //!   horizontal scroll, bracket matching, caret blink (toggle the switches).
+//! - Search: Ctrl+F find (incremental, regex/case/whole-word), Ctrl+H replace / replace-all,
+//!   match highlighting, and other-occurrence highlighting when you select a word.
 //! - Language: highlighting, auto-close, comment toggle (Ctrl+/), smart indent.
 //! - IntelliSense (dev-supplied here): completion (Ctrl+Space or type), snippets, hover,
 //!   signature help (type `(`), diagnostics (TODO/FIXME/unwrap), inlay hints, go-to-def (F12),
@@ -341,9 +343,9 @@ fn app() -> AnyWidget {
                 gap_h(12.0),
                 // ---- keybindings legend ----
                 text(
-                    "Ctrl+Space complete · Tab/Enter accept · Ctrl+/ comment · Ctrl+D add-next · \
-                     Alt+click multi-cursor · Shift+Alt+drag column · dbl/triple-click word/line · \
-                     F12 go-to-def · Shift+Alt+F format · hover for docs · type ( for signature",
+                    "Ctrl+F find · Ctrl+H replace · Ctrl+Space complete · Tab/Enter accept · \
+                     Ctrl+/ comment · Ctrl+D add-next · Alt+click multi-cursor · Shift+Alt+drag column · \
+                     dbl/triple-click word/line · F12 go-to-def · Shift+Alt+F format · hover for docs · ( for signature",
                 )
                 .size(11.5)
                 .color(c.muted_foreground),

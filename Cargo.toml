@@ -19,6 +19,8 @@ repository = "https://github.com/pebbles-hq/pebbles-code-editor"
 pebbles = { git = "https://github.com/pebbles-hq/pebbles" }
 # The document store: a rope for O(log n) splice + line indexing on large files.
 ropey = "1"
+# Regex search mode (find/replace). Plain + whole-word search need no engine.
+regex = "1"
 
 [profile.dev]
 opt-level = 0

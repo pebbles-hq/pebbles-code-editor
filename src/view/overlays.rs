@@ -12,7 +12,7 @@ use crate::highlight::{slice_tokens, to_spans};
 use crate::providers::Severity;
 use crate::theme::EditorTheme;
 use crate::view::Frame;
-use crate::view::chrome::band;
+use crate::view::chrome::{band, with_alpha};
 
 /// Build every overlay layer for the current frame, bottom to top.
 pub(crate) fn build(f: &Frame) -> Vec<AnyWidget> {
@@ -20,6 +20,7 @@ pub(crate) fn build(f: &Frame) -> Vec<AnyWidget> {
     current_line(f, &mut layers);
     rulers(f, &mut layers);
     indent_guides(f, &mut layers);
+    word_occurrences(f, &mut layers);
     selection(f, &mut layers);
     bracket_match(f, &mut layers);
     code_text(f, &mut layers);
@@ -96,6 +97,49 @@ fn indent_guides(f: &Frame, layers: &mut Vec<AnyWidget>) {
             );
             gcol += step;
         }
+    }
+}
+
+/// Faintly box every OTHER occurrence of the selected word in the visible window — the
+/// "highlight matches of the selection" feature. Only when a single-line word (≥2 chars) is
+/// selected and the find bar is closed.
+fn word_occurrences(f: &Frame, layers: &mut Vec<AnyWidget>) {
+    if !f.highlight_word_matches {
+        return;
+    }
+    let sel = f.sels.primary();
+    if sel.is_empty() {
+        return;
+    }
+    let (lo, hi) = (sel.min(), sel.max());
+    let word = &f.src[lo..hi];
+    if word.len() < 2 || word.chars().any(|c| c.is_whitespace()) {
+        return;
+    }
+    let color = with_alpha(f.theme.gutter_active_fg, 0.18);
+    let window_start = line_start_of(f.src, f.first_line);
+    let window_end = line_end(f.src, line_start_of(f.src, f.last_line));
+    let mut from = window_start;
+    while let Some(rel) = f.src[from..window_end].find(word) {
+        let start = from + rel;
+        from = start + word.len();
+        if start == lo {
+            continue; // skip the actual selection
+        }
+        let line = line_of(f.src, start);
+        let col = col_of(f.src, start);
+        let w = word.chars().count() as f64 * f.advance;
+        layers.push(
+            Positioned::new(
+                container()
+                    .width(w)
+                    .height(f.line_px)
+                    .decoration(BoxDecoration::new().color(color).radius(BorderRadius::all(2.0))),
+            )
+            .left(f.pad_l + col as f64 * f.advance)
+            .top(f.pad_t + line as f64 * f.line_px)
+            .into_widget(),
+        );
     }
 }
 
