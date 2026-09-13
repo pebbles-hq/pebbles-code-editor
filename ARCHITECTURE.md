@@ -40,6 +40,11 @@ src/
   commands.rs    The command engine: KeyInput → Transaction → dispatch. Multi-cursor edits,
                  motions, auto-close, comment toggle, smart indent. Owns no widgets.
 
+  # ── IntelliSense providers (dev-supplied) ──────────────────────────────
+  providers.rs   The provider trait/data types (completion, hover, signature, diagnostics,
+                 inlay hints, definition, format). Data only — the app supplies the callbacks
+                 and reactive signals; the editor renders the UI and wires the interactions.
+
   # ── configuration (public API) ─────────────────────────────────────────
   config.rs      The `code_editor()` builder + fluent `CodeEditor` config, and the resolved
                  `Props` the view consumes. The crate's front door.
@@ -52,11 +57,13 @@ src/
                  virtualized visible-line window, mouse gestures, and final assembly. Owns
                  orchestration only — each panel below is a pure(-ish) builder over `Frame`.
     overlays.rs  The stacked grid layers: current-line band, rulers, indent guides, selection
-                 rects, bracket-match boxes, highlighted text, whitespace markers, carets.
-    gutter.rs    The virtualized line-number gutter.
+                 rects, bracket-match boxes, highlighted text, inlay hints, diagnostic
+                 underlines, whitespace markers, carets.
+    completion.rs The autocomplete popup: session state, trigger/accept, snippet expansion.
+    gutter.rs    The virtualized line-number gutter (+ diagnostic marker dots).
     minimap.rs   The scaled document overview (one canvas node) + click/drag-to-scroll.
     sticky.rs    Sticky scroll — indentation-derived pinned scope headers.
-    chrome.rs    Small shared view helpers: status bar, line band, alpha tweak.
+    chrome.rs    Small shared view helpers: status bar, line band, tooltip, alpha tweak.
 ```
 
 ## Layering (dependencies point downward)

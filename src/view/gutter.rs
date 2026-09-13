@@ -3,10 +3,14 @@
 //! range and vertical alignment stay exact. The gutter stays fixed while the content scrolls
 //! horizontally, so it wraps `content` in a row to its right.
 
+use std::collections::HashMap;
+
 use pebbles::prelude::*;
 
 use crate::MONO;
+use crate::geometry::line_of;
 use crate::view::Frame;
+use crate::view::overlays::severity_color;
 
 /// Wrap `content` with the line-number gutter on its left (or return it unchanged when the
 /// gutter is disabled).
@@ -16,8 +20,29 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
     }
     let digits = f.line_count.to_string().len().max(2);
     let gutter_w = digits as f64 * f.advance + 22.0;
+    // The most-severe diagnostic per line (drives the gutter marker dot).
+    let mut marks: HashMap<usize, Color> = HashMap::new();
+    if let Some(sig) = f.p.diagnostics {
+        for d in sig.get() {
+            let line = line_of(f.src, d.range.0);
+            marks.insert(line, severity_color(f.theme, d.severity));
+        }
+    }
     let mut nums: Vec<AnyWidget> = Vec::new();
     for n in f.first_line..=f.last_line {
+        if let Some(&color) = marks.get(&n) {
+            nums.push(
+                Positioned::new(
+                    container()
+                        .width(4.0)
+                        .height(f.line_px * 0.6)
+                        .decoration(BoxDecoration::new().color(color).radius(BorderRadius::all(2.0))),
+                )
+                .left(2.0)
+                .top(f.pad_t + n as f64 * f.line_px + f.line_px * 0.2)
+                .into_widget(),
+            );
+        }
         let active = n == f.cl;
         nums.push(
             Positioned::new(

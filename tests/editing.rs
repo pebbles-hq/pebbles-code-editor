@@ -200,6 +200,153 @@ fn auto_close_wraps_the_selection() {
 }
 
 #[test]
+fn completion_popup_types_navigates_and_accepts() {
+    use pebbles_code_editor::{CompletionContext, CompletionItem, CompletionKind, CompletionProvider};
+    use std::rc::Rc;
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::new());
+    let provider: CompletionProvider = Rc::new(|_ctx: &CompletionContext| {
+        vec![
+            CompletionItem::new("println", CompletionKind::Function).insert("println!()"),
+            CompletionItem::new("print", CompletionKind::Function),
+        ]
+    });
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(
+        View::new(white(), code_editor(code).completion(provider).autofocus()).into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    // Type "pr" — the popup opens (both items match).
+    key(&mut ui, &mut env, KeyInput::Insert("p".to_string()));
+    key(&mut ui, &mut env, KeyInput::Insert("r".to_string()));
+    // Down selects the 2nd item ("print"); Enter accepts it, replacing the "pr" prefix.
+    key(&mut ui, &mut env, KeyInput::Move { motion: Motion::Down, extend: false });
+    key(&mut ui, &mut env, KeyInput::Enter);
+    assert_eq!(code.get(), "print");
+}
+
+#[test]
+fn completion_accepts_a_snippet_with_caret_stop() {
+    use pebbles_code_editor::{CompletionContext, CompletionItem, CompletionKind, CompletionProvider};
+    use std::rc::Rc;
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::new());
+    let provider: CompletionProvider = Rc::new(|_ctx: &CompletionContext| {
+        vec![CompletionItem::new("main", CompletionKind::Snippet).insert("fn main() {\n    $0\n}")]
+    });
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(
+        View::new(white(), code_editor(code).completion(provider).autofocus()).into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    key(&mut ui, &mut env, KeyInput::Insert("m".to_string()));
+    key(&mut ui, &mut env, KeyInput::Enter); // accept the snippet
+    // The $0 tabstop is stripped and the caret lands there; typing inserts at that point.
+    key(&mut ui, &mut env, KeyInput::Insert("x".to_string()));
+    assert_eq!(code.get(), "fn main() {\n    x\n}");
+}
+
+#[test]
+fn go_to_definition_moves_the_caret() {
+    use pebbles_code_editor::DefinitionProvider;
+    use std::rc::Rc;
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from("foo\nbar\nfoo"));
+    let def: DefinitionProvider = Rc::new(|_src: &str, _byte: usize| Some(8)); // 2nd "foo"
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(View::new(white(), code_editor(code).definition(def).autofocus()).into_widget());
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    key(&mut ui, &mut env, KeyInput::GoToDefinition);
+    key(&mut ui, &mut env, KeyInput::Insert("X".to_string()));
+    assert_eq!(code.get(), "foo\nbar\nXfoo");
+}
+
+#[test]
+fn format_replaces_the_document() {
+    use pebbles_code_editor::FormatProvider;
+    use std::rc::Rc;
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from("messy   code"));
+    let fmt: FormatProvider = Rc::new(|_src: &str| String::from("clean code\n"));
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(View::new(white(), code_editor(code).format(fmt).autofocus()).into_widget());
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    key(&mut ui, &mut env, KeyInput::Format);
+    assert_eq!(code.get(), "clean code\n");
+    // ...and it's one undo step back to the original.
+    key(&mut ui, &mut env, KeyInput::Undo);
+    assert_eq!(code.get(), "messy   code");
+}
+
+#[test]
+fn diagnostics_inlay_hover_signature_render() {
+    use pebbles_code_editor::{
+        Diagnostic, Hover, HoverProvider, InlayHint, Severity, SignatureHelp, SignatureProvider,
+    };
+    use std::rc::Rc;
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from("let x = 1;\nlet y = 2;"));
+    let diags = create_root_signal(vec![Diagnostic {
+        range: (4, 5),
+        severity: Severity::Error,
+        message: "bad".into(),
+    }]);
+    let hints = create_root_signal(vec![InlayHint { at: 5, label: ": i32".into() }]);
+    let hover: HoverProvider = Rc::new(|_s: &str, _b: usize| {
+        Some(Hover { contents: "an int".into(), range: None })
+    });
+    let sig: SignatureProvider = Rc::new(|_s: &str, _b: usize| {
+        Some(SignatureHelp { label: "fn f(x: i32)".into(), params: vec![], active: None })
+    });
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(
+        View::new(
+            white(),
+            code_editor(code)
+                .diagnostics(diags)
+                .inlay_hints(hints)
+                .hover(hover)
+                .signature_help(sig)
+                .height(200.0)
+                .autofocus(),
+        )
+        .into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    // Hover over the content, and type "(" to trigger signature help — both render, no panic.
+    ui.dispatch_hover(Offset::new(30.0, 15.0));
+    ui.rebuild_if_dirty();
+    ui.layout(&mut env, Size::new(600.0, 400.0));
+    key(&mut ui, &mut env, KeyInput::Insert("(".to_string()));
+    assert!(ui.element_count() > 0, "provider overlays built without panicking");
+}
+
+#[test]
 fn toggle_comment_comments_and_uncomments() {
     pebbles::widgets::overlay::init();
     pebbles::core::focus::init();

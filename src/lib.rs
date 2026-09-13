@@ -36,6 +36,7 @@
 
 pub mod edit;
 pub mod lang;
+pub mod providers;
 
 mod brackets;
 mod geometry;
@@ -48,6 +49,11 @@ mod theme;
 pub use config::{CodeEditor, code_editor};
 pub use edit::{ChangeSet, EditorState, History, Selection, Selections, Transaction};
 pub use lang::{Language, SyntaxNode, Token, TokenKind, bracket_tree};
+pub use providers::{
+    CompletionContext, CompletionItem, CompletionKind, CompletionProvider, DefinitionProvider,
+    Diagnostic, Diagnostics, FormatProvider, Hover, HoverProvider, InlayHint, InlayHints, Severity,
+    SignatureHelp, SignatureProvider,
+};
 pub use theme::EditorTheme;
 
 /// The monospace family used for all editor text.

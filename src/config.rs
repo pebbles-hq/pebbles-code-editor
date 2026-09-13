@@ -7,6 +7,10 @@ use pebbles::prelude::*;
 
 use crate::ADVANCE_RATIO;
 use crate::lang::{Language, Token};
+use crate::providers::{
+    CompletionProvider, DefinitionProvider, Diagnostics, FormatProvider, HoverProvider, InlayHints,
+    SignatureProvider,
+};
 use crate::theme::EditorTheme;
 use crate::view::render_editor;
 
@@ -36,6 +40,13 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         auto_close: true,
         match_brackets: true,
         semantic: None,
+        completion: None,
+        hover: None,
+        signature: None,
+        diagnostics: None,
+        inlay_hints: None,
+        definition: None,
+        format: None,
         title: None,
     }
 }
@@ -64,6 +75,13 @@ pub struct CodeEditor {
     auto_close: bool,
     match_brackets: bool,
     semantic: Option<Signal<Vec<Token>>>,
+    completion: Option<CompletionProvider>,
+    hover: Option<HoverProvider>,
+    signature: Option<SignatureProvider>,
+    diagnostics: Option<Diagnostics>,
+    inlay_hints: Option<InlayHints>,
+    definition: Option<DefinitionProvider>,
+    format: Option<FormatProvider>,
     title: Option<String>,
 }
 
@@ -173,6 +191,41 @@ impl CodeEditor {
     /// the hook an IDE feeds from a language server (LSP semantic tokens) or its own
     /// analysis. Semantic tokens win over lexical ones on any overlap, and the editor
     /// re-highlights whenever the signal changes.
+    /// The autocomplete source (Ctrl+Space, and as you type). See [`CompletionProvider`].
+    pub fn completion(mut self, provider: CompletionProvider) -> Self {
+        self.completion = Some(provider);
+        self
+    }
+    /// The hover-tooltip source. See [`HoverProvider`].
+    pub fn hover(mut self, provider: HoverProvider) -> Self {
+        self.hover = Some(provider);
+        self
+    }
+    /// The signature-help source (shown while typing a call). See [`SignatureProvider`].
+    pub fn signature_help(mut self, provider: SignatureProvider) -> Self {
+        self.signature = Some(provider);
+        self
+    }
+    /// Diagnostics to underline + mark in the gutter (a reactive list). See [`Diagnostics`].
+    pub fn diagnostics(mut self, diagnostics: Diagnostics) -> Self {
+        self.diagnostics = Some(diagnostics);
+        self
+    }
+    /// Inlay hints to render inline (a reactive list). See [`InlayHints`].
+    pub fn inlay_hints(mut self, hints: InlayHints) -> Self {
+        self.inlay_hints = Some(hints);
+        self
+    }
+    /// The go-to-definition source (F12). See [`DefinitionProvider`].
+    pub fn definition(mut self, provider: DefinitionProvider) -> Self {
+        self.definition = Some(provider);
+        self
+    }
+    /// The document formatter (Shift+Alt+F). See [`FormatProvider`].
+    pub fn format(mut self, provider: FormatProvider) -> Self {
+        self.format = Some(provider);
+        self
+    }
     pub fn semantic_tokens(mut self, tokens: Signal<Vec<Token>>) -> Self {
         self.semantic = Some(tokens);
         self
@@ -217,6 +270,13 @@ pub(crate) struct Props {
     pub(crate) auto_close: bool,
     pub(crate) match_brackets: bool,
     pub(crate) semantic: Option<Signal<Vec<Token>>>,
+    pub(crate) completion: Option<CompletionProvider>,
+    pub(crate) hover: Option<HoverProvider>,
+    pub(crate) signature: Option<SignatureProvider>,
+    pub(crate) diagnostics: Option<Diagnostics>,
+    pub(crate) inlay_hints: Option<InlayHints>,
+    pub(crate) definition: Option<DefinitionProvider>,
+    pub(crate) format: Option<FormatProvider>,
     pub(crate) title: Option<String>,
 }
 
@@ -245,6 +305,13 @@ impl From<CodeEditor> for Props {
             auto_close: e.auto_close,
             match_brackets: e.match_brackets,
             semantic: e.semantic,
+            completion: e.completion,
+            hover: e.hover,
+            signature: e.signature,
+            diagnostics: e.diagnostics,
+            inlay_hints: e.inlay_hints,
+            definition: e.definition,
+            format: e.format,
             title: e.title,
         }
     }

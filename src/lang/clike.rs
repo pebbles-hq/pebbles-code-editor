@@ -12,7 +12,7 @@ pub struct Grammar {
     pub keywords: &'static [&'static str],
     pub types: &'static [&'static str],
     pub constants: &'static [&'static str],
-    /// `true` if `#` starts a line comment (unused for C-family; see [`Python`]).
+    /// `true` if `#` starts a line comment (unused for C-family; see [`super::Python`]).
     pub hash_comments: bool,
 }
 

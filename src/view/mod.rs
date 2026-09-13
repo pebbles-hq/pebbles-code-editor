@@ -8,6 +8,7 @@
 //! reactive setup, the read-model, the mouse gestures, and the final assembly.
 
 mod chrome;
+mod completion;
 mod gutter;
 mod minimap;
 mod overlays;
@@ -20,10 +21,11 @@ use pebbles::prelude::*;
 use pebbles::render::ScrollHandle;
 use ropey::Rope;
 
+use crate::MONO;
 use crate::brackets::DEFAULT_BRACKETS;
-use crate::commands::{EditCfg, apply_key};
+use crate::commands::{EditCfg, apply_key, dispatch};
 use crate::config::Props;
-use crate::edit::{EditorState, History, Selection, Selections};
+use crate::edit::{ChangeSet, Coalesce, EditorState, History, Selection, Selections, Transaction};
 use crate::geometry::*;
 use crate::highlight::merge_tokens;
 use crate::lang::Token;
@@ -82,6 +84,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // `height` makes the editor a scroll viewport). Held in signals so they survive renders.
     let scroll = create_signal(ScrollHandle::new()).peek(); // vertical
     let hscroll = create_signal(ScrollHandle::new()).peek(); // horizontal
+    let completion = create_signal::<Option<completion::Session>>(None); // autocomplete popup
+    let hover_pos = create_signal::<Option<Offset>>(None); // pointer pos for hover tooltip
+    let sig_help = create_signal::<Option<crate::providers::SignatureHelp>>(None); // signature help
     let focus = create_focus();
 
     // Two-way binding: if the caller replaces `code` from the outside (e.g. loads a file),
@@ -123,10 +128,124 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     });
     {
         let cfg = cfg.clone();
+        let provider = p.completion.clone();
+        let definition = p.definition.clone();
+        let format = p.format.clone();
+        let sig_provider = p.signature.clone();
         // Register as a *code* editor so the shell routes Tab/Shift+Tab here (indent/outdent)
-        // instead of moving focus.
+        // instead of moving focus. When the completion popup is open it intercepts navigation
+        // keys; otherwise keys flow to the command engine, and typing re-queries completion.
         focus.register_code_editor(Rc::new(move |k: KeyInput| {
-            apply_key(k, state, history, code, goal, read_only, &cfg)
+            if completion.peek().is_some() {
+                match k {
+                    KeyInput::Move { motion: Motion::Down, .. } => {
+                        let mut s = completion.peek();
+                        if let Some(sess) = &mut s {
+                            sess.move_by(1);
+                        }
+                        completion.set(s);
+                        return;
+                    }
+                    KeyInput::Move { motion: Motion::Up, .. } => {
+                        let mut s = completion.peek();
+                        if let Some(sess) = &mut s {
+                            sess.move_by(-1);
+                        }
+                        completion.set(s);
+                        return;
+                    }
+                    KeyInput::Enter | KeyInput::Indent => {
+                        completion::accept(state, history, code, goal, completion);
+                        return;
+                    }
+                    KeyInput::Escape => {
+                        completion.set(None);
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+            match &k {
+                KeyInput::TriggerCompletion => {
+                    if let Some(pv) = &provider {
+                        completion::trigger(state, completion, pv, true);
+                    }
+                    return;
+                }
+                // F12: jump the caret to the provider's target (autoscroll follows).
+                KeyInput::GoToDefinition => {
+                    if let Some(dp) = &definition {
+                        let cur = state.peek();
+                        if let Some(target) = dp(&cur.text(), cur.primary().head) {
+                            state.set(EditorState {
+                                doc: cur.doc.clone(),
+                                selection: Selections::single(Selection::caret(target.min(cur.len()))),
+                            });
+                            history.peek().borrow_mut().break_group();
+                        }
+                    }
+                    return;
+                }
+                // Shift+Alt+F: replace the document with the formatter's output (one undo step).
+                KeyInput::Format => {
+                    if let Some(fp) = &format {
+                        let cur = state.peek();
+                        let old = cur.text();
+                        let new = fp(&old);
+                        if new != old {
+                            let caret = cur.primary().head.min(new.len());
+                            dispatch(
+                                state,
+                                history,
+                                code,
+                                Transaction::change_and_select(
+                                    ChangeSet::replace(0, old.len(), new),
+                                    Selections::single(Selection::caret(caret)),
+                                ),
+                                Coalesce::Never,
+                            );
+                        }
+                    }
+                    return;
+                }
+                _ => {}
+            }
+            // Decide the completion follow-up from the key *before* it's consumed: typing an
+            // identifier char re-queries; backspace re-queries only while open; anything else
+            // dismisses.
+            let follow = match &k {
+                KeyInput::Insert(s)
+                    if !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_') =>
+                {
+                    1
+                }
+                KeyInput::Backspace if completion.peek().is_some() => 1,
+                _ => 0,
+            };
+            // Signature help follows the same "before consume" rule: `(`/`,` opens it, `)`/Esc
+            // closes it. Evaluated before `k` is moved into the command engine.
+            let sig_action = match &k {
+                KeyInput::Insert(s) if s == "(" || s == "," => 1,
+                KeyInput::Insert(s) if s == ")" => 2,
+                KeyInput::Escape => 2,
+                _ => 0,
+            };
+            apply_key(k, state, history, code, goal, read_only, &cfg);
+            if let Some(pv) = &provider {
+                if follow == 1 {
+                    completion::trigger(state, completion, pv, false);
+                } else {
+                    completion.set(None);
+                }
+            }
+            match (sig_action, &sig_provider) {
+                (1, Some(sp)) => {
+                    let cur = state.peek();
+                    sig_help.set(sp(&cur.text(), cur.primary().head));
+                }
+                (2, _) => sig_help.set(None),
+                _ => {}
+            }
         }));
     }
 
@@ -261,8 +380,50 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     };
 
     // Overlay layers on the monospace grid (current-line, rulers, guides, selection, bracket
-    // match, text, whitespace, carets).
-    let grid = stack(overlays::build(&frame))
+    // match, text, whitespace, carets), plus the completion popup when open.
+    let mut layers = overlays::build(&frame);
+    if let Some(sess) = completion.peek() {
+        layers.push(completion::popup(&sess, &frame));
+    }
+    // Hover tooltip: query the provider at the pointer's byte and float a panel there.
+    if let (Some(pos), Some(hp)) = (hover_pos.get(), &p.hover) {
+        let byte = pos_to_byte(&src, pos, pad_l, pad_t, advance, line_px);
+        if let Some(h) = hp(&src, byte) {
+            let tip = chrome::tooltip(
+                text(h.contents)
+                    .size((fs * 0.92) as f32)
+                    .font_family(MONO)
+                    .color(theme.foreground)
+                    .into_widget(),
+                theme,
+            );
+            layers.push(
+                Positioned::new(tip)
+                    .left(pos.x + 4.0)
+                    .top(pos.y + 18.0)
+                    .into_widget(),
+            );
+        }
+    }
+    // Signature help: a panel just above the caret line while typing a call.
+    if let Some(sig) = sig_help.get() {
+        let tip = chrome::tooltip(
+            text(sig.label.clone())
+                .size((fs * 0.92) as f32)
+                .font_family(MONO)
+                .color(theme.foreground)
+                .into_widget(),
+            theme,
+        );
+        let y = (pad_t + cl as f64 * line_px - line_px - 4.0).max(0.0);
+        layers.push(
+            Positioned::new(tip)
+                .left(pad_l + cc as f64 * advance)
+                .top(y)
+                .into_widget(),
+        );
+    }
+    let grid = stack(layers)
         .fit(StackFit::Expand)
         .alignment(Alignment::TOP_LEFT);
 
@@ -369,7 +530,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             }
         }))
         .on_double_tap(action_event(move |e| word_select(e.position)))
-        .on_triple_tap(action_event(move |e| line_select(e.position)));
+        .on_triple_tap(action_event(move |e| line_select(e.position)))
+        .on_hover_move(action_event(move |e| hover_pos.set(Some(e.position))))
+        .on_hover_exit(action(move || hover_pos.set(None)));
 
     // Horizontal scroll: wrap the content (not the gutter) so long lines scroll sideways
     // while the line numbers stay put. Only when the editor is a bounded viewport.

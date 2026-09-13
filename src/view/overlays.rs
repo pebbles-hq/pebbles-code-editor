@@ -9,6 +9,8 @@ use crate::MONO;
 use crate::brackets::{DEFAULT_BRACKETS, find_bracket_match};
 use crate::geometry::{col_of, line_char_len, line_end, line_of, line_start_of};
 use crate::highlight::{slice_tokens, to_spans};
+use crate::providers::Severity;
+use crate::theme::EditorTheme;
 use crate::view::Frame;
 use crate::view::chrome::band;
 
@@ -21,9 +23,21 @@ pub(crate) fn build(f: &Frame) -> Vec<AnyWidget> {
     selection(f, &mut layers);
     bracket_match(f, &mut layers);
     code_text(f, &mut layers);
+    inlay_hints(f, &mut layers);
+    diagnostics(f, &mut layers);
     whitespace(f, &mut layers);
     carets(f, &mut layers);
     layers
+}
+
+/// The underline color for a diagnostic severity (mapped from the theme palette).
+pub(crate) fn severity_color(theme: &EditorTheme, sev: Severity) -> Color {
+    match sev {
+        Severity::Error => theme.constant,
+        Severity::Warning => theme.number,
+        Severity::Info => theme.function,
+        Severity::Hint => theme.comment,
+    }
 }
 
 /// The current-line highlight band (primary caret's line, only when it has no selection).
@@ -203,6 +217,65 @@ fn whitespace(f: &Frame, layers: &mut Vec<AnyWidget>) {
                     .color(f.theme.whitespace),
             )
             .left(x)
+            .top(f.pad_t + line as f64 * f.line_px)
+            .into_widget(),
+        );
+    }
+}
+
+/// Diagnostic underlines: a thin severity-colored line under each diagnostic range, per
+/// line-segment, clipped to the visible window. Reads the reactive diagnostics list.
+fn diagnostics(f: &Frame, layers: &mut Vec<AnyWidget>) {
+    let Some(sig) = f.p.diagnostics else {
+        return;
+    };
+    for d in sig.get() {
+        let (lo, hi) = d.range;
+        let color = severity_color(f.theme, d.severity);
+        let (la, ca) = (line_of(f.src, lo), col_of(f.src, lo));
+        let (lb, cb) = (line_of(f.src, hi), col_of(f.src, hi));
+        for line in la.max(f.first_line)..=lb.min(f.last_line) {
+            let start_col = if line == la { ca } else { 0 };
+            let end_col = if line == lb { cb } else { line_char_len(f.src, line) };
+            let x = f.pad_l + start_col as f64 * f.advance;
+            let w = (end_col.saturating_sub(start_col).max(1) as f64 * f.advance).max(f.advance);
+            layers.push(
+                Positioned::new(
+                    container()
+                        .width(w)
+                        .height(2.0)
+                        .decoration(BoxDecoration::new().color(color)),
+                )
+                .left(x)
+                .top(f.pad_t + line as f64 * f.line_px + f.line_px - 2.0)
+                .into_widget(),
+            );
+        }
+    }
+}
+
+/// Inlay hints: faded inline labels anchored at a byte offset (visible window only). On the
+/// fixed grid these overlay at the column rather than reflowing the line, so they read best
+/// as end-of-line / at-boundary annotations (type hints, parameter names).
+fn inlay_hints(f: &Frame, layers: &mut Vec<AnyWidget>) {
+    let Some(sig) = f.p.inlay_hints else {
+        return;
+    };
+    for h in sig.get() {
+        let line = line_of(f.src, h.at);
+        if !(f.first_line..=f.last_line).contains(&line) {
+            continue;
+        }
+        let col = col_of(f.src, h.at);
+        layers.push(
+            Positioned::new(
+                text(h.label.clone())
+                    .size((f.fs * 0.85) as f32)
+                    .line_height(f.lh as f32)
+                    .font_family(MONO)
+                    .color(f.theme.comment),
+            )
+            .left(f.pad_l + col as f64 * f.advance)
             .top(f.pad_t + line as f64 * f.line_px)
             .into_widget(),
         );
