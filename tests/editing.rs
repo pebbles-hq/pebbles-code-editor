@@ -250,6 +250,39 @@ fn triple_click_selects_the_whole_line() {
 }
 
 #[test]
+fn minimap_click_scrolls_the_document() {
+    use pebbles::render::RenderScroll;
+    let body: String = (0..300).map(|i| format!("line {i} of the doc")).collect::<Vec<_>>().join("\n");
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(body);
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    let win = Size::new(600.0, 400.0);
+    ui.mount_root(
+        View::new(white(), code_editor(code).height(200.0).minimap(true).autofocus()).into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, win);
+    }
+    let v_offset = |ui: &Ui| {
+        let id = ui.render_tree().find::<RenderScroll>().expect("vertical scroll");
+        ui.render_tree()
+            .object_ref(id)
+            .downcast_ref::<RenderScroll>()
+            .unwrap()
+            .offset
+    };
+    assert_eq!(v_offset(&ui), 0.0, "starts at the top");
+    // Click near the bottom of the minimap (right edge) → jumps the viewport down.
+    ui.dispatch_pointer_down(Offset::new(558.0, 175.0));
+    ui.rebuild_if_dirty();
+    ui.layout(&mut env, win);
+    assert!(v_offset(&ui) > 0.0, "minimap click scrolled the document down");
+}
+
+#[test]
 fn indent_guides_whitespace_and_rulers_render() {
     // Exercise the overlay build/layout path for all three toggles on an indented doc.
     pebbles::widgets::overlay::init();

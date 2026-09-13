@@ -75,6 +75,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         indent_guides: false,
         render_whitespace: false,
         rulers: Vec::new(),
+        minimap: false,
         title: None,
     }
 }
@@ -97,6 +98,7 @@ pub struct CodeEditor {
     indent_guides: bool,
     render_whitespace: bool,
     rulers: Vec<usize>,
+    minimap: bool,
     title: Option<String>,
 }
 
@@ -171,6 +173,12 @@ impl CodeEditor {
         self.rulers = columns.into();
         self
     }
+    /// Show a minimap (scaled document overview) on the right — click/drag to scroll.
+    /// Only shown when the editor has a fixed `height`. Default off.
+    pub fn minimap(mut self, on: bool) -> Self {
+        self.minimap = on;
+        self
+    }
     /// A filename / label shown in the status bar (also enables the status bar).
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
@@ -205,6 +213,7 @@ struct Props {
     indent_guides: bool,
     render_whitespace: bool,
     rulers: Vec<usize>,
+    minimap: bool,
     title: Option<String>,
 }
 
@@ -227,6 +236,7 @@ impl From<CodeEditor> for Props {
             indent_guides: e.indent_guides,
             render_whitespace: e.render_whitespace,
             rulers: e.rulers,
+            minimap: e.minimap,
             title: e.title,
         }
     }
@@ -724,19 +734,95 @@ fn render_editor(p: &Props) -> AnyWidget {
         body
     };
 
+    // ---- minimap ----
+    // A scaled overview of the WHOLE document drawn in a single canvas node (so it stays
+    // cheap on huge files): one faint bar per line (indent-offset, length-scaled), with a
+    // translucent viewport indicator. Click/drag scrolls the editor. Bounded viewport only.
+    let minimap_panel: Option<AnyWidget> = match (p.minimap, p.height) {
+        (true, Some(h)) => {
+            const MM_W: f64 = 84.0;
+            let metrics: Vec<(f32, f32)> = src
+                .split('\n')
+                .map(|l| {
+                    let indent = l.chars().take_while(|c| *c == ' ' || *c == '\t').count() as f32;
+                    (indent, l.chars().count() as f32)
+                })
+                .collect();
+            let cur_top = scroll_top.get();
+            let ch = content_h;
+            let ink = with_alpha(theme.foreground, 0.45);
+            let vp = with_alpha(theme.gutter_active_fg, 0.16);
+            let painter = move |cv: &mut Canvas<'_>| {
+                let size = cv.size();
+                let (mm_w, mm_h) = (size.width, size.height);
+                let n = metrics.len().max(1);
+                let rows = (mm_h.floor() as usize).clamp(1, n);
+                let char_w = (mm_w - 6.0) / 90.0; // ~90 columns across
+                for row in 0..rows {
+                    let li = row * n / rows;
+                    let (indent, len) = metrics.get(li).copied().unwrap_or((0.0, 0.0));
+                    if len <= 0.0 {
+                        continue;
+                    }
+                    let y = row as f64 * mm_h / rows as f64;
+                    let x0 = 3.0 + indent as f64 * char_w;
+                    let x1 = (x0 + (len - indent).max(0.0) as f64 * char_w).min(mm_w - 3.0);
+                    if x1 > x0 {
+                        cv.fill_rect(Rect::new(x0, y, x1, y + 1.5), ink);
+                    }
+                }
+                // viewport indicator
+                let vy = (cur_top / ch) * mm_h;
+                let vh = (h / ch) * mm_h;
+                cv.fill_rect(Rect::new(0.0, vy, mm_w, (vy + vh).min(mm_h)), vp);
+            };
+            // Click/drag on the minimap centers the viewport on that fraction of the doc.
+            let jump = move |scroll_mm: &ScrollHandle, pos: Offset| {
+                let frac = (pos.y / h).clamp(0.0, 1.0);
+                let t = (frac * ch - h / 2.0).max(0.0);
+                scroll_mm.scroll_to(t);
+                // Nudge the offset signal so the move is reactive (marks the view dirty and
+                // moves the virtualized window now); the scroll view's `on_scroll` then
+                // confirms the exact clamped offset.
+                scroll_top.set(t.min((ch - h).max(0.0)));
+            };
+            let (down_scroll, pan_scroll) = (scroll.clone(), scroll.clone());
+            Some(
+                GestureDetector::new(
+                    container()
+                        .width(MM_W)
+                        .height(h)
+                        .decoration(BoxDecoration::new().color(theme.gutter_bg))
+                        .child(canvas(painter).width(MM_W).height(h)),
+                )
+                .on_pointer_down(action_event(move |e| jump(&down_scroll, e.position)))
+                .on_pan_update(action_event(move |e| jump(&pan_scroll, e.position)))
+                .into_widget(),
+            )
+        }
+        _ => None,
+    };
+
     // With a fixed height the editor scrolls within a viewport; without one it grows to
     // its content (for inline, read-only snippets embedded in a page).
     let code_area: AnyWidget = match p.height {
-        Some(h) => container()
-            .height(h)
-            .decoration(BoxDecoration::new().color(theme.background))
-            .child(
-                scroll_view(body)
-                    .controller(scroll.clone())
-                    // Re-render the visible window as the viewport scrolls.
-                    .on_scroll(move |n| scroll_top.set(n.metrics.pixels)),
-            )
-            .into_widget(),
+        Some(h) => {
+            let scroller = scroll_view(body)
+                .controller(scroll.clone())
+                // Re-render the visible window as the viewport scrolls.
+                .on_scroll(move |n| scroll_top.set(n.metrics.pixels));
+            let inner: AnyWidget = match minimap_panel {
+                Some(mm) => row(children![expanded(scroller), mm])
+                    .cross_axis_alignment(CrossAxisAlignment::Start)
+                    .into_widget(),
+                None => scroller.into_widget(),
+            };
+            container()
+                .height(h)
+                .decoration(BoxDecoration::new().color(theme.background))
+                .child(inner)
+                .into_widget()
+        }
         None => container()
             .decoration(BoxDecoration::new().color(theme.background))
             .child(body)
