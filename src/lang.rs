@@ -51,6 +51,23 @@ impl Token {
     }
 }
 
+/// A node in a coarse structural [syntax tree](Language::tree): a bracket-delimited region
+/// (or the whole document, for the root). Not a full AST — it's the bracket-nesting skeleton
+/// that tooling (folding, scope queries, structural navigation) needs, analogous in spirit
+/// to CodeMirror's Lezer tree at a coarse grain.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SyntaxNode {
+    /// The opening delimiter (`(`, `[`, `{`, …), or `'\0'` for the document root.
+    pub open: char,
+    /// Byte offset of the opener (0 for the root).
+    pub start: usize,
+    /// Byte offset just past the closer (the document length for the root, or for an
+    /// unclosed node the point where scanning ended).
+    pub end: usize,
+    /// Directly-nested child regions, in document order.
+    pub children: Vec<SyntaxNode>,
+}
+
 /// A syntax highlighter for one language. Implement this to add a grammar; the editor
 /// only needs `highlight`. Returned tokens must be sorted by `start` and non-overlapping
 /// (the bundled scanners guarantee this); gaps are rendered as plain text.
@@ -71,6 +88,56 @@ pub trait Language {
     fn brackets(&self) -> &[(char, char)] {
         &[('(', ')'), ('[', ']'), ('{', '}')]
     }
+
+    /// A coarse structural [`SyntaxNode`] tree for `src` — for tooling (folding, structural
+    /// navigation, scope queries). The default builds the bracket-nesting skeleton from
+    /// [`brackets`](Self::brackets) and is error-tolerant (mismatched / unclosed brackets are
+    /// attached where scanning left them). Override for a real parse tree. Never panics.
+    fn tree(&self, src: &str) -> SyntaxNode {
+        bracket_tree(src, self.brackets())
+    }
+}
+
+/// Build the bracket-nesting tree of `src` (the default [`Language::tree`]). Character-based
+/// and error-tolerant; ignores which brackets sit inside strings/comments (the coarse
+/// baseline). Never panics.
+pub fn bracket_tree(src: &str, brackets: &[(char, char)]) -> SyntaxNode {
+    let mut root = SyntaxNode {
+        open: '\0',
+        start: 0,
+        end: src.len(),
+        children: Vec::new(),
+    };
+    let mut stack: Vec<SyntaxNode> = Vec::new();
+    let attach = |stack: &mut Vec<SyntaxNode>, root: &mut SyntaxNode, node: SyntaxNode| {
+        match stack.last_mut() {
+            Some(parent) => parent.children.push(node),
+            None => root.children.push(node),
+        }
+    };
+    for (i, ch) in src.char_indices() {
+        if brackets.iter().any(|(o, _)| *o == ch) {
+            stack.push(SyntaxNode {
+                open: ch,
+                start: i,
+                end: i,
+                children: Vec::new(),
+            });
+        } else if let Some(&(o, _)) = brackets.iter().find(|(_, c)| *c == ch)
+            && let Some(mut node) = stack.pop_if(|n| n.open == o)
+        {
+            // (a stray / mismatched closer leaves the stack untouched — error-tolerant)
+            node.end = i + ch.len_utf8();
+            attach(&mut stack, &mut root, node);
+        }
+    }
+    // Unclosed openers: close them where scanning ended, innermost first.
+    while let Some(mut node) = stack.pop() {
+        node.end = src.len();
+        attach(&mut stack, &mut root, node);
+    }
+    root.children.sort_by_key(|n| n.start);
+    root
 }
 
 /// No highlighting — everything is plain text.
@@ -1025,6 +1092,24 @@ mod tests {
             let _ = g.highlight("\"unterminated /* nested ' `\u{1F600}\n\t weird");
             let _ = g.highlight("");
         }
+    }
+
+    #[test]
+    fn bracket_tree_nests_and_tolerates_errors() {
+        let brs = [('(', ')'), ('[', ']'), ('{', '}')];
+        let t = bracket_tree("a(b[c]{d})", &brs);
+        assert_eq!(t.children.len(), 1);
+        let paren = &t.children[0];
+        assert_eq!((paren.open, paren.start, paren.end), ('(', 1, 10));
+        assert_eq!(paren.children.len(), 2);
+        assert_eq!(paren.children[0].open, '[');
+        assert_eq!(paren.children[1].open, '{');
+        // Unclosed opener is tolerated and closed at end-of-source.
+        let u = bracket_tree("foo(bar", &brs);
+        assert_eq!(u.children.len(), 1);
+        assert_eq!((u.children[0].open, u.children[0].end), ('(', 7));
+        // Stray closer is ignored.
+        assert!(bracket_tree("a)b", &brs).children.is_empty());
     }
 
     #[test]

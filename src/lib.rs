@@ -39,7 +39,7 @@ pub mod lang;
 mod theme;
 
 pub use edit::{ChangeSet, EditorState, History, Selection, Selections, Transaction};
-pub use lang::{Language, Token, TokenKind};
+pub use lang::{Language, SyntaxNode, Token, TokenKind, bracket_tree};
 pub use theme::EditorTheme;
 
 use std::cell::RefCell;
@@ -81,6 +81,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         sticky_scroll: false,
         auto_close: true,
         match_brackets: true,
+        semantic: None,
         title: None,
     }
 }
@@ -108,6 +109,7 @@ pub struct CodeEditor {
     sticky_scroll: bool,
     auto_close: bool,
     match_brackets: bool,
+    semantic: Option<Signal<Vec<Token>>>,
     title: Option<String>,
 }
 
@@ -213,6 +215,14 @@ impl CodeEditor {
         self.match_brackets = on;
         self
     }
+    /// Overlay provider-supplied **semantic tokens** on top of the lexical highlighting —
+    /// the hook an IDE feeds from a language server (LSP semantic tokens) or its own
+    /// analysis. Semantic tokens win over lexical ones on any overlap, and the editor
+    /// re-highlights whenever the signal changes.
+    pub fn semantic_tokens(mut self, tokens: Signal<Vec<Token>>) -> Self {
+        self.semantic = Some(tokens);
+        self
+    }
     /// A filename / label shown in the status bar (also enables the status bar).
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
@@ -252,6 +262,7 @@ struct Props {
     sticky_scroll: bool,
     auto_close: bool,
     match_brackets: bool,
+    semantic: Option<Signal<Vec<Token>>>,
     title: Option<String>,
 }
 
@@ -279,6 +290,7 @@ impl From<CodeEditor> for Props {
             sticky_scroll: e.sticky_scroll,
             auto_close: e.auto_close,
             match_brackets: e.match_brackets,
+            semantic: e.semantic,
             title: e.title,
         }
     }
@@ -564,6 +576,18 @@ fn render_editor(p: &Props) -> AnyWidget {
             *c = (src.clone(), toks);
         }
         c.1.clone()
+    };
+    // Overlay provider-supplied semantic tokens (LSP etc.), which win over lexical ones.
+    let tokens: Rc<Vec<Token>> = match p.semantic {
+        Some(sig) => {
+            let sem = sig.get();
+            if sem.is_empty() {
+                tokens
+            } else {
+                Rc::new(merge_tokens(&tokens, &sem))
+            }
+        }
+        None => tokens,
     };
     let slice_start = line_start_of(&src, first_line);
     let slice_end = line_end(&src, line_start_of(&src, last_line));
@@ -1131,6 +1155,25 @@ fn to_spans(src: &str, tokens: &[Token], theme: &EditorTheme, fs: f64) -> Vec<Te
         push(&src[cursor..], TokenKind::Plain, &mut spans);
     }
     spans
+}
+
+/// Overlay `sem`antic tokens on top of `lex`ical ones: any lexical token overlapping a
+/// semantic token is dropped, then the semantic tokens are merged in — so provider/LSP
+/// semantics win over lexical highlighting. Result is sorted by `start`.
+fn merge_tokens(lex: &[Token], sem: &[Token]) -> Vec<Token> {
+    let mut sem_sorted = sem.to_vec();
+    sem_sorted.sort_by_key(|t| t.start);
+    let covered = |s: usize, e: usize| -> bool {
+        sem_sorted.iter().any(|t| t.start < e && t.start + t.len > s)
+    };
+    let mut out: Vec<Token> = lex
+        .iter()
+        .filter(|t| !covered(t.start, t.start + t.len))
+        .copied()
+        .collect();
+    out.extend(sem_sorted);
+    out.sort_by_key(|t| t.start);
+    out
 }
 
 /// Clip `tokens` to the byte range `from..to` and rebase their offsets to the start of that
@@ -1953,6 +1996,19 @@ mod tests {
         // nested: caret after '(' at 10 matches the outer call's ')' at 14
         let (a, b) = find_bracket_match(src, DEFAULT_BRACKETS, 11).unwrap();
         assert_eq!((a, b), (10, 14));
+    }
+
+    #[test]
+    fn semantic_tokens_override_lexical() {
+        let lex = vec![
+            Token { start: 0, len: 3, kind: TokenKind::Keyword },
+            Token { start: 4, len: 3, kind: TokenKind::Plain },
+        ];
+        let sem = vec![Token { start: 4, len: 3, kind: TokenKind::Type }];
+        let m = merge_tokens(&lex, &sem);
+        assert!(m.iter().any(|t| t.start == 4 && t.kind == TokenKind::Type));
+        assert!(!m.iter().any(|t| t.start == 4 && t.kind == TokenKind::Plain));
+        assert!(m.iter().any(|t| t.start == 0 && t.kind == TokenKind::Keyword));
     }
 
     #[test]
