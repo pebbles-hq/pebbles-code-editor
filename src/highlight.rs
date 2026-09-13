@@ -83,11 +83,13 @@ pub(crate) fn slice_tokens(tokens: &[Token], from: usize, to: usize) -> Vec<Toke
         .filter_map(|t| {
             let s = t.start.max(from);
             let e = (t.start + t.len).min(to);
-            (e > s).then_some(Token {
-                start: s - from,
-                len: e - s,
-                kind: t.kind,
-            })
+            // `then_some` evaluates its argument eagerly, so guard with `if` to avoid an
+            // `e - s` underflow for tokens entirely outside `from..to` (per-line slicing).
+            if e > s {
+                Some(Token { start: s - from, len: e - s, kind: t.kind })
+            } else {
+                None
+            }
         })
         .collect()
 }

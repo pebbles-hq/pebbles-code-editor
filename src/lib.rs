@@ -47,6 +47,7 @@ pub mod providers;
 
 mod brackets;
 mod collab;
+mod fold;
 mod geometry;
 mod highlight;
 mod commands;

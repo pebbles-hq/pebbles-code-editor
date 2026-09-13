@@ -71,6 +71,21 @@ pub(crate) struct Frame<'a> {
     pub(crate) highlight_word_matches: bool,
     /// Gutter markers contributed by extensions (rendered as colored dots).
     pub(crate) ext_gutter_marks: &'a [GutterMark],
+    /// The fold display-map (buffer line ↔ display row) + the foldable regions for the gutter.
+    pub(crate) disp: &'a crate::fold::DisplayMap,
+    pub(crate) fold_regions: &'a [(usize, usize)],
+    pub(crate) folds: Signal<std::collections::BTreeSet<usize>>,
+}
+
+impl Frame<'_> {
+    /// The y (px) of a buffer line in display-row space (folded lines collapse to their head).
+    pub(crate) fn y_of(&self, line: usize) -> f64 {
+        self.pad_t + self.disp.row_of.get(line).copied().unwrap_or(0) as f64 * self.line_px
+    }
+    /// Whether `line` is inside the rendered window AND not collapsed by a fold.
+    pub(crate) fn line_visible(&self, line: usize) -> bool {
+        (self.first_line..=self.last_line).contains(&line) && !self.disp.is_hidden(line)
+    }
 }
 
 /// The editor component: wires reactive state, computes the [`Frame`], and assembles the
@@ -104,6 +119,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let hover_pos = create_signal::<Option<Offset>>(None); // pointer pos for hover tooltip
     let sig_help = create_signal::<Option<crate::providers::SignatureHelp>>(None); // signature help
     let preedit = create_signal(String::new()); // IME composition (preedit) text, shown at caret
+    let folds = create_signal::<std::collections::BTreeSet<usize>>(std::collections::BTreeSet::new()); // folded head lines
     // Find/replace state.
     let find = search::State {
         open: create_signal(0u8),
@@ -468,23 +484,48 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let cl = line_of(&src, pcc);
     let cc = col_of(&src, pcc);
     let line_count = src.split('\n').count().max(1);
-    let content_h = line_count as f64 * line_px + pad_t * 2.0;
+
+    // ---- code folding: buffer-line ↔ display-row map ----
+    // Folded regions collapse their body lines; the whole view renders in DISPLAY-ROW space
+    // (y = row_of[line] * line_px), so folded lines take no height and everything below shifts
+    // up. Reading `folds` here re-renders on fold/unfold.
+    let fold_regions: std::rc::Rc<Vec<(usize, usize)>> = std::rc::Rc::new(crate::fold::foldable(&src));
+    let disp = std::rc::Rc::new(crate::fold::DisplayMap::new(line_count, &folds.get(), &fold_regions));
+    let display_rows = disp.rows();
+    let content_h = display_rows as f64 * line_px + pad_t * 2.0;
     let focused = focus.is_focused();
 
-    // ---- viewport virtualization ----
-    // With a fixed height we render only the lines in view (plus a small overscan), so a
-    // 100k-line file costs the same as a screenful. Reading `scroll_top` here makes the
-    // component re-render as the viewport scrolls (fed by the scroll view's `on_scroll`).
-    // Without a height the editor grows to its content, so every line is "visible".
+    // ---- viewport virtualization (in display-row space) ----
+    // With a fixed height we render only the rows in view (plus a small overscan), so a
+    // 100k-line file costs the same as a screenful. `first_line`/`last_line` are the BUFFER
+    // lines at the window edges; per-line loops iterate that buffer span and skip hidden lines.
     const OVERSCAN: usize = 4;
     let (first_line, last_line) = if let Some(h) = p.height {
         let top = scroll_top.get();
-        let first = (((top - pad_t) / line_px).floor() as isize - OVERSCAN as isize).max(0) as usize;
+        let first_row =
+            (((top - pad_t) / line_px).floor() as isize - OVERSCAN as isize).max(0) as usize;
         let rows = (h / line_px).ceil() as usize + OVERSCAN * 2;
-        let last = (first + rows).min(line_count - 1);
-        (first.min(line_count - 1), last)
+        let last_row = (first_row + rows).min(display_rows.saturating_sub(1));
+        (disp.line_at_row(first_row), disp.line_at_row(last_row))
     } else {
         (0, line_count - 1)
+    };
+
+    // Pointer → byte, fold-aware: the y maps to a DISPLAY row, then to its buffer line. When
+    // nothing is folded this is the plain identity mapping (fast path). Copy closure (captures
+    // only signals + f64s), so it's reused by every click/drag/hover handler below.
+    let p2b = move |text: &str, pos: Offset| -> usize {
+        let row = (((pos.y - pad_t) / line_px).floor().max(0.0)) as usize;
+        let col = (((pos.x - pad_l) / advance).round().max(0.0)) as usize;
+        let nlines = text.split('\n').count().max(1);
+        let fset = folds.peek();
+        let line = if fset.is_empty() {
+            row.min(nlines - 1)
+        } else {
+            let regions = crate::fold::foldable(text);
+            crate::fold::DisplayMap::new(nlines, &fset, &regions).line_at_row(row)
+        };
+        byte_at(text, line, col)
     };
 
     // ---- caret blink ----
@@ -627,6 +668,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         focused,
         highlight_word_matches: find.open.get() == 0,
         ext_gutter_marks: &ext_gutter_marks,
+        disp: disp.as_ref(),
+        fold_regions: fold_regions.as_slice(),
+        folds,
     };
 
     // Overlay layers on the monospace grid (current-line, rulers, guides, selection, bracket
@@ -658,7 +702,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     }
     // Hover tooltip: query the provider at the pointer's byte and float a panel there.
     if let (Some(pos), Some(hp)) = (hover_pos.get(), &p.hover) {
-        let byte = pos_to_byte(&src, pos, pad_l, pad_t, advance, line_px);
+        let byte = p2b(&src, pos);
         if let Some(h) = hp(&src, byte) {
             let tip = chrome::tooltip(
                 text(h.contents)
@@ -686,7 +730,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 .into_widget(),
             theme,
         );
-        let y = (pad_t + cl as f64 * line_px - line_px - 4.0).max(0.0);
+        let y = (frame.y_of(cl) - line_px - 4.0).max(0.0);
         layers.push(
             Positioned::new(tip)
                 .left(pad_l + cc as f64 * advance)
@@ -698,7 +742,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let pre = preedit.get();
     if !pre.is_empty() {
         let x = pad_l + cc as f64 * advance;
-        let y = pad_t + cl as f64 * line_px;
+        let y = frame.y_of(cl);
         let w = (pre.chars().count() as f64 * advance).max(2.0);
         layers.push(
             Positioned::new(
@@ -731,11 +775,11 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         let (lo, hi) = (primary.min(), primary.max());
         for (byte, is_end) in [(lo, false), (hi, true)] {
             let ln = line_of(&src, byte);
-            if !(first_line..=last_line).contains(&ln) {
+            if !frame.line_visible(ln) {
                 continue;
             }
             let hx = pad_l + col_of(&src, byte) as f64 * advance - 7.0;
-            let hy = pad_t + ln as f64 * line_px + line_px - 3.0;
+            let hy = frame.y_of(ln) + line_px - 3.0;
             // The OTHER endpoint stays fixed while this handle drags.
             let fixed = if is_end { lo } else { hi };
             let handle = GestureDetector::new(
@@ -750,7 +794,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             .on_pan_update(action_event(move |e| {
                 let cur = state.peek();
                 let text = cur.text();
-                let b = pos_to_byte(&text, e.position, pad_l, pad_t, advance, line_px);
+                let b = p2b(&text, e.position);
                 state.set(EditorState {
                     doc: cur.doc.clone(),
                     selection: Selections::single(Selection::range(fixed, b)),
@@ -764,7 +808,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     if let Some(d) = drop_byte.get() {
         let d = d.min(src.len());
         let x = pad_l + col_of(&src, d) as f64 * advance;
-        let y = pad_t + line_of(&src, d) as f64 * line_px;
+        let y = frame.y_of(line_of(&src, d));
         layers.push(
             Positioned::new(
                 container()
@@ -785,7 +829,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let hit = move |pos: Offset, extend: bool, add: bool| {
         let cur = state.peek();
         let text = cur.text();
-        let b = pos_to_byte(&text, pos, pad_l, pad_t, advance, line_px);
+        let b = p2b(&text, pos);
         let next = if add {
             cur.selection.pushed(Selection::caret(b))
         } else if extend {
@@ -812,7 +856,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             return None;
         }
         let text = cur.text();
-        let byte = pos_to_byte(&text, pos, pad_l, pad_t, advance, line_px);
+        let byte = p2b(&text, pos);
         (byte >= a && byte <= b).then_some((a, b))
     };
     // Drop the dragged range `(a,b)` at byte `dst` — move it (or copy with Ctrl held), as one
@@ -858,7 +902,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let word_select = move |pos: Offset| {
         let cur = state.peek();
         let text = cur.text();
-        let b = pos_to_byte(&text, pos, pad_l, pad_t, advance, line_px);
+        let b = p2b(&text, pos);
         let (s, e) = word_at(&text, b);
         state.set(EditorState {
             doc: cur.doc.clone(),
@@ -871,7 +915,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let line_select = move |pos: Offset| {
         let cur = state.peek();
         let text = cur.text();
-        let b = pos_to_byte(&text, pos, pad_l, pad_t, advance, line_px);
+        let b = p2b(&text, pos);
         let s = line_start(&text, b);
         let le = line_end(&text, b);
         let e = if le < text.len() { next_char(&text, le) } else { le };
@@ -936,7 +980,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             if click_exts.iter().any(|x| x.on_click.is_some()) {
                 let cur = state.peek();
                 let text = cur.text();
-                let b = pos_to_byte(&text, e.position, pad_l, pad_t, advance, line_px);
+                let b = p2b(&text, e.position);
                 let pr = cur.primary();
                 let snap = Snapshot {
                     text: &text,
@@ -958,7 +1002,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 // Dragging the selection: track the drop point (a drop caret renders at it).
                 dragged.set(true);
                 let text = state.peek().text();
-                drop_byte.set(Some(pos_to_byte(&text, e.position, pad_l, pad_t, advance, line_px)));
+                drop_byte.set(Some(p2b(&text, e.position)));
             } else if shift && alt {
                 let from = drag_anchor.peek().unwrap_or(e.position);
                 column_select(from, e.position);
@@ -970,7 +1014,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             if let Some((a, b)) = text_drag.peek() {
                 if dragged.peek() {
                     let text = state.peek().text();
-                    let dst = pos_to_byte(&text, e.position, pad_l, pad_t, advance, line_px);
+                    let dst = p2b(&text, e.position);
                     let copy = pebbles::core::keyboard::ctrl_held()
                         || pebbles::core::keyboard::meta_held();
                     drop_text(a, b, dst, copy);

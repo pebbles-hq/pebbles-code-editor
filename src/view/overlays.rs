@@ -42,12 +42,8 @@ pub(crate) fn severity_color(theme: &EditorTheme, sev: Severity) -> Color {
 
 /// The current-line highlight band (primary caret's line, only when it has no selection).
 fn current_line(f: &Frame, layers: &mut Vec<AnyWidget>) {
-    if f.p.current_line && !f.has_primary_sel && (f.first_line..=f.last_line).contains(&f.cl) {
-        layers.push(band(
-            f.pad_t + f.cl as f64 * f.line_px,
-            f.line_px,
-            f.theme.current_line,
-        ));
+    if f.p.current_line && !f.has_primary_sel && f.line_visible(f.cl) {
+        layers.push(band(f.y_of(f.cl), f.line_px, f.theme.current_line));
     }
 }
 
@@ -75,6 +71,9 @@ fn indent_guides(f: &Frame, layers: &mut Vec<AnyWidget>) {
     }
     let step = f.p.tab_size.max(1);
     for line in f.first_line..=f.last_line {
+        if f.disp.is_hidden(line) {
+            continue;
+        }
         let ls = line_start_of(f.src, line);
         let le = line_end(f.src, ls);
         let lead = f.src[ls..le]
@@ -91,7 +90,7 @@ fn indent_guides(f: &Frame, layers: &mut Vec<AnyWidget>) {
                         .decoration(BoxDecoration::new().color(f.theme.indent_guide)),
                 )
                 .left(f.pad_l + gcol as f64 * f.advance)
-                .top(f.pad_t + line as f64 * f.line_px)
+                .top(f.y_of(line))
                 .into_widget(),
             );
             gcol += step;
@@ -126,6 +125,9 @@ fn word_occurrences(f: &Frame, layers: &mut Vec<AnyWidget>) {
             continue; // skip the actual selection
         }
         let line = line_of(f.src, start);
+        if !f.line_visible(line) {
+            continue;
+        }
         let col = col_of(f.src, start);
         let w = word.chars().count() as f64 * f.advance;
         layers.push(
@@ -136,7 +138,7 @@ fn word_occurrences(f: &Frame, layers: &mut Vec<AnyWidget>) {
                     .decoration(BoxDecoration::new().color(color).radius(BorderRadius::all(2.0))),
             )
             .left(f.pad_l + col as f64 * f.advance)
-            .top(f.pad_t + line as f64 * f.line_px)
+            .top(f.y_of(line))
             .into_widget(),
         );
     }
@@ -153,6 +155,9 @@ fn selection(f: &Frame, layers: &mut Vec<AnyWidget>) {
         let (la, ca) = (line_of(f.src, lo), col_of(f.src, lo));
         let (lb, cb) = (line_of(f.src, hi), col_of(f.src, hi));
         for line in la.max(f.first_line)..=lb.min(f.last_line) {
+            if f.disp.is_hidden(line) {
+                continue;
+            }
             let start_col = if line == la { ca } else { 0 };
             let end_col = if line == lb {
                 cb
@@ -169,7 +174,7 @@ fn selection(f: &Frame, layers: &mut Vec<AnyWidget>) {
                         .decoration(BoxDecoration::new().color(color)),
                 )
                 .left(x)
-                .top(f.pad_t + line as f64 * f.line_px)
+                .top(f.y_of(line))
                 .into_widget(),
             );
         }
@@ -185,7 +190,7 @@ fn bracket_match(f: &Frame, layers: &mut Vec<AnyWidget>) {
     if let Some((a, b)) = find_bracket_match(f.src, brs, f.pcc) {
         for pos in [a, b] {
             let l = line_of(f.src, pos);
-            if (f.first_line..=f.last_line).contains(&l) {
+            if f.line_visible(l) {
                 let col = col_of(f.src, pos);
                 layers.push(
                     Positioned::new(
@@ -195,7 +200,7 @@ fn bracket_match(f: &Frame, layers: &mut Vec<AnyWidget>) {
                             .decoration(BoxDecoration::new().color(f.theme.matching_bracket)),
                     )
                     .left(f.pad_l + col as f64 * f.advance)
-                    .top(f.pad_t + l as f64 * f.line_px)
+                    .top(f.y_of(l))
                     .into_widget(),
                 );
             }
@@ -203,24 +208,31 @@ fn bracket_match(f: &Frame, layers: &mut Vec<AnyWidget>) {
     }
 }
 
-/// The highlighted text of the visible block, as one rich-text at the first visible line.
-/// Tokens are sliced to the window (rebased to the slice) so nothing offscreen is laid out.
+/// The highlighted text of the visible window, rendered one rich-text per visible line (so
+/// folded lines simply aren't drawn and the rest collapse up). Tokens are sliced per line.
 fn code_text(f: &Frame, layers: &mut Vec<AnyWidget>) {
-    let slice_start = line_start_of(f.src, f.first_line);
-    let slice_end = line_end(f.src, line_start_of(f.src, f.last_line));
-    let visible_src = &f.src[slice_start..slice_end];
-    let vis_tokens = slice_tokens(f.tokens, slice_start, slice_end);
-    let spans = to_spans(visible_src, &vis_tokens, f.theme, f.fs, f.font_family);
-    layers.push(
-        Positioned::new(
-            text_rich(spans)
-                .line_height(f.lh as f32)
-                .letter_spacing(f.letter_spacing as f32),
-        )
-        .left(f.pad_l)
-        .top(f.pad_t + f.first_line as f64 * f.line_px)
-        .into_widget(),
-    );
+    for line in f.first_line..=f.last_line {
+        if f.disp.is_hidden(line) {
+            continue;
+        }
+        let ls = line_start_of(f.src, line);
+        let le = line_end(f.src, ls);
+        if le <= ls {
+            continue; // blank line — nothing to paint
+        }
+        let toks = slice_tokens(f.tokens, ls, le);
+        let spans = to_spans(&f.src[ls..le], &toks, f.theme, f.fs, f.font_family);
+        layers.push(
+            Positioned::new(
+                text_rich(spans)
+                    .line_height(f.lh as f32)
+                    .letter_spacing(f.letter_spacing as f32),
+            )
+            .left(f.pad_l)
+            .top(f.y_of(line))
+            .into_widget(),
+        );
+    }
 }
 
 /// Whitespace/EOL markers: spaces→·, tabs→→ (aligned overlay) plus a ¶ at each line end.
@@ -228,34 +240,37 @@ fn whitespace(f: &Frame, layers: &mut Vec<AnyWidget>) {
     if !f.p.render_whitespace {
         return;
     }
-    let slice_start = line_start_of(f.src, f.first_line);
-    let slice_end = line_end(f.src, line_start_of(f.src, f.last_line));
-    let visible_src = &f.src[slice_start..slice_end];
-    let marks: String = visible_src
-        .chars()
-        .map(|c| match c {
-            ' ' => '·',
-            '\t' => '→',
-            '\n' => '\n',
-            _ => ' ',
-        })
-        .collect();
-    layers.push(
-        Positioned::new(
-            text_rich(vec![
-                span(marks)
-                    .size(f.fs as f32)
-                    .font_family(f.font_family)
-                    .color(f.theme.whitespace),
-            ])
-            .line_height(f.lh as f32)
-            .letter_spacing(f.letter_spacing as f32),
-        )
-        .left(f.pad_l)
-        .top(f.pad_t + f.first_line as f64 * f.line_px)
-        .into_widget(),
-    );
     for line in f.first_line..=f.last_line {
+        if f.disp.is_hidden(line) {
+            continue;
+        }
+        let ls = line_start_of(f.src, line);
+        let le = line_end(f.src, ls);
+        let marks: String = f.src[ls..le]
+            .chars()
+            .map(|c| match c {
+                ' ' => '·',
+                '\t' => '→',
+                _ => ' ',
+            })
+            .collect();
+        if !marks.trim().is_empty() {
+            layers.push(
+                Positioned::new(
+                    text_rich(vec![
+                        span(marks)
+                            .size(f.fs as f32)
+                            .font_family(f.font_family)
+                            .color(f.theme.whitespace),
+                    ])
+                    .line_height(f.lh as f32)
+                    .letter_spacing(f.letter_spacing as f32),
+                )
+                .left(f.pad_l)
+                .top(f.y_of(line))
+                .into_widget(),
+            );
+        }
         let x = f.pad_l + line_char_len(f.src, line) as f64 * f.advance;
         layers.push(
             Positioned::new(
@@ -266,7 +281,7 @@ fn whitespace(f: &Frame, layers: &mut Vec<AnyWidget>) {
                     .color(f.theme.whitespace),
             )
             .left(x)
-            .top(f.pad_t + line as f64 * f.line_px)
+            .top(f.y_of(line))
             .into_widget(),
         );
     }
@@ -284,6 +299,9 @@ fn diagnostics(f: &Frame, layers: &mut Vec<AnyWidget>) {
         let (la, ca) = (line_of(f.src, lo), col_of(f.src, lo));
         let (lb, cb) = (line_of(f.src, hi), col_of(f.src, hi));
         for line in la.max(f.first_line)..=lb.min(f.last_line) {
+            if f.disp.is_hidden(line) {
+                continue;
+            }
             let start_col = if line == la { ca } else { 0 };
             let end_col = if line == lb { cb } else { line_char_len(f.src, line) };
             let x = f.pad_l + start_col as f64 * f.advance;
@@ -296,7 +314,7 @@ fn diagnostics(f: &Frame, layers: &mut Vec<AnyWidget>) {
                         .decoration(BoxDecoration::new().color(color)),
                 )
                 .left(x)
-                .top(f.pad_t + line as f64 * f.line_px + f.line_px - 2.0)
+                .top(f.y_of(line) + f.line_px - 2.0)
                 .into_widget(),
             );
         }
@@ -312,7 +330,7 @@ fn inlay_hints(f: &Frame, layers: &mut Vec<AnyWidget>) {
     };
     for h in sig.get() {
         let line = line_of(f.src, h.at);
-        if !(f.first_line..=f.last_line).contains(&line) {
+        if !f.line_visible(line) {
             continue;
         }
         let col = col_of(f.src, h.at);
@@ -325,7 +343,7 @@ fn inlay_hints(f: &Frame, layers: &mut Vec<AnyWidget>) {
                     .color(f.theme.muted),
             )
             .left(f.pad_l + col as f64 * f.advance)
-            .top(f.pad_t + line as f64 * f.line_px)
+            .top(f.y_of(line))
             .into_widget(),
         );
     }
@@ -338,7 +356,7 @@ fn carets(f: &Frame, layers: &mut Vec<AnyWidget>) {
     }
     for r in f.sels.ranges() {
         let l = line_of(f.src, r.head);
-        if !(f.first_line..=f.last_line).contains(&l) {
+        if !f.line_visible(l) {
             continue;
         }
         let col = col_of(f.src, r.head);
@@ -350,7 +368,7 @@ fn carets(f: &Frame, layers: &mut Vec<AnyWidget>) {
                     .decoration(BoxDecoration::new().color(f.theme.caret)),
             )
             .left(f.pad_l + col as f64 * f.advance)
-            .top(f.pad_t + l as f64 * f.line_px + (f.line_px - f.fs * 1.15) / 2.0)
+            .top(f.y_of(l) + (f.line_px - f.fs * 1.15) / 2.0)
             .into_widget(),
         );
     }

@@ -220,15 +220,3 @@ pub(crate) fn pos_to_grid(
     let last = src.split('\n').count().saturating_sub(1);
     (line.min(last), col)
 }
-/// Map a pointer position to a byte offset in `src`.
-pub(crate) fn pos_to_byte(
-    src: &str,
-    pos: Offset,
-    pad_l: f64,
-    pad_t: f64,
-    advance: f64,
-    line_px: f64,
-) -> usize {
-    let (line, col) = pos_to_grid(src, pos, pad_l, pad_t, advance, line_px);
-    byte_at(src, line, col)
-}

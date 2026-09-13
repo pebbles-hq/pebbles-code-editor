@@ -1200,3 +1200,22 @@ fn selection_handles_render_with_a_selection() {
     }
     assert!(ui.element_count() > before, "selection handles rendered for the selection");
 }
+
+#[test]
+fn folding_collapses_and_expands() {
+    // Indentation-based folding is language-agnostic. Line 0 heads a deeper block (lines 1,2).
+    let (mut ui, mut env, _code) = harness("fn f() {\n    a;\n    b;\n}\n");
+    let before = ui.element_count();
+    // The fold arrow sits at the right edge of the gutter on line 0.
+    let arrow = Offset::new(45.0, 10.0 + 13.5 * 1.6 / 2.0);
+    ui.dispatch_tap(arrow);
+    ui.rebuild_if_dirty();
+    ui.layout(&mut env, Size::new(600.0, 400.0));
+    let folded = ui.element_count();
+    assert!(folded < before, "folding hid the body lines ({before} -> {folded})");
+    // Click again to unfold.
+    ui.dispatch_tap(arrow);
+    ui.rebuild_if_dirty();
+    ui.layout(&mut env, Size::new(600.0, 400.0));
+    assert!(ui.element_count() > folded, "unfolding restored the lines");
+}
