@@ -40,9 +40,9 @@ pub fn bar(ws: Workspace, s: Settings) -> AnyWidget {
         .padding(EdgeInsets::symmetric(12.0, 0.0))
         .child(
             row(children![
-                seg(lucide::GIT_BRANCH, "main".to_string()),
+                seg(tabler::GIT_BRANCH, "main".to_string()),
                 gap_w(16.0),
-                seg(lucide::TRIANGLE_ALERT, problems.to_string()),
+                seg(tabler::ALERT_TRIANGLE, problems.to_string()),
                 spacer(),
                 txt(if dirty {
                     "● unsaved".to_string()

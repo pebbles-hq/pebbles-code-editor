@@ -31,7 +31,7 @@ pub(crate) fn status_bar(
         .padding(EdgeInsets::symmetric(14.0, 9.0))
         .child(
             row(children![
-                icon(lucide::FILE_CODE)
+                icon(tabler::FILE_CODE)
                     .size(14.0)
                     .color(theme.gutter_active_fg),
                 gap_w(8.0),

@@ -146,7 +146,7 @@ fn welcome() -> AnyWidget {
         .alignment(Alignment::CENTER)
         .child(
             column(children![
-                icon(lucide::FILE_CODE).size(46.0).color(c.muted_foreground),
+                icon(tabler::FILE_CODE).size(46.0).color(c.muted_foreground),
                 gap_h(14.0),
                 text("Pebbles IDE").size(20.0).bold().color(c.foreground),
                 gap_h(4.0),

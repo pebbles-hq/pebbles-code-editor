@@ -228,7 +228,7 @@ fn activity_bar(panel: Signal<Panel>, problems_open: Signal<bool>) -> AnyWidget 
                 .width(48.0)
                 .height(46.0)
                 .alignment(Alignment::CENTER)
-                .child(icon(lucide::PANEL_BOTTOM).size(20.0).color(if on {
+                .child(icon(tabler::LAYOUT_BOTTOMBAR).size(20.0).color(if on {
                     c.foreground
                 } else {
                     c.muted_foreground
@@ -249,9 +249,9 @@ fn activity_bar(panel: Signal<Panel>, problems_open: Signal<bool>) -> AnyWidget 
         )))
         .child(
             column(children![
-                item(lucide::FILES, Panel::Explorer),
-                item(lucide::SEARCH, Panel::Search),
-                item(lucide::SETTINGS, Panel::Settings),
+                item(tabler::FILES, Panel::Explorer),
+                item(tabler::SEARCH, Panel::Search),
+                item(tabler::SETTINGS, Panel::Settings),
                 spacer(),
                 problems_btn,
             ])

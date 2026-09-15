@@ -57,7 +57,7 @@ fn render_search(p: &SearchProps) -> AnyWidget {
                     .padding(EdgeInsets::only(2.0, 8.0, 4.0, 2.0))
                     .child(
                         row(children![
-                            icon(lucide::FILE).size(12.0).color(c.muted_foreground),
+                            icon(tabler::FILE).size(12.0).color(c.muted_foreground),
                             gap_w(6.0),
                             text(f.path.clone())
                                 .size(12.0)

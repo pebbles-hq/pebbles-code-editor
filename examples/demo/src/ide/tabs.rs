@@ -33,7 +33,7 @@ pub fn bar(ws: Workspace) -> AnyWidget {
         let ws_act = ws.clone();
         let label = GestureDetector::new(
             row(children![
-                icon(lucide::FILE).size(13.0).color(fg),
+                icon(tabler::FILE).size(13.0).color(fg),
                 gap_w(7.0),
                 text(f.name.clone()).size(12.5).color(fg),
             ])
