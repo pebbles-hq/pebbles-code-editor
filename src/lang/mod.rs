@@ -110,7 +110,7 @@ const MAX_TREE_DEPTH: usize = 256;
 
 /// Build the bracket-nesting tree of `src` (the default [`Language::tree`]). Character-based
 /// and error-tolerant; ignores which brackets sit inside strings/comments (the coarse
-/// baseline). Nesting is capped at [`MAX_TREE_DEPTH`] so it never overflows the stack on
+/// baseline). Nesting is capped at a fixed maximum depth so it never overflows the stack on
 /// pathologically deep input. Never panics.
 pub fn bracket_tree(src: &str, brackets: &[(char, char)]) -> SyntaxNode {
     let mut root = SyntaxNode {

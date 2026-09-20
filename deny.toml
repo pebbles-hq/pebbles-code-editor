@@ -74,9 +74,6 @@ allow = [
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
-# examples/demo depends on this crate by path (no version). A path dep is never
-# registry-fetched, so its missing version isn't the risk `wildcards = "deny"` guards against.
-allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"
