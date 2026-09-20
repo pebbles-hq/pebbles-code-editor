@@ -19,7 +19,9 @@ keywords = ["editor", "code-editor", "syntax", "gui", "pebbles"]
 categories = ["gui", "text-editors"]
 
 [dependencies]
-pebbles = { git = "https://github.com/pebbles-hq/pebbles" }
+# Pinned to a reviewed framework commit — `cargo update` won't silently ingest an
+# unreviewed `main` HEAD. Bump the rev deliberately when adopting framework changes.
+pebbles = { git = "https://github.com/pebbles-hq/pebbles", rev = "1d6e84177b954bd2517c9d1c1a601f64365249f1" }
 # The document store: a rope for O(log n) splice + line indexing on large files.
 ropey = "1"
 # Regex search mode (find/replace). Plain + whole-word search need no engine.
@@ -30,3 +32,15 @@ opt-level = 0
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# Lints for the editor crate. An editor slices and indexes text constantly, so these are
+# WARN, not DENY: they flag every raw `&str` slice / unchecked index / unguarded arithmetic
+# as a spot to double-check a panic can't reach it (the memory-safety class this crate cares
+# about), without blocking the build on the existing call sites. `all` runs at a lower
+# priority so the specific lints below can override it. Clippy in CI is warn-only for the
+# same reason; ratchet to deny once the backlog is burned down.
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+string_slice = "warn"
+indexing_slicing = "warn"
+arithmetic_side_effects = "warn"

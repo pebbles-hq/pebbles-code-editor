@@ -1,0 +1,82 @@
+# cargo-deny configuration — licenses, advisories, and duplicate-version hygiene.
+# Run locally with `cargo deny check`; CI runs it on every push.
+#
+# This crate's dependency graph is dominated by the `pebbles` framework (a git dependency),
+# so it inherits the framework's GPU/windowing stack (vello/wgpu/winit) and the same
+# transitive advisory picture — this policy mirrors `pebbles/deny.toml` accordingly.
+
+[graph]
+all-features = true
+# Restrict the graph to the platforms Pebbles actually supports. Without this, cargo-deny
+# unions EVERY target, which drags in muda's Linux GTK stack (gtk → glib → proc-macro-error,
+# all unmaintained) even though it is never built: `muda` is target-gated to macOS/Windows,
+# and there it uses the native menu APIs rather than GTK. Scoping the graph makes the
+# advisory report reflect what we ship instead of a union that no build ever produces.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+]
+
+[advisories]
+version = 2
+yanked = "deny"
+# `unmaintained` advisories on TRANSITIVE dependencies we do not control (reached through the
+# `pebbles` framework). None is a vulnerability (cargo-audit, which gates on vulnerabilities,
+# passes) — they are maintenance notices, and gating merges on them would train people to
+# ignore the job. Listed explicitly so each stays visible and reviewable rather than being
+# blanket-disabled.
+ignore = [
+    # The gtk-rs GTK3 stack, reached only via `muda` (the framework's native-menu feature).
+    # `muda` is target-gated to macOS/Windows, where it uses the native menu APIs — so this
+    # code is not built on ANY supported platform. It disappears entirely when muda upstreams
+    # a GTK4/no-GTK Linux path.
+    "RUSTSEC-2024-0412",
+    "RUSTSEC-2024-0413",
+    "RUSTSEC-2024-0415",
+    "RUSTSEC-2024-0416",
+    "RUSTSEC-2024-0418",
+    "RUSTSEC-2024-0419",
+    "RUSTSEC-2024-0420",
+    # proc-macro-error, a build-time proc-macro dep of glib-macros in that same GTK chain.
+    # Build-time only; never linked into a shipped binary.
+    "RUSTSEC-2024-0370",
+    # ttf-parser, via ab_glyph <- sctk-adwaita <- winit (Wayland client-side decorations).
+    # This one IS built on Linux. Font PARSING of untrusted files would matter, but this path
+    # only renders winit's own title-bar text, and the fix belongs upstream in winit.
+    "RUSTSEC-2026-0192",
+]
+
+[licenses]
+version = 2
+# The `demo` example crate is `publish = false` and carries no license field; it is not
+# distributed, so do not gate on it.
+private = { ignore = true }
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",           # ring / rustls-webpki / untrusted (TLS) + libloading (GPU loader)
+    "Zlib",
+    "Unicode-3.0",
+    "MPL-2.0",       # option groups in the wgpu/winit graph
+    "BSL-1.0",       # error-code, via arboard's Windows clipboard backend
+    "CDLA-Permissive-2.0", # webpki-roots — Mozilla's CA bundle, via ureq
+    "CC0-1.0",
+    "OFL-1.1",       # bundled fonts (via the framework)
+    "Ubuntu-font-1.0",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# The `pebbles` framework is consumed as a git dependency; allow its host.
+allow-git = ["https://github.com/pebbles-hq/pebbles"]

@@ -61,7 +61,7 @@ pub(crate) fn apply_key(
     let src = st.text();
     let len = src.len();
     // Every cursor/selection; edits and motions apply to all of them (multi-cursor).
-    let sels = st.selection.clamped(len);
+    let sels = st.selection.clamped(&st.doc);
     let ranges: Vec<Selection> = sels.ranges().to_vec();
     let primary_idx = sels.primary_index();
     let primary = sels.primary();

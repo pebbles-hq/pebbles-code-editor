@@ -44,7 +44,9 @@ fn literal_matches(src: &str, query: &str, opts: &Options) -> Vec<(usize, usize)
             if !opts.whole_word || is_whole_word(src, start, end) {
                 out.push((start, end));
             }
-            from = start + query.chars().next().map(char::len_utf8).unwrap_or(1);
+            // Advance past the whole match (not just its first char): matches never overlap —
+            // matching the regex/case-insensitive path — and a repeated-char doc stays O(n).
+            from = end;
         }
     } else {
         // Case-insensitive: scan on the lowercased haystack/needle. Both are ASCII-foldable
@@ -121,5 +123,13 @@ mod tests {
     #[test]
     fn invalid_regex_is_empty_not_panic() {
         assert!(find_all("abc", "(", &opts(true, false, true)).is_empty());
+    }
+
+    #[test]
+    fn case_sensitive_matches_do_not_overlap() {
+        // "aa" in "aaaa" must yield the two non-overlapping matches (0,2),(2,4) — not the
+        // overlapping (0,2),(1,3),(2,4) an advance-by-first-char scan would produce.
+        let m = find_all("aaaa", "aa", &opts(true, false, false));
+        assert_eq!(m, vec![(0, 2), (2, 4)]);
     }
 }

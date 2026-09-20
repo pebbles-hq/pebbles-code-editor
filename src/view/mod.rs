@@ -192,6 +192,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         let remote = new != state.peek().text();
         if remote {
             let cur = state.peek();
+            let doc = Rope::from_str(&new);
             let sel = match &delta {
                 Some(e) => {
                     let mapped: Vec<Selection> = cur
@@ -205,12 +206,12 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                             )
                         })
                         .collect();
-                    Selections::new(mapped, cur.selection.primary_index()).clamped(new.len())
+                    Selections::new(mapped, cur.selection.primary_index()).clamped(&doc)
                 }
-                None => cur.selection.clamped(new.len()),
+                None => cur.selection.clamped(&doc),
             };
             state.set(EditorState {
-                doc: Rope::from_str(&new),
+                doc,
                 selection: sel,
             });
         }
@@ -456,7 +457,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 && ro_exts.iter().any(|e| e.edit_filter.is_some())
             {
                 let st = state.peek();
-                let sels = st.selection.clamped(st.text().len());
+                let sels = st.selection.clamped(&st.doc);
                 if sels.ranges().len() == 1 {
                     let src = st.text();
                     let pr = sels.primary();
@@ -593,7 +594,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let theme = &p.theme;
 
     // All cursors/selections; the primary drives the current-line band + status line.
-    let sels = st.selection.clamped(src.len());
+    let sels = st.selection.clamped(&st.doc);
     let primary = sels.primary();
     let (pcc, has_primary_sel) = (primary.head, !primary.is_empty());
     let cl = line_of(&src, pcc);

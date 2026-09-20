@@ -16,6 +16,16 @@
 
 use ropey::Rope;
 
+/// Snap `byte` down to the UTF-8 char boundary at or before it, clamped into the document.
+/// This is the char-boundary API the rest of the editor already relies on: `byte_to_char`
+/// floors to the char that contains `byte`, and `char_to_byte` returns that char's start
+/// offset. An externally-supplied offset that lands mid-codepoint would otherwise panic the
+/// raw `&str` slicing in the commands / overlays / geometry layers.
+fn snap_boundary(doc: &Rope, byte: usize) -> usize {
+    let byte = byte.min(doc.len_bytes());
+    doc.char_to_byte(doc.byte_to_char(byte))
+}
+
 /// A caret + selection over the document, as byte offsets. `anchor == head` is a bare caret.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Selection {
@@ -49,11 +59,14 @@ impl Selection {
     pub fn max(&self) -> usize {
         self.anchor.max(self.head)
     }
-    /// Clamp both ends into `0..=len` (e.g. after an external document swap).
-    pub fn clamped(&self, len: usize) -> Self {
+    /// Clamp both ends into the document and snap each onto a UTF-8 char boundary — the trust
+    /// boundary for externally-supplied offsets (an extension's `replace`, a document swap, a
+    /// collaborator's mapped position). An offset landing mid-codepoint is floored to the char
+    /// that contains it, so the raw `&str` slicing downstream can never split a codepoint.
+    pub fn clamped(&self, doc: &Rope) -> Self {
         Selection {
-            anchor: self.anchor.min(len),
-            head: self.head.min(len),
+            anchor: snap_boundary(doc, self.anchor),
+            head: snap_boundary(doc, self.head),
         }
     }
 }
@@ -328,9 +341,9 @@ impl Selections {
         Selections::new(ranges, self.primary)
     }
 
-    /// Clamp every range into `0..=len`.
-    pub fn clamped(&self, len: usize) -> Selections {
-        let ranges = self.ranges.iter().map(|s| s.clamped(len)).collect();
+    /// Clamp every range into the document, snapping each end onto a char boundary.
+    pub fn clamped(&self, doc: &Rope) -> Selections {
+        let ranges = self.ranges.iter().map(|s| s.clamped(doc)).collect();
         Selections::new(ranges, self.primary)
     }
 }
@@ -386,14 +399,14 @@ impl EditorState {
         let inverse_changes = tx.changes.invert(&self.doc);
         let mut doc = self.doc.clone();
         tx.changes.apply(&mut doc);
-        let len = doc.len_bytes();
 
         // The selection after: an explicit one from the tx, else map the old one through.
+        // `clamped` snaps every offset into the new doc and onto a char boundary.
         let selection = tx
             .selection
             .clone()
             .unwrap_or_else(|| self.selection.mapped(&tx.changes))
-            .clamped(len);
+            .clamped(&doc);
 
         let next = EditorState { doc, selection };
         let inverse = Transaction {
@@ -461,6 +474,10 @@ struct Revision {
     caret_after: usize,
 }
 
+/// Cap on retained undo steps. A long editing session would otherwise grow this stack
+/// without bound; past the cap the oldest (cheapest-to-forget) steps drop off the bottom.
+const MAX_UNDO: usize = 10_000;
+
 /// The undo/redo stack. Records the inverse of every applied edit; contiguous typing and
 /// backspacing coalesce into single undo steps.
 #[derive(Default)]
@@ -494,6 +511,11 @@ impl History {
             kind,
             caret_after,
         });
+        // Bound memory: forget the oldest steps once the stack exceeds the cap.
+        if self.undo.len() > MAX_UNDO {
+            let overflow = self.undo.len() - MAX_UNDO;
+            self.undo.drain(..overflow);
+        }
     }
 
     /// Whether there is anything to undo.
@@ -814,8 +836,37 @@ mod tests {
 
     #[test]
     fn selections_clamped_to_doc() {
+        let doc = Rope::from_str("abcde"); // 5 bytes
         let sels = Selections::new(vec![Selection::range(2, 20)], 0);
-        let c = sels.clamped(5);
+        let c = sels.clamped(&doc);
         assert_eq!((c.primary().min(), c.primary().max()), (2, 5));
+    }
+
+    #[test]
+    fn offsets_snap_to_char_boundary_no_panic() {
+        // 'é' is two bytes; offset 1 sits mid-codepoint. Feeding it through the trust
+        // boundary (apply → clamped) must floor it to a char boundary rather than leave a
+        // split offset that panics the raw &str slicing in commands/overlays/geometry.
+        let st = EditorState {
+            doc: Rope::from_str("é"),
+            selection: Selections::single(Selection::caret(1)),
+        };
+        let (next, _) = st.apply(&Transaction::select(Selection::caret(1)));
+        let head = next.primary().head;
+        assert!(next.text().is_char_boundary(head));
+        assert_eq!(head, 0); // floored off the mid-codepoint offset
+    }
+
+    #[test]
+    fn undo_history_is_bounded() {
+        let mut hist = History::new();
+        for i in 0..(MAX_UNDO + 500) {
+            hist.record(
+                Transaction::change(ChangeSet::insert(0, "x")),
+                Coalesce::Never,
+                i,
+            );
+        }
+        assert!(hist.undo.len() <= MAX_UNDO);
     }
 }

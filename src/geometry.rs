@@ -104,6 +104,13 @@ pub(crate) fn prev_char(src: &str, byte: usize) -> usize {
 /// The byte offset one char after `byte`.
 pub(crate) fn next_char(src: &str, byte: usize) -> usize {
     let b = byte.min(src.len());
+    // The module invariant (see the header): every offset that reaches this raw slice sits on
+    // a char boundary — selection offsets are snapped at the trust boundary (`Selections::
+    // clamped`). This catches any future caller that violates it before it can panic.
+    debug_assert!(
+        src.is_char_boundary(b),
+        "offset must be on a UTF-8 char boundary"
+    );
     src[b..]
         .chars()
         .next()

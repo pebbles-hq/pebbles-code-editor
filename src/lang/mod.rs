@@ -101,9 +101,17 @@ pub trait Language {
     }
 }
 
+/// Cap on the bracket nesting the tree represents. [`SyntaxNode`] is a recursive
+/// `Vec<SyntaxNode>`, so its derived `Drop` recurses once per level — source nested past a
+/// sane depth (pathological or malicious input, e.g. 100k unmatched `[`) would overflow the
+/// stack when the tree is dropped. Openers deeper than this are ignored, keeping the tree
+/// shallow enough to build AND drop safely; real source never comes close.
+const MAX_TREE_DEPTH: usize = 256;
+
 /// Build the bracket-nesting tree of `src` (the default [`Language::tree`]). Character-based
 /// and error-tolerant; ignores which brackets sit inside strings/comments (the coarse
-/// baseline). Never panics.
+/// baseline). Nesting is capped at [`MAX_TREE_DEPTH`] so it never overflows the stack on
+/// pathologically deep input. Never panics.
 pub fn bracket_tree(src: &str, brackets: &[(char, char)]) -> SyntaxNode {
     let mut root = SyntaxNode {
         open: '\0',
@@ -120,12 +128,16 @@ pub fn bracket_tree(src: &str, brackets: &[(char, char)]) -> SyntaxNode {
     };
     for (i, ch) in src.char_indices() {
         if brackets.iter().any(|(o, _)| *o == ch) {
-            stack.push(SyntaxNode {
-                open: ch,
-                start: i,
-                end: i,
-                children: Vec::new(),
-            });
+            // Past the depth cap, drop the opener rather than nest deeper — a deeper tree
+            // risks a stack overflow when its recursive `Drop` runs.
+            if stack.len() < MAX_TREE_DEPTH {
+                stack.push(SyntaxNode {
+                    open: ch,
+                    start: i,
+                    end: i,
+                    children: Vec::new(),
+                });
+            }
         } else if let Some(&(o, _)) = brackets.iter().find(|(_, c)| *c == ch)
             && let Some(mut node) = stack.pop_if(|n| n.open == o)
         {
@@ -252,6 +264,19 @@ mod tests {
         assert_eq!((u.children[0].open, u.children[0].end), ('(', 7));
         // Stray closer is ignored.
         assert!(bracket_tree("a)b", &brs).children.is_empty());
+    }
+
+    #[test]
+    fn bracket_tree_deep_nesting_does_not_overflow() {
+        // Pathologically deep input: the nesting cap keeps the recursive SyntaxNode tree
+        // shallow enough to build AND drop without overflowing the stack (a SIGSEGV would
+        // fail the test as an abnormal exit — merely reaching the asserts is the pass).
+        let brs = [('(', ')'), ('[', ']'), ('{', '}')];
+        let unclosed = bracket_tree(&"[".repeat(100_000), &brs);
+        assert!(unclosed.children.len() <= 1);
+        // Balanced deep nesting too (all openers then all closers).
+        let balanced = format!("{}{}", "[".repeat(100_000), "]".repeat(100_000));
+        let _ = bracket_tree(&balanced, &brs);
     }
 
     #[test]

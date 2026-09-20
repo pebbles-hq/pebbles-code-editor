@@ -1,0 +1,24 @@
+# Dependency update PRs. Dependabot proposes the upgrades; the cargo-audit + cargo-deny jobs
+# in CI are what actually gate a vulnerable graph.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # The GPU/windowing stack moves in lockstep (vello ↔ wgpu ↔ winit); upgrading them one
+      # at a time produces PRs that cannot compile.
+      graphics-stack:
+        patterns: ["vello", "vello_hybrid", "wgpu", "winit", "peniko", "kurbo", "parley", "raw-window-handle"]
+      dev-dependencies:
+        dependency-type: development
+
+  # Keep the SHA-pinned actions current — a pin is only safe if it is maintained.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday

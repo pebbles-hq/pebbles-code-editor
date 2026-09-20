@@ -6,36 +6,143 @@ on:
   pull_request:
     branches: [main]
 
+# Least privilege by default; the gitleaks job escalates itself to upload SARIF.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   check:
     name: fmt · clippy · test · doc
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The `pebbles` framework (a git dependency) pulls parley/fontique, whose build script
+      # needs the fontconfig dev headers; without them every build/test fails on Linux with
+      # `failed to run custom build command for yeslogic-fontconfig-sys`.
+      - name: System deps (fontconfig)
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
 
       - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
+          toolchain: stable
           components: rustfmt, clippy
 
       - name: Cache cargo + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Format
         run: cargo fmt --all --check
 
-      - name: Clippy (all targets, warnings = errors)
-        run: cargo clippy --all-targets -- -D warnings
+      # Warn-only: the [lints.clippy] table is the source of truth and deliberately WARNs on
+      # indexing / slicing / arithmetic (an editor does these constantly). Denying warnings
+      # here would turn those advisory lints into a build-breaking backlog. Ratchet to
+      # `-- -D warnings` once it is burned down.
+      - name: Clippy (all targets)
+        run: cargo clippy --all-targets
 
       - name: Test
-        # The editing/robustness/feature suites run on CPU. The headless GPU
-        # screenshot path (SHOT=) needs a GPU and isn't exercised here.
+        # The editing/robustness/feature suites run on CPU. The headless GPU screenshot path
+        # (SHOT=) needs a GPU and isn't exercised here.
         run: cargo test --workspace
 
       - name: Docs
         run: cargo doc --no-deps --workspace
         env:
           RUSTDOCFLAGS: "-D warnings"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # cargo-audit — the RustSec advisory database: CVEs in the DEPENDENCY graph.
+  # Reads Cargo.lock only, so it needs no framework build and no account, and
+  # therefore cannot silently stop running. Cargo.lock is gitignored (this is a
+  # library), so it is generated first.
+  # ───────────────────────────────────────────────────────────────────────────
+  audit:
+    name: cargo-audit (RustSec)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
+        with:
+          tool: cargo-audit
+      - name: Generate lockfile
+        run: cargo generate-lockfile
+      # Fails on any VULNERABILITY in the locked graph. Unmaintained/yanked-crate
+      # policy lives in deny.toml (below), not here.
+      - run: cargo audit
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # cargo-deny — the supply-chain policy gate driven by deny.toml: advisories,
+  # license allow-list, duplicate/banned crates, permitted sources. Split per
+  # check so a failure names WHICH policy broke.
+  # ───────────────────────────────────────────────────────────────────────────
+  deny:
+    name: cargo-deny (${{ matrix.check }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [advisories, bans, licenses, sources]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
+        with:
+          tool: cargo-deny
+      - name: Generate lockfile
+        run: cargo generate-lockfile
+      - run: cargo deny check ${{ matrix.check }}
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Gitleaks — secrets/credentials committed anywhere in git HISTORY, not just
+  # the current snapshot (hence fetch-depth: 0). Uses the CLI directly (the v2
+  # action requires an org license). Results land in Security → Code Scanning.
+  # ───────────────────────────────────────────────────────────────────────────
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout code (full history)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install Gitleaks
+        run: |
+          VERSION="v8.24.3"
+          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/${VERSION}/gitleaks_${VERSION#v}_linux_x64.tar.gz" \
+            | tar -xz gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+
+      - name: Run Gitleaks
+        run: |
+          gitleaks detect \
+            --source . \
+            --redact \
+            --no-banner \
+            --exit-code 1 \
+            --report-format sarif \
+            --report-path gitleaks.sarif
+
+      - name: Ensure SARIF file exists
+        # Gitleaks writes no report when zero leaks are found, but upload-sarif
+        # requires the file — emit a valid empty one.
+        if: always()
+        run: |
+          [ -f gitleaks.sarif ] || cat <<'EOF' > gitleaks.sarif
+          {"version":"2.1.0","$schema":"https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json","runs":[{"tool":{"driver":{"name":"Gitleaks","rules":[]}},"results":[]}]}
+          EOF
+
+      - name: Upload Gitleaks results to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        if: always()
+        with:
+          sarif_file: gitleaks.sarif
+          category: gitleaks
