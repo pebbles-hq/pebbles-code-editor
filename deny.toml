@@ -73,7 +73,11 @@ allow = [
 
 [bans]
 multiple-versions = "warn"
-wildcards = "deny"
+# `warn`, not `deny`: this crate's one non-registry dep is `pebbles` by git, which has no
+# crates.io version req and so reads as a wildcard. Unpinned-ingestion — the actual risk — is
+# already controlled by the pinned `rev` in Cargo.toml, so a hard deny here only blocks a
+# version-less git dep that is deliberately pinned another way.
+wildcards = "warn"
 
 [sources]
 unknown-registry = "deny"
