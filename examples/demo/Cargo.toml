@@ -15,5 +15,5 @@ pebbles-code-editor = { path = "../..", version = "0.1.0" }
 # display — rasterizes through vello_hybrid, the framework's default backend.
 vello = { version = "0.10", default-features = true }
 vello_hybrid = "0.2"
-wgpu = "29"
+wgpu = "30"
 pollster = "1"
