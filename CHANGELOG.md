@@ -6,6 +6,9 @@ All notable changes to `pebbles-code-editor` are documented here. The format fol
 
 ## [Unreleased]
 
+### Changed — demo screenshots use the framework's offscreen renderer
+`SHOT=` now renders through `pebbles::shell::capture::OffscreenCapture`; the demo no longer depends on vello/wgpu directly. Requires pebbles ≥ `f040227`.
+
 The crate is feature-complete for its scope and used within the Pebbles ecosystem via a
 git dependency; it is not yet published to crates.io.
 

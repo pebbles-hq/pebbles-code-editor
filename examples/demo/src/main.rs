@@ -20,18 +20,22 @@
 
 use pebbles::prelude::*;
 
+#[cfg(not(target_family = "wasm"))]
 mod capture;
 mod ide;
 mod samples;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     Theme::dark().make_current();
-    if let Ok(spec) = std::env::var("SHOT") {
-        return capture::shot(
-            &spec,
-            || ide::ide().into_widget(),
-            theme().colors.background,
-        );
+    #[cfg(not(target_family = "wasm"))]
+    {
+        if let Ok(spec) = std::env::var("SHOT") {
+            return capture::shot(
+                &spec,
+                || ide::ide().into_widget(),
+                theme().colors.background,
+            );
+        }
     }
     App::new(component(ide::ide))
         .title("Pebbles IDE")
