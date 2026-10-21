@@ -18,6 +18,8 @@ targets = [
     "x86_64-pc-windows-msvc",
     "aarch64-apple-darwin",
     "x86_64-apple-darwin",
+    # web is a supported platform (WebGPU + WebGL2 fallback)
+    "wasm32-unknown-unknown",
 ]
 
 [advisories]
@@ -47,6 +49,13 @@ ignore = [
     # This one IS built on Linux. Font PARSING of untrusted files would matter, but this path
     # only renders winit's own title-bar text, and the fix belongs upstream in winit.
     "RUSTSEC-2026-0192",
+    # zvariant / zvariant_derive / zbus_names — unmaintained as standalone crates
+    # (RUSTSEC-2026-0370/0371/0372; maintenance notices, no vulnerability): merged into
+    # zbus 6. Reached via accesskit_unix <- accesskit_winit (Linux AT-SPI accessibility);
+    # no safe upgrade until accesskit moves to zbus 6. Revisit on the next accesskit bump.
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
 ]
 
 [licenses]
@@ -72,6 +81,7 @@ allow = [
 ]
 
 [bans]
+deny = [{ crate = "rustybuzz", reason = "unmaintained (RUSTSEC-2026-0206); cosmic-text 0.19 shapes with harfrust" }]
 multiple-versions = "warn"
 # `warn`, not `deny`: this crate's one non-registry dep is `pebbles` by git, which has no
 # crates.io version req and so reads as a wildcard. Unpinned-ingestion — the actual risk — is
