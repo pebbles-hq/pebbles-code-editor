@@ -45,9 +45,14 @@ ignore = [
     # proc-macro-error, a build-time proc-macro dep of glib-macros in that same GTK chain.
     # Build-time only; never linked into a shipped binary.
     "RUSTSEC-2024-0370",
-    # ttf-parser, via ab_glyph <- sctk-adwaita <- winit (Wayland client-side decorations).
-    # This one IS built on Linux. Font PARSING of untrusted files would matter, but this path
-    # only renders winit's own title-bar text, and the fix belongs upstream in winit.
+    # ttf-parser — unmaintained (RUSTSEC-2026-0192; a maintenance notice, no known
+    # vulnerability, no patched release). Reached on the PRIMARY font path: fontdb 0.23
+    # (cosmic-text's font database) parses every bundled font, every `App::font` /
+    # `fonts::register_user_font` byte slice and, on desktop, every system font; also via
+    # ab_glyph <- sctk-adwaita <- winit (Wayland client-side decorations).
+    # Accepted for this release because fonts are TRUSTED input (SECURITY.md "Renderer & fonts").
+    # Mitigations: font fuzz targets (fuzz/, weekly) + seeded font-mutation tests (every CI run).
+    # Revisit when cosmic-text/fontdb move off ttf-parser.
     "RUSTSEC-2026-0192",
     # zvariant / zvariant_derive / zbus_names — unmaintained as standalone crates
     # (RUSTSEC-2026-0370/0371/0372; maintenance notices, no vulnerability): merged into
