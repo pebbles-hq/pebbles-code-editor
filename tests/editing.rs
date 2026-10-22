@@ -1575,3 +1575,28 @@ fn block_widget_reserves_a_row() {
         "the block widget rendered on its reserved row"
     );
 }
+
+/// The editor's grid is one space advance per column (`ADVANCE_RATIO = 0.6`); a TAB shapes as
+/// one column by default (`tab_width = 1`, wgpu migration T15/T31), so "\tx" in JetBrains Mono
+/// 20 px is exactly two 12 px columns wide.
+#[test]
+fn tab_occupies_one_grid_column() {
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    let rich = text_rich(vec![span("\tx").font_family("JetBrains Mono").size(20.0)]);
+    ui.mount_root(View::new(white(), column(vec![rich.into_widget()])).into_widget());
+    ui.layout(&mut env, Size::new(600.0, 400.0));
+    let tree = ui.render_tree();
+    let mut stack: Vec<_> = tree.root.into_iter().collect();
+    let mut width = None;
+    while let Some(id) = stack.pop() {
+        if tree.debug_name(id) == "RenderParagraph" {
+            width = Some(tree.size_of(id).width);
+        }
+        stack.extend(tree.children_of(id).iter().copied());
+    }
+    let width = width.expect("a paragraph");
+    assert!((width - 24.0).abs() <= 0.01, "\\tx is {width} px wide, expected 2 columns (24 px)");
+}
