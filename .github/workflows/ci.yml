@@ -21,9 +21,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The `pebbles` framework (a git dependency) pulls parley/fontique, whose build script
-      # needs the fontconfig dev headers; without them every build/test fails on Linux with
-      # `failed to run custom build command for yeslogic-fontconfig-sys`.
+      # fontconfig dev headers: kept until P23 confirms the framework's text stack no longer
+      # needs them at build time.
       - name: System deps (fontconfig)
         run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
 
@@ -51,8 +50,6 @@ jobs:
         # (SHOT=) needs a GPU and isn't exercised here.
         run: cargo test --workspace
 
-      - name: Test (wgpu backend — transitional, delete at Phase 6)
-        run: cargo test --workspace --no-default-features --features wgpu
 
       - name: Docs
         run: cargo doc --no-deps --workspace

@@ -2,7 +2,7 @@
 # Run locally with `cargo deny check`; CI runs it on every push.
 #
 # This crate's dependency graph is dominated by the `pebbles` framework (a git dependency),
-# so it inherits the framework's GPU/windowing stack (vello/wgpu/winit) and the same
+# so it inherits the framework's GPU/windowing stack (wgpu/winit) and the same
 # transitive advisory picture — this policy mirrors `pebbles/deny.toml` accordingly.
 
 [graph]
