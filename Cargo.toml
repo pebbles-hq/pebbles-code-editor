@@ -18,10 +18,17 @@ readme = "README.md"
 keywords = ["editor", "code-editor", "syntax", "gui", "pebbles"]
 categories = ["gui", "text-editors"]
 
+[features]
+# Transitional render-backend forwarding (pebbles wgpu migration). Removed at the
+# framework's Phase 6 (K24).
+default = ["vello-hybrid"]
+vello-hybrid = ["pebbles/vello-hybrid"]
+wgpu = ["pebbles/wgpu"]
+
 [dependencies]
 # Pinned to a reviewed framework commit — `cargo update` won't silently ingest an
 # unreviewed `main` HEAD. Bump the rev deliberately when adopting framework changes.
-pebbles = { git = "https://github.com/pebbles-hq/pebbles", rev = "f04022739e5da81efecc2a49a483e8149433d045" }
+pebbles = { git = "https://github.com/pebbles-hq/pebbles", rev = "56ec7b068a627c216a6d654b9e53e0ed64fb201c", default-features = false }
 # The document store: a rope for O(log n) splice + line indexing on large files.
 ropey = "1"
 # Regex search mode (find/replace). Plain + whole-word search need no engine.

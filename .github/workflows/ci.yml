@@ -51,6 +51,9 @@ jobs:
         # (SHOT=) needs a GPU and isn't exercised here.
         run: cargo test --workspace
 
+      - name: Test (wgpu backend — transitional, delete at Phase 6)
+        run: cargo test --workspace --no-default-features --features wgpu
+
       - name: Docs
         run: cargo doc --no-deps --workspace
         env:
