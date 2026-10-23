@@ -86,7 +86,20 @@ allow = [
 ]
 
 [bans]
-deny = [{ crate = "rustybuzz", reason = "unmaintained (RUSTSEC-2026-0206); cosmic-text 0.19 shapes with harfrust" }]
+deny = [
+    { crate = "rustybuzz", reason = "unmaintained (RUSTSEC-2026-0206); cosmic-text 0.19 shapes with harfrust" },
+    # The removed renderer and text stack (wgpu migration): Pebbles renders with pebbles-gpu.
+    { crate = "vello", reason = "Pebbles renders with its own wgpu renderer (wgpu migration)" },
+    { crate = "vello_cpu", reason = "see vello" },
+    { crate = "vello_hybrid", reason = "see vello" },
+    { crate = "vello_common", reason = "see vello" },
+    { crate = "vello_encoding", reason = "see vello" },
+    { crate = "vello_shaders", reason = "see vello" },
+    { crate = "vello_sparse_shaders", reason = "see vello" },
+    { crate = "glifo", reason = "see vello" },
+    { crate = "parley", reason = "text is cosmic-text" },
+    { crate = "fontique", reason = "text is cosmic-text (fontdb)" },
+]
 multiple-versions = "warn"
 # `warn`, not `deny`: this crate's one non-registry dep is `pebbles` by git, which has no
 # crates.io version req and so reads as a wildcard. Unpinned-ingestion — the actual risk — is
