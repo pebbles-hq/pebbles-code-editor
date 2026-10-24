@@ -1598,5 +1598,8 @@ fn tab_occupies_one_grid_column() {
         stack.extend(tree.children_of(id).iter().copied());
     }
     let width = width.expect("a paragraph");
-    assert!((width - 24.0).abs() <= 0.01, "\\tx is {width} px wide, expected 2 columns (24 px)");
+    assert!(
+        (width - 24.0).abs() <= 0.01,
+        "\\tx is {width} px wide, expected 2 columns (24 px)"
+    );
 }
