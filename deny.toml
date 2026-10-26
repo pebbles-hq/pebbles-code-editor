@@ -88,6 +88,18 @@ allow = [
 [bans]
 deny = [
     { crate = "rustybuzz", reason = "unmaintained (RUSTSEC-2026-0206); cosmic-text 0.19 shapes with harfrust" },
+    # The removed renderer and text stack (S38, DR-23). This file is the one place outside
+    # CHANGELOG.md allowed to name them (zero-trace exclusion, owner decision 2026-10-26).
+    { crate = "vello", reason = "Pebbles renders with its own wgpu renderer (wgpu migration)" },
+    { crate = "vello_cpu", reason = "see vello" },
+    { crate = "vello_hybrid", reason = "see vello" },
+    { crate = "vello_common", reason = "see vello" },
+    { crate = "vello_encoding", reason = "see vello" },
+    { crate = "vello_shaders", reason = "see vello" },
+    { crate = "vello_sparse_shaders", reason = "see vello" },
+    { crate = "glifo", reason = "see vello" },
+    { crate = "parley", reason = "text is cosmic-text" },
+    { crate = "fontique", reason = "text is cosmic-text (fontdb)" },
 ]
 multiple-versions = "warn"
 # `warn`, not `deny`: this crate's one non-registry dep is `pebbles` by git, which has no
