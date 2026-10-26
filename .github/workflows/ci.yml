@@ -21,12 +21,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The `pebbles` framework (a git dependency) pulls parley/fontique, whose build script
-      # needs the fontconfig dev headers; without them every build/test fails on Linux with
-      # `failed to run custom build command for yeslogic-fontconfig-sys`.
-      - name: System deps (fontconfig)
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
-
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
@@ -50,6 +44,7 @@ jobs:
         # The editing/robustness/feature suites run on CPU. The headless GPU screenshot path
         # (SHOT=) needs a GPU and isn't exercised here.
         run: cargo test --workspace
+
 
       - name: Docs
         run: cargo doc --no-deps --workspace
