@@ -6,6 +6,8 @@
 //! Budgets are loose in debug builds (the editor crate builds at opt-level 0). Numbers
 //! worth quoting come from `cargo test --release --test stress -- --nocapture`.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use pebbles::core::{Ui, create_root_signal};
@@ -34,6 +36,8 @@ struct Bench {
     ui: Ui,
     env: TextEnv,
     code: Signal<String>,
+    /// The editor's vertical scroll offset as reported through `on_scroll`.
+    scrolled: Rc<Cell<f64>>,
 }
 
 impl Bench {
@@ -42,16 +46,21 @@ impl Bench {
         pebbles::core::focus::init();
         pebbles::core::keyboard::set_modifiers(false, false, false, false);
         let code = create_root_signal(doc(lines));
+        let scrolled = Rc::new(Cell::new(0.0));
         let mut b = Bench {
             ui: Ui::new(),
             env: TextEnv::new(),
             code,
+            scrolled: scrolled.clone(),
         };
         let t = Instant::now();
         b.ui.mount_root(
             View::new(
                 Color::from_rgba8(255, 255, 255, 255),
-                code_editor(code).height(660.0).autofocus(),
+                code_editor(code)
+                    .height(660.0)
+                    .autofocus()
+                    .on_scroll(move |px| scrolled.set(px)),
             )
             .into_widget(),
         );
@@ -194,17 +203,30 @@ fn ten_thousand_lines_typing_selection_scrolling() {
     });
     assert!(collapse < max_budget);
 
-    // Scrolling: wheel down through the document, then jump to the end and back.
+    // Scrolling: wheel down through the document, then jump to the end and back. A wheel
+    // notch only retargets the scroll spring; the offset (and so the editor's virtualized
+    // window, via `on_scroll` -> `scroll_top`) moves when the spring ticks, as the shell does
+    // once per frame. So each timed frame is wheel + one 60 Hz tick + rebuild/layout/paint.
     let p = Offset::new(400.0, 300.0);
     let mut sc = Vec::new();
     for _ in 0..200 {
         let t = Instant::now();
         b.ui.dispatch_scroll(p, 120.0);
+        b.ui.tick_scrolls(1.0 / 60.0);
         b.frame();
         sc.push(t.elapsed());
     }
+    while b.ui.tick_scrolls(1.0 / 60.0) {
+        b.frame();
+    }
     let sc = stats(sc);
-    report("wheel scroll x200 (120 px)", &sc);
+    report("wheel scroll x200 (120 px + tick)", &sc);
+    let top = b.scrolled.get();
+    println!("{:<34} {top:.0} px", "scrolled to");
+    assert!(
+        top > 20_000.0,
+        "200 wheel notches should scroll the editor, got offset {top}"
+    );
     assert!(sc.median < median_budget);
     let end = b.timed(KeyInput::Move {
         motion: Motion::DocEnd,
@@ -231,16 +253,15 @@ fn ten_thousand_lines_typing_selection_scrolling() {
     );
 }
 
-// Known O(n) per keystroke (debug, 2026-10-29: 1k 8.4 ms vs 10k 83 ms median = 9.9x):
-// every rebuild re-splits the whole document and recomputes `fold::foldable` +
-// `fold::DisplayMap::new` + per-line block gaps over all lines (src/view/mod.rs ~600-730);
-// highlighting is already windowed past LARGE_FILE_LINES. Un-ignore once those are
-// incremental. Run it with `cargo test --test stress -- --ignored --nocapture`.
+// Was O(n) per keystroke (debug, 2026-10-29: 1k 8.4 ms vs 10k 83 ms median = 9.9x): every
+// rebuild re-split the document and recomputed `fold::foldable` + `DisplayMap` over all
+// lines, geometry queries scanned from the document start and `collab::diff` collected
+// every char. Now the line index is maintained by edit delta (`src/lines.rs`), the identity
+// display map is lazy and the diff is a byte-level prefix/suffix trim.
 #[test]
-#[ignore = "known O(document) rebuild per keystroke: fold/DisplayMap over all lines"]
 fn keystroke_cost_does_not_scale_with_document_size() {
     // Same work on a 1,000- and a 10,000-line file. An O(n)-per-keystroke path (whole-
-    // document copy, re-highlight, re-layout) makes the big one ~10x slower; allow 3x.
+    // document scan, re-highlight, re-layout) makes the big one ~10x slower; allow 2.5x.
     let (mut small, _) = Bench::new(1_000);
     let s = typing(&mut small, 1_000, 150);
     drop(small);
@@ -251,7 +272,7 @@ fn keystroke_cost_does_not_scale_with_document_size() {
     let ratio = l.median.as_secs_f64() / s.median.as_secs_f64().max(1e-6);
     println!("10k/1k median keystroke ratio      {ratio:.2}x");
     assert!(
-        ratio < 3.0,
+        ratio < 2.5,
         "per-keystroke cost grows with document size: {ratio:.2}x (1k {:?}, 10k {:?})",
         s.median,
         l.median

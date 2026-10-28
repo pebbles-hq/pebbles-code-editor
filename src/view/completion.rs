@@ -10,7 +10,7 @@ use pebbles::prelude::*;
 
 use crate::commands::dispatch;
 use crate::edit::{ChangeSet, Coalesce, EditorState, History, Selection, Selections, Transaction};
-use crate::geometry::{col_of, is_word, line_of, prev_char};
+use crate::geometry::{col_of, is_word, prev_char};
 use crate::providers::{CompletionContext, CompletionItem, CompletionKind, CompletionProvider};
 
 /// A live completion session: the filtered items, which one is selected, and the byte where
@@ -175,8 +175,8 @@ fn expand_snippet(insert: &str) -> (String, usize) {
 /// The popup widget, positioned just below the caret line, within the content grid.
 pub(crate) fn popup(s: &Session, f: &crate::view::Frame) -> AnyWidget {
     let (theme, fs, line_px) = (f.theme, f.fs, f.line_px);
-    let line = line_of(f.src, s.anchor);
-    let col = col_of(f.src, s.anchor);
+    let line = f.li.line_of(f.src, s.anchor);
+    let col = f.li.col_of(f.src, s.anchor);
     let x = f.pad_l + col as f64 * f.advance;
     let y = f.pad_t + (line + 1) as f64 * line_px + 2.0;
 

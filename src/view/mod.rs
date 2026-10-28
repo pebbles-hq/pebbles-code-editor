@@ -42,6 +42,9 @@ pub(crate) struct Frame<'a> {
     pub(crate) p: &'a Props,
     pub(crate) theme: &'a EditorTheme,
     pub(crate) src: &'a str,
+    /// The maintained line index of `src` (line starts, lengths, fold regions) — every
+    /// byte <-> line/column query goes through it instead of scanning the text.
+    pub(crate) li: &'a crate::lines::LineIndex,
     pub(crate) tokens: &'a [Token],
     pub(crate) sels: &'a Selections,
     /// Primary caret head byte, and whether the primary range has a selection.
@@ -71,9 +74,8 @@ pub(crate) struct Frame<'a> {
     pub(crate) highlight_word_matches: bool,
     /// Gutter markers contributed by extensions (rendered as colored dots).
     pub(crate) ext_gutter_marks: &'a [GutterMark],
-    /// The fold display-map (buffer line ↔ display row) + the foldable regions for the gutter.
+    /// The fold display-map (buffer line ↔ display row).
     pub(crate) disp: &'a crate::fold::DisplayMap,
-    pub(crate) fold_regions: &'a [(usize, usize)],
     pub(crate) folds: Signal<std::collections::BTreeSet<usize>>,
     /// Inline diff against the base text (added lines / removed markers), if configured.
     pub(crate) diff: Option<&'a crate::diff::LineDiff>,
@@ -158,6 +160,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // The live wrap-column width, shared with the (once-created) autoscroll effect via interior
     // mutability so it can map the caret to its display row without a stale capture.
     let wrap_hold = create_signal(Rc::new(std::cell::Cell::new(0usize)));
+    // The line index, updated by each edit's delta (see `crate::lines`), so a rebuild costs
+    // the edited lines rather than the whole document. Shared with the autoscroll effect.
+    let line_cache = create_signal(Rc::new(RefCell::new(crate::lines::LineCache::default())));
     // Find/replace state.
     let find = search::State {
         open: create_signal(0u8),
@@ -597,10 +602,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let sels = st.selection.clamped(&st.doc);
     let primary = sels.primary();
     let (pcc, has_primary_sel) = (primary.head, !primary.is_empty());
-    let cl = line_of(&src, pcc);
-    let cc = col_of(&src, pcc);
-    let line_count = src.split('\n').count().max(1);
-    let char_lens: Vec<usize> = src.split('\n').map(|l| l.chars().count()).collect();
+    let li = line_cache.peek().borrow_mut().sync(&src);
+    let cl = li.line_of(&src, pcc);
+    let cc = li.col_of(&src, pcc);
+    let line_count = li.line_count();
     // Inline diff against the base (added lines + removed markers), recomputed reactively.
     let line_diff = p
         .diff_base
@@ -635,17 +640,16 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         .flat_map(|f| f(&block_snap))
         .filter(|b| b.line < line_count)
         .collect();
-    let mut block_gaps = vec![0usize; line_count];
-    for b in &block_widgets {
-        block_gaps[b.line] += (b.height / line_px).ceil().max(1.0) as usize;
+    let mut block_gaps = Vec::new();
+    if !block_widgets.is_empty() {
+        block_gaps = vec![0usize; line_count];
+        for b in &block_widgets {
+            block_gaps[b.line] += (b.height / line_px).ceil().max(1.0) as usize;
+        }
     }
-    let fold_regions: std::rc::Rc<Vec<(usize, usize)>> =
-        std::rc::Rc::new(crate::fold::foldable(&src));
-    let disp = std::rc::Rc::new(crate::fold::DisplayMap::new(
-        line_count,
+    let disp = std::rc::Rc::new(crate::fold::DisplayMap::for_index(
+        &li,
         &folds.get(),
-        &fold_regions,
-        &char_lens,
         wrap_cols,
         &block_gaps,
     ));
@@ -711,24 +715,17 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             let st = state.get();
             let text = st.text();
             let head = st.primary().head;
-            let line = line_of(&text, head);
-            let col = col_of(&text, head);
+            let li = line_cache.peek().borrow_mut().sync(&text);
+            let line = li.line_of(&text, head);
+            let col = li.col_of(&text, head);
             // The caret's DISPLAY row (fold/wrap-aware), so autoscroll targets the right place.
             let wc = wrap_hold.peek().get();
             let drow = if wc == 0 && folds.peek().is_empty() {
                 line
             } else {
-                let clens: Vec<usize> = text.split('\n').map(|l| l.chars().count()).collect();
-                let regions = crate::fold::foldable(&text);
-                let map = crate::fold::DisplayMap::new(
-                    clens.len().max(1),
-                    &folds.peek(),
-                    &regions,
-                    &clens,
-                    wc,
-                    &[],
-                );
-                map.place(line, col).0
+                crate::fold::DisplayMap::for_index(&li, &folds.peek(), wc, &[])
+                    .place(line, col)
+                    .0
             };
             let top = pad_t + drow as f64 * line_px;
             let bottom = top + line_px;
@@ -745,7 +742,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 scroll_a.scroll_to(t);
                 scroll_top.set(t.min((content_h - vh).max(0.0)));
             }
-            let x = pad_l + col_of(&text, head) as f64 * advance;
+            let x = pad_l + col as f64 * advance;
             hscroll_a.ensure_visible(x, x + advance, advance * 4.0);
         });
     }
@@ -757,8 +754,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // construct (string/comment) that opens above the window may mis-color at the top edge.
     const LARGE_FILE_LINES: usize = 5000;
     let tokens: Rc<Vec<Token>> = if line_count > LARGE_FILE_LINES {
-        let ls = line_start_of(&src, first_line);
-        let le = line_end(&src, line_start_of(&src, last_line));
+        let ls = li.line_start_of(first_line);
+        let le = line_end(&src, li.line_start_of(last_line));
         let win = &src[ls..le];
         let toks: Vec<Token> = p
             .language
@@ -829,6 +826,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         p,
         theme,
         src: &src,
+        li: &li,
         tokens: &tokens,
         sels: &sels,
         pcc,
@@ -851,7 +849,6 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         highlight_word_matches: find.open.get() == 0,
         ext_gutter_marks: &ext_gutter_marks,
         disp: disp.as_ref(),
-        fold_regions: fold_regions.as_slice(),
         folds,
         diff: line_diff.as_ref(),
     };
@@ -980,11 +977,11 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     if p.selection_handles && has_primary_sel {
         let (lo, hi) = (primary.min(), primary.max());
         for (byte, is_end) in [(lo, false), (hi, true)] {
-            let ln = line_of(&src, byte);
+            let ln = li.line_of(&src, byte);
             if !frame.line_visible(ln) {
                 continue;
             }
-            let hx = pad_l + col_of(&src, byte) as f64 * advance - 7.0;
+            let hx = pad_l + li.col_of(&src, byte) as f64 * advance - 7.0;
             let hy = frame.y_of(ln) + line_px - 3.0;
             // The OTHER endpoint stays fixed while this handle drags.
             let fixed = if is_end { lo } else { hi };
@@ -1012,8 +1009,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // Text drag-and-drop: a drop caret at the target byte while dragging a selection.
     if let Some(d) = drop_byte.get() {
         let d = d.min(src.len());
-        let x = pad_l + col_of(&src, d) as f64 * advance;
-        let y = frame.y_of(line_of(&src, d));
+        let x = pad_l + li.col_of(&src, d) as f64 * advance;
+        let y = frame.y_of(li.line_of(&src, d));
         layers.push(
             Positioned::new(
                 container()
@@ -1161,11 +1158,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         None
     } else {
         p.height.map(|_| {
-            let max_cols = src
-                .split('\n')
-                .map(|l| l.chars().count())
-                .max()
-                .unwrap_or(0);
+            let max_cols = li.max_cols();
             pad_l * 2.0 + max_cols as f64 * advance
         })
     };

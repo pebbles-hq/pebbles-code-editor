@@ -5,7 +5,7 @@
 
 use pebbles::prelude::*;
 
-use crate::geometry::{line_end, line_start_of};
+use crate::geometry::line_end;
 use crate::highlight::{slice_tokens, to_spans};
 use crate::view::Frame;
 
@@ -18,7 +18,7 @@ pub(crate) fn overlay(f: &Frame, scroller: AnyWidget, scroll_top: Signal<f64>) -
     }
     let mut rows: Vec<AnyWidget> = Vec::new();
     for &ln in &lines {
-        let ls = line_start_of(f.src, ln);
+        let ls = f.li.line_start_of(ln);
         let le = line_end(f.src, ls);
         let spans = to_spans(
             &f.src[ls..le],
@@ -72,7 +72,7 @@ fn scoped_lines(f: &Frame, scroll_top: Signal<f64>) -> Vec<usize> {
         return Vec::new();
     }
     let indent_of = |ln: usize| -> Option<usize> {
-        let ls = line_start_of(f.src, ln);
+        let ls = f.li.line_start_of(ln);
         let s = &f.src[ls..line_end(f.src, ls)];
         if s.trim().is_empty() {
             None // blank lines don't open scopes

@@ -51,9 +51,12 @@ pub(crate) struct Row {
 
 /// Buffer-line ↔ visual-row mapping for a fold set + wrap width.
 pub(crate) struct DisplayMap {
-    pub(crate) rows: Vec<Row>,
+    rows: Vec<Row>,
     row0: Vec<usize>, // line -> index of its first row (hidden lines -> the fold head's row)
     hidden: Vec<bool>,
+    /// Identity fast path (nothing folded, no wrap, no gaps): one row per line, answered from
+    /// the line index without materializing a row per line.
+    ident: Option<std::rc::Rc<crate::lines::LineIndex>>,
 }
 
 impl DisplayMap {
@@ -120,11 +123,48 @@ impl DisplayMap {
                 });
             }
         }
-        DisplayMap { rows, row0, hidden }
+        DisplayMap {
+            rows,
+            row0,
+            hidden,
+            ident: None,
+        }
+    }
+
+    /// Like [`DisplayMap::new`] over `index`'s lines and foldable regions, but O(1) when no
+    /// fold applies, wrapping is off and there are no gap rows (the common case): the map is
+    /// then the identity and is answered lazily from the index.
+    pub(crate) fn for_index(
+        index: &std::rc::Rc<crate::lines::LineIndex>,
+        folded: &BTreeSet<usize>,
+        wrap_cols: usize,
+        gaps: &[usize],
+    ) -> Self {
+        let regions = index.regions();
+        let any_fold = folded.iter().any(|h| index.is_fold_head(*h));
+        if !any_fold && wrap_cols == 0 && gaps.iter().all(|g| *g == 0) {
+            return DisplayMap {
+                rows: Vec::new(),
+                row0: Vec::new(),
+                hidden: Vec::new(),
+                ident: Some(index.clone()),
+            };
+        }
+        DisplayMap::new(
+            index.line_count(),
+            folded,
+            regions,
+            index.char_lens(),
+            wrap_cols,
+            gaps,
+        )
     }
 
     pub(crate) fn rows(&self) -> usize {
-        self.rows.len()
+        match &self.ident {
+            Some(ix) => ix.line_count(),
+            None => self.rows.len(),
+        }
     }
 
     pub(crate) fn is_hidden(&self, line: usize) -> bool {
@@ -133,12 +173,25 @@ impl DisplayMap {
 
     /// The buffer line shown at display `row` (clamped).
     pub(crate) fn line_at_row(&self, row: usize) -> usize {
+        if let Some(ix) = &self.ident {
+            return row.min(ix.line_count() - 1);
+        }
         let row = row.min(self.rows.len().saturating_sub(1));
         self.rows.get(row).map(|r| r.line).unwrap_or(0)
     }
 
     /// The visual row at `row` (clamped).
     pub(crate) fn row_at(&self, row: usize) -> Row {
+        if let Some(ix) = &self.ident {
+            let line = row.min(ix.line_count() - 1);
+            return Row {
+                line,
+                start: 0,
+                end: ix.line_char_len(line),
+                first: true,
+                gap: false,
+            };
+        }
         let row = row.min(self.rows.len().saturating_sub(1));
         self.rows.get(row).copied().unwrap_or(Row {
             line: 0,
@@ -151,6 +204,9 @@ impl DisplayMap {
 
     /// The first reserved gap-row index directly below `line`, if any (block-widget anchor).
     pub(crate) fn gap_row_of(&self, line: usize) -> Option<usize> {
+        if self.ident.is_some() {
+            return None;
+        }
         let start = self.row0.get(line).copied()?;
         for (i, r) in self.rows.iter().enumerate().skip(start) {
             if r.line != line {
@@ -165,6 +221,9 @@ impl DisplayMap {
 
     /// Place `(line, col)` → `(display_row, x_col_within_row)` (never on a gap row).
     pub(crate) fn place(&self, line: usize, col: usize) -> (usize, usize) {
+        if let Some(ix) = &self.ident {
+            return (if line < ix.line_count() { line } else { 0 }, col);
+        }
         let mut i = self.row0.get(line).copied().unwrap_or(0);
         while i + 1 < self.rows.len()
             && self.rows[i + 1].line == line
@@ -239,6 +298,48 @@ mod tests {
         assert_eq!(m.place(0, 14), (1, 4));
         assert_eq!(m.place(0, 0), (0, 0));
         assert_eq!(m.place(0, 25), (2, 5));
+    }
+
+    /// The identity fast path answers every query exactly like the materialized map.
+    #[test]
+    fn identity_fast_path_matches_full_map() {
+        let src = "fn a() {\n    x;\n\n    yy;\n}\ntail";
+        let ix = std::rc::Rc::new(crate::lines::LineIndex::build(src));
+        let regions = foldable(src);
+        let lens: Vec<usize> = src.split('\n').map(|l| l.chars().count()).collect();
+        // `5` is not a fold head, so folding it changes nothing either.
+        for f in [folds(&[]), folds(&[5])] {
+            let fast = DisplayMap::for_index(&ix, &f, 0, &[0; 6]);
+            assert!(fast.ident.is_some());
+            let full = DisplayMap::new(lens.len(), &f, &regions, &lens, 0, &[]);
+            assert_eq!(fast.rows(), full.rows());
+            for r in 0..full.rows() + 3 {
+                assert_eq!(fast.line_at_row(r), full.line_at_row(r));
+                assert_eq!(fast.row_at(r), full.row_at(r));
+            }
+            for l in 0..lens.len() + 2 {
+                assert_eq!(fast.is_hidden(l), full.is_hidden(l));
+                assert_eq!(fast.gap_row_of(l), full.gap_row_of(l));
+                for c in [0, 2, 9] {
+                    assert_eq!(fast.place(l, c), full.place(l, c));
+                }
+            }
+        }
+        assert!(
+            DisplayMap::for_index(&ix, &folds(&[0]), 0, &[])
+                .ident
+                .is_none()
+        );
+        assert!(
+            DisplayMap::for_index(&ix, &folds(&[]), 4, &[])
+                .ident
+                .is_none()
+        );
+        assert!(
+            DisplayMap::for_index(&ix, &folds(&[]), 0, &[0, 1])
+                .ident
+                .is_none()
+        );
     }
 
     #[test]

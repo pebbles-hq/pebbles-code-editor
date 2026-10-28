@@ -55,6 +55,7 @@ mod diff;
 mod fold;
 mod geometry;
 mod highlight;
+mod lines;
 mod search;
 mod theme;
 mod view;

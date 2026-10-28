@@ -3,11 +3,10 @@
 //! scroll range stays exact. Foldable lines get a clickable ▾/▸ fold arrow. The gutter stays
 //! fixed while the content scrolls horizontally, so it wraps `content` in a row to its right.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use pebbles::prelude::*;
 
-use crate::geometry::line_of;
 use crate::view::Frame;
 use crate::view::overlays::severity_color;
 
@@ -26,7 +25,7 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
     if let Some(sig) = f.p.diagnostics {
         for d in sig.get() {
             marks.insert(
-                line_of(f.src, d.range.0),
+                f.li.line_of(f.src, d.range.0),
                 severity_color(f.theme, d.severity),
             );
         }
@@ -35,7 +34,6 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
         marks.insert(m.line, m.color);
     }
     // Foldable head lines + which are currently folded.
-    let heads: HashSet<usize> = f.fold_regions.iter().map(|&(h, _)| h).collect();
     let folded = f.folds.get();
 
     let mut nums: Vec<AnyWidget> = Vec::new();
@@ -59,7 +57,7 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
             );
         }
         // Fold arrow for foldable head lines (▾ open, ▸ folded), toggling this line's fold.
-        if heads.contains(&n) {
+        if f.li.is_fold_head(n) {
             let is_folded = folded.contains(&n);
             let folds = f.folds;
             let arrow = GestureDetector::new(

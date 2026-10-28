@@ -6,7 +6,7 @@
 use pebbles::prelude::*;
 
 use crate::brackets::{DEFAULT_BRACKETS, find_bracket_match};
-use crate::geometry::{byte_at, col_of, line_char_len, line_end, line_of, line_start_of};
+use crate::geometry::line_end;
 use crate::highlight::{slice_tokens, to_spans};
 use crate::providers::Severity;
 use crate::theme::EditorTheme;
@@ -104,7 +104,7 @@ fn indent_guides(f: &Frame, layers: &mut Vec<AnyWidget>) {
         if f.disp.is_hidden(line) {
             continue;
         }
-        let ls = line_start_of(f.src, line);
+        let ls = f.li.line_start_of(line);
         let le = line_end(f.src, ls);
         let lead = f.src[ls..le]
             .chars()
@@ -145,8 +145,8 @@ fn word_occurrences(f: &Frame, layers: &mut Vec<AnyWidget>) {
         return;
     }
     let color = with_alpha(f.theme.gutter_active_fg, 0.18);
-    let window_start = line_start_of(f.src, f.first_line);
-    let window_end = line_end(f.src, line_start_of(f.src, f.last_line));
+    let window_start = f.li.line_start_of(f.first_line);
+    let window_end = line_end(f.src, f.li.line_start_of(f.last_line));
     let mut from = window_start;
     while let Some(rel) = f.src[from..window_end].find(word) {
         let start = from + rel;
@@ -154,11 +154,11 @@ fn word_occurrences(f: &Frame, layers: &mut Vec<AnyWidget>) {
         if start == lo {
             continue; // skip the actual selection
         }
-        let line = line_of(f.src, start);
+        let line = f.li.line_of(f.src, start);
         if !f.line_visible(line) {
             continue;
         }
-        let (x, y) = f.xy(line, col_of(f.src, start));
+        let (x, y) = f.xy(line, f.li.col_of(f.src, start));
         let w = word.chars().count() as f64 * f.advance;
         layers.push(
             Positioned::new(
@@ -187,8 +187,8 @@ fn selection(f: &Frame, layers: &mut Vec<AnyWidget>) {
         if lo == hi {
             continue;
         }
-        let (la, ca) = (line_of(f.src, lo), col_of(f.src, lo));
-        let (lb, cb) = (line_of(f.src, hi), col_of(f.src, hi));
+        let (la, ca) = (f.li.line_of(f.src, lo), f.li.col_of(f.src, lo));
+        let (lb, cb) = (f.li.line_of(f.src, hi), f.li.col_of(f.src, hi));
         for line in la.max(f.first_line)..=lb.min(f.last_line) {
             if f.disp.is_hidden(line) {
                 continue;
@@ -197,7 +197,7 @@ fn selection(f: &Frame, layers: &mut Vec<AnyWidget>) {
             let end_col = if line == lb {
                 cb
             } else {
-                line_char_len(f.src, line)
+                f.li.line_char_len(line)
             };
             let extend_nl = line != lb; // hint the wrapped newline on the line's last segment
             let segs = f.segments(line);
@@ -242,9 +242,9 @@ fn bracket_match(f: &Frame, layers: &mut Vec<AnyWidget>) {
             .unwrap_or(DEFAULT_BRACKETS);
     if let Some((a, b)) = find_bracket_match(f.src, brs, f.pcc) {
         for pos in [a, b] {
-            let l = line_of(f.src, pos);
+            let l = f.li.line_of(f.src, pos);
             if f.line_visible(l) {
-                let (x, y) = f.xy(l, col_of(f.src, pos));
+                let (x, y) = f.xy(l, f.li.col_of(f.src, pos));
                 layers.push(
                     Positioned::new(
                         container()
@@ -271,8 +271,8 @@ fn code_text(f: &Frame, layers: &mut Vec<AnyWidget>) {
         }
         for (row, seg) in f.segments(line) {
             // Byte range of this row's char span [seg.start, seg.end).
-            let bs = byte_at(f.src, line, seg.start);
-            let be = byte_at(f.src, line, seg.end);
+            let bs = f.li.byte_at(f.src, line, seg.start);
+            let be = f.li.byte_at(f.src, line, seg.end);
             if be <= bs {
                 continue;
             }
@@ -301,10 +301,10 @@ fn whitespace(f: &Frame, layers: &mut Vec<AnyWidget>) {
         if f.disp.is_hidden(line) {
             continue;
         }
-        let len = line_char_len(f.src, line);
+        let len = f.li.line_char_len(line);
         for (row, seg) in f.segments(line) {
-            let bs = byte_at(f.src, line, seg.start);
-            let be = byte_at(f.src, line, seg.end);
+            let bs = f.li.byte_at(f.src, line, seg.start);
+            let be = f.li.byte_at(f.src, line, seg.end);
             let marks: String = f.src[bs..be]
                 .chars()
                 .map(|c| match c {
@@ -358,8 +358,8 @@ fn diagnostics(f: &Frame, layers: &mut Vec<AnyWidget>) {
     for d in sig.get() {
         let (lo, hi) = d.range;
         let color = severity_color(f.theme, d.severity);
-        let (la, ca) = (line_of(f.src, lo), col_of(f.src, lo));
-        let (lb, cb) = (line_of(f.src, hi), col_of(f.src, hi));
+        let (la, ca) = (f.li.line_of(f.src, lo), f.li.col_of(f.src, lo));
+        let (lb, cb) = (f.li.line_of(f.src, hi), f.li.col_of(f.src, hi));
         for line in la.max(f.first_line)..=lb.min(f.last_line) {
             if f.disp.is_hidden(line) {
                 continue;
@@ -368,7 +368,7 @@ fn diagnostics(f: &Frame, layers: &mut Vec<AnyWidget>) {
             let end_col = if line == lb {
                 cb
             } else {
-                line_char_len(f.src, line)
+                f.li.line_char_len(line)
             };
             // Underline per visual segment so it follows wrapped rows.
             for (row, seg) in f.segments(line) {
@@ -403,11 +403,11 @@ fn inlay_hints(f: &Frame, layers: &mut Vec<AnyWidget>) {
         return;
     };
     for h in sig.get() {
-        let line = line_of(f.src, h.at);
+        let line = f.li.line_of(f.src, h.at);
         if !f.line_visible(line) {
             continue;
         }
-        let (x, y) = f.xy(line, col_of(f.src, h.at));
+        let (x, y) = f.xy(line, f.li.col_of(f.src, h.at));
         layers.push(
             Positioned::new(
                 text(h.label.clone())
@@ -429,11 +429,11 @@ fn carets(f: &Frame, layers: &mut Vec<AnyWidget>) {
         return;
     }
     for r in f.sels.ranges() {
-        let l = line_of(f.src, r.head);
+        let l = f.li.line_of(f.src, r.head);
         if !f.line_visible(l) {
             continue;
         }
-        let (x, y) = f.xy(l, col_of(f.src, r.head));
+        let (x, y) = f.xy(l, f.li.col_of(f.src, r.head));
         layers.push(
             Positioned::new(
                 container()

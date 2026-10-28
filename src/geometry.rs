@@ -50,7 +50,8 @@ pub(crate) fn col_of(src: &str, byte: usize) -> usize {
         .map(|s| s.chars().count())
         .unwrap_or(0)
 }
-/// Length (in chars) of line `line`.
+/// Length (in chars) of line `line` (the reference `crate::lines::LineIndex` is tested against).
+#[cfg(test)]
 pub(crate) fn line_char_len(src: &str, line: usize) -> usize {
     src.split('\n')
         .nth(line)

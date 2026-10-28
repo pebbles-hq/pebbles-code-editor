@@ -6,7 +6,6 @@ use pebbles::prelude::*;
 
 use crate::MONO;
 use crate::extensions::{Command, Decoration, EditContext};
-use crate::geometry::{col_of, line_char_len, line_of};
 use crate::view::Frame;
 
 /// Build overlay layers for `decos`, clipped to the visible window (line backgrounds first,
@@ -16,7 +15,10 @@ pub(crate) fn decoration_layers(f: &Frame, decos: &[Decoration]) -> Vec<AnyWidge
     // Line backgrounds (behind everything).
     for d in decos {
         if let Some(bg) = d.style.line_background {
-            let (la, lb) = (line_of(f.src, d.range.0), line_of(f.src, d.range.1));
+            let (la, lb) = (
+                f.li.line_of(f.src, d.range.0),
+                f.li.line_of(f.src, d.range.1),
+            );
             for line in la.max(f.first_line)..=lb.min(f.last_line) {
                 layers.push(
                     Positioned::new(
@@ -34,19 +36,22 @@ pub(crate) fn decoration_layers(f: &Frame, decos: &[Decoration]) -> Vec<AnyWidge
     }
     // Range backgrounds + underlines.
     for d in decos {
-        for line in
-            line_of(f.src, d.range.0).max(f.first_line)..=line_of(f.src, d.range.1).min(f.last_line)
+        for line in f.li.line_of(f.src, d.range.0).max(f.first_line)
+            ..=f.li.line_of(f.src, d.range.1).min(f.last_line)
         {
-            let (la, lb) = (line_of(f.src, d.range.0), line_of(f.src, d.range.1));
+            let (la, lb) = (
+                f.li.line_of(f.src, d.range.0),
+                f.li.line_of(f.src, d.range.1),
+            );
             let start_col = if line == la {
-                col_of(f.src, d.range.0)
+                f.li.col_of(f.src, d.range.0)
             } else {
                 0
             };
             let end_col = if line == lb {
-                col_of(f.src, d.range.1)
+                f.li.col_of(f.src, d.range.1)
             } else {
-                line_char_len(f.src, line)
+                f.li.line_char_len(line)
             };
             let x = f.pad_l + start_col as f64 * f.advance;
             let w = (end_col.saturating_sub(start_col).max(1) as f64 * f.advance).max(2.0);

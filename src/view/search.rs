@@ -13,7 +13,7 @@ use crate::commands::dispatch;
 use crate::edit::{
     Change, ChangeSet, Coalesce, EditorState, History, Selection, Selections, Transaction,
 };
-use crate::geometry::{col_of, line_of};
+use crate::geometry::col_of;
 use crate::search::Options;
 use crate::view::Frame;
 
@@ -52,8 +52,8 @@ pub(crate) fn match_layers(
     let others = f.theme.search_match;
     let cur = f.theme.search_match_current;
     for (i, &(lo, hi)) in matches.iter().enumerate() {
-        let (la, ca) = (line_of(f.src, lo), col_of(f.src, lo));
-        let (lb, cb) = (line_of(f.src, hi), col_of(f.src, hi));
+        let (la, ca) = (f.li.line_of(f.src, lo), f.li.col_of(f.src, lo));
+        let (lb, cb) = (f.li.line_of(f.src, hi), f.li.col_of(f.src, hi));
         let color = if i == current { cur } else { others };
         for line in la.max(f.first_line)..=lb.min(f.last_line) {
             let start_col = if line == la { ca } else { 0 };
