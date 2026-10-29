@@ -7,14 +7,29 @@ All notable changes to `pebbles-code-editor` are documented here. The format fol
 ## [Unreleased]
 
 ### Changed — the framework renders with wgpu only
-Requires pebbles ≥ `2a3a995`, which made wgpu the only renderer and cosmic-text the only text stack.
+Requires pebbles ≥ `5a9fdbd` (wgpu is the only renderer and cosmic-text the only text stack).
 The renderer-selection features of this crate (and its demo) are gone: depend on
 it with default features. Nothing else changes for users; the demo capture uses the public offscreen API.
 
 **Migration:** none for users of default features.
 
 ### Changed — demo screenshots use the framework's offscreen renderer
-`SHOT=` now renders through `pebbles::shell::capture::OffscreenCapture`; the demo no longer depends on a renderer directly. Requires pebbles ≥ `f040227`.
+`SHOT=` now calls the framework's `pebbles::shell::capture::capture_rgba` (settled frame,
+system fonts — same as the app); the demo no longer drives a renderer itself.
+
+### Changed — the editor follows the app's light/dark theme by default
+Without `.theme(..)`, `code_editor` now uses the new `EditorTheme::from_theme()` — the
+light or dark editor theme matching the current Pebbles theme — resolved in the parent's
+build, so `ThemeMode::System`, `set_theme_mode` and `toggle_theme` switch it live. It was
+always `EditorTheme::dark()`. **Migration:** call `.theme(EditorTheme::dark())` to keep the
+previous always-dark editor.
+
+### Changed — demo uses the framework's ThemeMode
+The IDE demo no longer pins `Theme::dark()` or keeps its own editor-only "light" flag: the
+window follows the system setting, and the Settings switch / View menu "Light theme" set
+the app's `ThemeMode`, so chrome and editor switch together. Text takes the theme's
+ambient colour instead of hard-coded `.color(foreground)`. `SHOT=` pins dark so docs
+screenshots are unchanged.
 
 The crate is feature-complete for its scope and used within the Pebbles ecosystem via a
 git dependency; it is not yet published to crates.io.

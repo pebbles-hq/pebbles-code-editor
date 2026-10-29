@@ -20,7 +20,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
     CodeEditor {
         code,
         language: None,
-        theme: EditorTheme::dark(),
+        theme: None,
         font_size: 13.5,
         line_height: 1.6,
         font_family: None,
@@ -66,7 +66,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
 pub struct CodeEditor {
     code: Signal<String>,
     language: Option<Box<dyn Language>>,
-    theme: EditorTheme,
+    theme: Option<EditorTheme>,
     font_size: f64,
     line_height: f64,
     font_family: Option<String>,
@@ -119,9 +119,11 @@ impl CodeEditor {
         self.language = Some(lang);
         self
     }
-    /// The color theme (default: [`EditorTheme::dark`]).
+    /// The color theme. Default: [`EditorTheme::from_theme`] — the light or dark editor
+    /// theme matching the app's current Pebbles theme, so the editor follows
+    /// `ThemeMode` / `toggle_theme` live. Setting a theme pins it.
     pub fn theme(mut self, theme: EditorTheme) -> Self {
-        self.theme = theme;
+        self.theme = Some(theme);
         self
     }
     /// Font size in logical px (default 13.5).
@@ -434,7 +436,9 @@ impl From<CodeEditor> for Props {
         }
         // Fold extension theme transforms over the builder theme (applied in order) — this is
         // "theme = an extension": a plugin can fully replace or partially compose the theme.
-        let mut theme = e.theme;
+        // Resolved here, inside the parent's build, so reading the app theme subscribes the
+        // parent and a light/dark switch rebuilds the editor with the matching palette.
+        let mut theme = e.theme.unwrap_or_else(EditorTheme::from_theme);
         for tx in e.extensions.iter().filter_map(|x| x.theme.as_ref()) {
             theme = tx(theme);
         }

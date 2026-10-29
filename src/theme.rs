@@ -220,7 +220,18 @@ impl EditorTheme {
         self.syntax.style(kind)
     }
 
-    /// A calm dark theme (the default) — warm-neutral background, high-legibility hues.
+    /// The editor theme matching the app's current Pebbles theme: [`light`](Self::light) or
+    /// [`dark`](Self::dark) by `theme().dark`. This is the editor's default; calling it inside
+    /// a build subscribes that build to light/dark switches.
+    pub fn from_theme() -> Self {
+        if pebbles::prelude::theme().dark {
+            Self::dark()
+        } else {
+            Self::light()
+        }
+    }
+
+    /// A calm dark theme — warm-neutral background, high-legibility hues.
     pub fn dark() -> Self {
         let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
         let a = Color::from_rgba8;
