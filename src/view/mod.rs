@@ -283,13 +283,21 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         // Register as a *code* editor so the shell routes Tab/Shift+Tab here (indent/outdent)
         // instead of moving focus. When the completion popup is open it intercepts navigation
         // keys; otherwise keys flow to the command engine, and typing re-queries completion.
-        focus.register_code_editor(Rc::new(move |k: KeyInput| {
+        let keymap = p.keymap.clone();
+        let handle = Rc::new(move |k: KeyInput, via_binding: bool| -> bool {
+            // A built-in whose default chord the host disabled is declined, so the key
+            // bubbles to the app's shortcuts. (A host `Keymap::bind` chord still runs it.)
+            if !via_binding
+                && crate::keymap::BuiltinCommand::of_key(&k).is_some_and(|c| keymap.is_disabled(c))
+            {
+                return false;
+            }
             // IME composition: a Preedit shows the in-progress (underlined) text at the caret;
             // it is NOT committed until an Insert (from Ime::Commit). Any other key ends the
             // composition (the commit Insert clears it here, then inserts the committed text).
             if let KeyInput::Preedit(s) = &k {
                 preedit.set(s.clone());
-                return;
+                return true;
             }
             if !preedit.peek().is_empty() {
                 preedit.set(String::new());
@@ -305,7 +313,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                             sess.move_by(1);
                         }
                         completion.set(s);
-                        return;
+                        return true;
                     }
                     KeyInput::Move {
                         motion: Motion::Up, ..
@@ -315,15 +323,15 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                             sess.move_by(-1);
                         }
                         completion.set(s);
-                        return;
+                        return true;
                     }
                     KeyInput::Enter | KeyInput::Indent => {
                         completion::accept(state, history, code, goal, completion);
-                        return;
+                        return true;
                     }
                     KeyInput::Escape => {
                         completion.set(None);
-                        return;
+                        return true;
                     }
                     _ => {}
                 }
@@ -335,34 +343,36 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     find.open.set(1);
                     // Release focus so the bar's query field (autofocus) can take it.
                     pebbles::core::focus::set_focus(None);
-                    return;
+                    return true;
                 }
                 KeyInput::Replace => {
                     find.open.set(2);
                     pebbles::core::focus::set_focus(None);
-                    return;
+                    return true;
                 }
                 KeyInput::Escape if find.open.peek() > 0 => {
                     find.open.set(0);
-                    return;
+                    return true;
                 }
                 KeyInput::CommandPalette => {
                     palette.open.set(true);
                     pebbles::core::focus::set_focus(None); // let the palette field autofocus
-                    return;
+                    return true;
                 }
                 KeyInput::Escape if palette.open.peek() => {
                     palette.open.set(false);
-                    return;
+                    return true;
                 }
                 KeyInput::TriggerCompletion => {
-                    if let Some(pv) = &provider {
-                        completion::trigger(state, completion, pv, true);
-                    }
-                    return;
+                    let Some(pv) = &provider else { return false }; // no provider: bubble
+                    completion::trigger(state, completion, pv, true);
+                    return true;
                 }
                 // F12: jump the caret to the provider's target (autoscroll follows).
                 KeyInput::GoToDefinition => {
+                    if definition.is_none() {
+                        return false; // no provider: bubble
+                    }
                     if let Some(dp) = &definition {
                         let cur = state.peek();
                         if let Some(target) = dp(&cur.text(), cur.primary().head) {
@@ -375,10 +385,13 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                             history.peek().borrow_mut().break_group();
                         }
                     }
-                    return;
+                    return true;
                 }
                 // Shift+Alt+F: replace the document with the formatter's output (one undo step).
                 KeyInput::Format => {
+                    if format.is_none() {
+                        return false; // no provider: bubble
+                    }
                     if let Some(fp) = &format {
                         let cur = state.peek();
                         let old = cur.text();
@@ -397,7 +410,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                             );
                         }
                     }
-                    return;
+                    return true;
                 }
                 _ => {}
             }
@@ -453,7 +466,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                         .is_some_and(|f| f(&snap).iter().any(|&(lo, hi)| a <= hi && b >= lo))
                 });
                 if blocked {
-                    return;
+                    return true;
                 }
             }
             // Transaction filter: let extensions transform or veto a single-caret insert (e.g.
@@ -488,7 +501,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                         }
                     }
                     if vetoed {
-                        return;
+                        return true;
                     }
                     if edit.from != a || edit.to != b || &edit.insert != text {
                         // The filter changed the edit — apply it directly (one undo step).
@@ -504,7 +517,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                             Coalesce::Never,
                         );
                         goal.set(col_of(&state.peek().text(), state.peek().primary().head));
-                        return;
+                        return true;
                     }
                 }
             }
@@ -524,7 +537,17 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 (2, _) => sig_help.set(None),
                 _ => {}
             }
-        }));
+            true
+        });
+        {
+            let h = handle.clone();
+            focus.register_code_editor_bubbling(Rc::new(move |k: KeyInput| h(k, false)));
+        }
+        // Host-added chords for built-ins (`Keymap::bind`), active only while focused.
+        for (chord, cmd) in p.keymap.bindings.iter().cloned() {
+            let h = handle.clone();
+            create_shortcut_if(&chord, move || focus.is_focused() && h(cmd.key(), true));
+        }
     }
 
     // Extension event hooks (on_change / on_selection). The signal + effect are created

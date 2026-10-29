@@ -59,6 +59,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         folds: None,
         soft_wrap: false,
         diff_base: None,
+        keymap: crate::keymap::Keymap::default(),
     }
 }
 
@@ -105,6 +106,7 @@ pub struct CodeEditor {
     folds: Option<Signal<std::collections::BTreeSet<usize>>>,
     soft_wrap: bool,
     diff_base: Option<Signal<String>>,
+    keymap: crate::keymap::Keymap,
 }
 
 /// Fired after each change with the minimal [`Edit`] delta; `remote` is true when the change
@@ -348,6 +350,12 @@ impl CodeEditor {
         self.diff_base = Some(base);
         self
     }
+    /// Override the built-in keybindings: disable a default chord (the key then bubbles to the
+    /// app's shortcuts) or bind a built-in to another chord. See [`Keymap`](crate::Keymap).
+    pub fn keymap(mut self, keymap: crate::keymap::Keymap) -> Self {
+        self.keymap = keymap;
+        self
+    }
 }
 
 impl IntoWidget for CodeEditor {
@@ -402,6 +410,7 @@ pub(crate) struct Props {
     pub(crate) folds: Option<Signal<std::collections::BTreeSet<usize>>>,
     pub(crate) soft_wrap: bool,
     pub(crate) diff_base: Option<Signal<String>>,
+    pub(crate) keymap: crate::keymap::Keymap,
 }
 
 impl From<CodeEditor> for Props {
@@ -484,6 +493,7 @@ impl From<CodeEditor> for Props {
             folds: e.folds,
             soft_wrap: e.soft_wrap,
             diff_base: e.diff_base,
+            keymap: e.keymap,
         }
     }
 }

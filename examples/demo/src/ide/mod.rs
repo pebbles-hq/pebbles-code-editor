@@ -321,7 +321,7 @@ fn menu_bar(ws: Workspace, s: Settings, problems_open: Signal<bool>) -> AnyWidge
             })
             .into(),
         menu_item("Command Palette")
-            .shortcut("Ctrl+P")
+            .shortcut("Ctrl+Shift+P")
             .on_select(|| {
                 dispatch_key(KeyInput::CommandPalette);
             })

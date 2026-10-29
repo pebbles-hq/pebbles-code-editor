@@ -6,6 +6,13 @@ All notable changes to `pebbles-code-editor` are documented here. The format fol
 
 ## [Unreleased]
 
+### Added — overridable built-in keybindings (`Keymap`)
+`code_editor(..).keymap(Keymap::new().disable(BuiltinCommand::CommandPalette).bind("F1",
+BuiltinCommand::CommandPalette))`. A disabled built-in is declined so the key bubbles to the
+app's shortcuts; intents the editor can't serve (completion / go-to-definition / format with no
+provider) bubble too. **Changed:** following pebbles (VS Code chords), the editor palette opens
+on Ctrl+Shift+P; Ctrl+P is no longer an editor key and reaches the app (Quick Open).
+
 ### Changed — the framework renders with wgpu only
 Requires pebbles ≥ `5a9fdbd` (wgpu is the only renderer and cosmic-text the only text stack).
 The renderer-selection features of this crate (and its demo) are gone: depend on

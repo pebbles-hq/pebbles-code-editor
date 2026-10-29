@@ -89,7 +89,7 @@ src/
     completion.rs The autocomplete popup: session state, trigger/accept, snippet expansion.
     search.rs    The find/replace bar widget + match-highlight overlay layers.
     extensions.rs Extension rendering: decoration overlay layers (background/underline/line)
-                 + the command-palette overlay (Ctrl+P).
+                 + the command-palette overlay (Ctrl+Shift+P).
     gutter.rs    The virtualized line-number gutter (+ diagnostic & extension marker dots).
     minimap.rs   The scaled document overview (one canvas node) + click/drag-to-scroll.
     sticky.rs    Sticky scroll — indentation-derived pinned scope headers.
