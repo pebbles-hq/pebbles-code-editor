@@ -22,7 +22,7 @@ categories = ["gui", "text-editors"]
 [dependencies]
 # Pinned to a reviewed framework commit — `cargo update` won't silently ingest an
 # unreviewed `main` HEAD. Bump the rev deliberately when adopting framework changes.
-pebbles = { git = "https://github.com/pebbles-hq/pebbles", rev = "5a9fdbd5bb782418abb7cd34e8b69a0da6577fb8" }
+pebbles = { git = "https://github.com/pebbles-hq/pebbles", rev = "868c8097e614af8022262f0598f3d407eab0caf9" }
 # The document store: a rope for O(log n) splice + line indexing on large files.
 ropey = "1"
 # Regex search mode (find/replace). Plain + whole-word search need no engine.
