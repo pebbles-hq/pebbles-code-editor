@@ -209,7 +209,7 @@ pub struct EditorTheme {
     /// The syntax palette (swappable independently of the chrome above).
     pub syntax: HighlightStyle,
     /// Base font size of the editor's own UI (status bar, find bar, command
-    /// palette); the code text size is [`EditorConfig`](crate::EditorConfig)'s.
+    /// palette); the code text size is set on the editor builder (`.font_size(..)`).
     pub ui_font_size: f64,
     /// Font family of the editor's UI text (`None` = the app theme's for the
     /// chrome, the bundled monospace for the command palette).
