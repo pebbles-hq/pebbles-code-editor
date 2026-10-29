@@ -226,7 +226,7 @@ pub(crate) fn popup(s: &Session, f: &crate::view::Frame) -> AnyWidget {
         .decoration(
             BoxDecoration::new()
                 .color(theme.overlay_bg)
-                .radius(BorderRadius::all(8.0))
+                .radius(BorderRadius::all(theme.overlay_radius))
                 .border(Border::new(theme.border, 1.0)),
         )
         .clip()

@@ -32,16 +32,16 @@ pub(crate) fn status_bar(
         .child(
             row(children![
                 icon(tabler::FILE_CODE)
-                    .size(14.0)
+                    .size(theme.ui_font_size + 1.5)
                     .color(theme.gutter_active_fg),
                 gap_w(8.0),
-                text(title.to_string())
-                    .size(12.5)
+                theme
+                    .ui_text(title, 0.0)
                     .weight(600.0)
                     .color(theme.foreground),
                 spacer(),
-                text(format!("{lang} · Ln {ln}, Col {col}"))
-                    .size(11.5)
+                theme
+                    .ui_text(format!("{lang} · Ln {ln}, Col {col}"), -1.0)
                     .color(theme.gutter_fg),
             ])
             .cross_axis_alignment(CrossAxisAlignment::Center),
@@ -60,7 +60,7 @@ pub(crate) fn tooltip(body: AnyWidget, theme: &EditorTheme) -> impl IntoWidget {
         .decoration(
             BoxDecoration::new()
                 .color(theme.overlay_bg)
-                .radius(BorderRadius::all(8.0))
+                .radius(BorderRadius::all(theme.overlay_radius))
                 .border(Border::new(theme.border, 1.0)),
         )
         .padding(EdgeInsets::symmetric(10.0, 7.0))

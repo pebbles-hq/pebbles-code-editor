@@ -129,27 +129,24 @@ pub(crate) fn bar(
     // Option chips (case / whole-word / regex): a bordered Toggle so the pill is visible
     // even when inactive, with a legible label that stays readable on both states.
     let fg = theme.foreground;
+    let ui = theme.clone();
     let toggle_chip = move |on: bool, label: &str, sig: Signal<bool>| {
-        toggle(
-            on,
-            text(label.to_string()).size(12.0).weight(600.0).color(fg),
-        )
-        .variant(ToggleVariant::Outline)
-        .size(ToggleSize::Sm)
-        .on_changed(move || sig.set(!sig.peek()))
-        .into_widget()
+        toggle(on, ui.ui_text(label, -0.5).weight(600.0).color(fg))
+            .variant(ToggleVariant::Outline)
+            .size(ToggleSize::Sm)
+            .on_changed(move || sig.set(!sig.peek()))
+            .into_widget()
     };
     let (m_prev, m_next) = (matches.clone(), matches.clone());
     let find_row = row(children![
         expanded(query_field),
         gap_w(8.0),
-        text(format!(
-            "{}/{}",
-            if count == 0 { 0 } else { cur + 1 },
-            count
-        ))
-        .size(12.0)
-        .color(theme.gutter_fg),
+        theme
+            .ui_text(
+                format!("{}/{}", if count == 0 { 0 } else { cur + 1 }, count),
+                -0.5,
+            )
+            .color(theme.gutter_fg),
         gap_w(6.0),
         icon_button(IconKind::ChevronUp)
             .size(16.0)
@@ -250,7 +247,7 @@ pub(crate) fn bar(
         .decoration(
             BoxDecoration::new()
                 .color(theme.overlay_bg)
-                .radius(BorderRadius::all(8.0))
+                .radius(BorderRadius::all(theme.overlay_radius))
                 .border(Border::new(theme.border, 1.0)),
         )
         .padding(EdgeInsets::all(8.0))

@@ -208,9 +208,27 @@ pub struct EditorTheme {
     pub diff_removed: Color,
     /// The syntax palette (swappable independently of the chrome above).
     pub syntax: HighlightStyle,
+    /// Base font size of the editor's own UI (status bar, find bar, command
+    /// palette); the code text size is [`EditorConfig`](crate::EditorConfig)'s.
+    pub ui_font_size: f64,
+    /// Font family of the editor's UI text (`None` = the app theme's for the
+    /// chrome, the bundled monospace for the command palette).
+    pub ui_font_family: Option<String>,
+    /// Corner radius of floating surfaces (find bar, completion, palette, tooltips).
+    pub overlay_radius: f64,
 }
 
 impl EditorTheme {
+    /// UI text at `delta` px from [`ui_font_size`](Self::ui_font_size), in
+    /// [`ui_font_family`](Self::ui_font_family) when set.
+    pub(crate) fn ui_text(&self, s: impl Into<String>, delta: f64) -> pebbles::prelude::Text {
+        let t = pebbles::prelude::text(s.into()).size((self.ui_font_size + delta) as f32);
+        match &self.ui_font_family {
+            Some(f) => t.font_family(f.clone()),
+            None => t,
+        }
+    }
+
     /// The color for a token kind (delegates to [`syntax`](Self::syntax)).
     pub fn color(&self, kind: TokenKind) -> Color {
         self.syntax.color(kind)
@@ -266,6 +284,9 @@ impl EditorTheme {
             diff_added: a(0x6C, 0xD1, 0x8A, 0x22),
             diff_removed: a(0xE9, 0x6A, 0x6A, 0xC0),
             syntax: HighlightStyle::dark(),
+            ui_font_size: 12.5,
+            ui_font_family: None,
+            overlay_radius: 8.0,
         }
     }
 
@@ -303,6 +324,9 @@ impl EditorTheme {
             diff_added: a(0x3E, 0x8A, 0x3E, 0x1F),
             diff_removed: a(0xC0, 0x3A, 0x4B, 0xB0),
             syntax: HighlightStyle::light(),
+            ui_font_size: 12.5,
+            ui_font_family: None,
+            overlay_radius: 8.0,
         }
     }
 }

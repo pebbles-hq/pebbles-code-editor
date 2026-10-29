@@ -256,3 +256,48 @@ bbbb
     settle(&mut ui, &mut env);
     assert_eq!(ctrl.cursor().peek(), (0, 0));
 }
+
+// ---- theming: the editor's own UI follows EditorTheme (an IDE theme drives it) ----------
+
+fn paragraphs(ui: &Ui) -> Vec<(String, f32, Color)> {
+    let rt = ui.render_tree();
+    rt.find_all::<pebbles::render::RenderParagraph>()
+        .into_iter()
+        .filter_map(|id| {
+            rt.object_ref(id)
+                .downcast_ref::<pebbles::render::RenderParagraph>()
+                .map(|p| (p.text.clone(), p.style.font_size, p.style.color))
+        })
+        .collect()
+}
+
+#[test]
+fn editor_ui_chrome_is_driven_by_the_theme_tokens() {
+    let code = create_root_signal(String::from("fn main() {}\n"));
+    let mut theme = EditorTheme::dark();
+    theme.ui_font_size = 20.0;
+    theme.foreground = Color::from_rgba8(1, 2, 3, 255);
+    theme.gutter_fg = Color::from_rgba8(4, 5, 6, 255);
+    theme.overlay_radius = 3.0;
+    let (ui, _env) = mount(
+        code_editor(code)
+            .title("main.rs")
+            .theme(theme)
+            .height(300.0)
+            .into_widget(),
+    );
+    let ps = paragraphs(&ui);
+    let title = ps.iter().find(|p| p.0 == "main.rs").expect("title painted");
+    assert_eq!(title.1, 20.0, "title at ui_font_size");
+    assert_eq!(
+        title.2,
+        Color::from_rgba8(1, 2, 3, 255),
+        "title in foreground"
+    );
+    let status = ps
+        .iter()
+        .find(|p| p.0.contains("Ln 1, Col 1"))
+        .expect("status painted");
+    assert_eq!(status.1, 19.0, "status one px smaller");
+    assert_eq!(status.2, Color::from_rgba8(4, 5, 6, 255));
+}

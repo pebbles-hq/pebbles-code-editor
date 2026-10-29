@@ -166,13 +166,18 @@ pub(crate) fn palette(
                 .decoration(
                     BoxDecoration::new()
                         .color(bg)
-                        .radius(BorderRadius::all(4.0)),
+                        .radius(BorderRadius::all(theme.overlay_radius / 2.0)),
                 )
                 .alignment(Alignment::CENTER_LEFT)
                 .child(
                     text(cmd.title().to_string())
-                        .size(13.0)
-                        .font_family(MONO)
+                        .size((theme.ui_font_size + 0.5) as f32)
+                        .font_family(
+                            theme
+                                .ui_font_family
+                                .clone()
+                                .unwrap_or_else(|| MONO.to_string()),
+                        )
                         .color(theme.foreground),
                 )
                 .into_widget(),
@@ -180,8 +185,8 @@ pub(crate) fn palette(
     }
     if matches.is_empty() {
         rows.push(
-            text("no matching commands")
-                .size(12.5)
+            theme
+                .ui_text("no matching commands", 0.0)
                 .color(theme.muted)
                 .into_widget(),
         );
@@ -192,7 +197,7 @@ pub(crate) fn palette(
         .decoration(
             BoxDecoration::new()
                 .color(theme.overlay_bg)
-                .radius(BorderRadius::all(10.0))
+                .radius(BorderRadius::all(theme.overlay_radius + 2.0))
                 .border(Border::new(theme.border, 1.0)),
         )
         .padding(EdgeInsets::all(10.0))
