@@ -608,6 +608,71 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         });
     }
 
+    // ---- host controller (EditorController) ----
+    // Requests are applied HERE, in render (not in an effect): effects flush before the
+    // reconciler runs, so an effect would let the OLD editor consume an "open at line" that
+    // the host queued in the same handler that switched documents.
+    let ctrl = p.controller;
+    // Mirror the primary caret into the controller (unconditional hook; no-op without one).
+    create_effect(move || {
+        let st = state.get();
+        let Some(c) = ctrl else { return };
+        let text = st.text();
+        let head = st.primary().head;
+        let pos = (line_of(&text, head), col_of(&text, head));
+        if c.cursor.peek() != pos {
+            c.cursor.set(pos);
+        }
+    });
+    if let Some(c) = ctrl {
+        let reqs = c.requests.get();
+        if !reqs.is_empty() {
+            c.requests.set(Vec::new());
+            let line_px = p.fs * p.lh;
+            for r in reqs {
+                let cur = state.peek();
+                let text = cur.text();
+                let at = |(l, col): (usize, usize)| byte_at(&text, l, col);
+                let sel = match r {
+                    crate::controller::Request::Cursor(l, col) => {
+                        Some(Selection::caret(at((l, col))))
+                    }
+                    crate::controller::Request::Select(a, h) => {
+                        Some(Selection::range(at(a), at(h)))
+                    }
+                    crate::controller::Request::ScrollTo(line) => {
+                        let li = line_cache.peek().borrow_mut().sync(&text);
+                        let line = line.min(li.line_count().saturating_sub(1));
+                        let wc = wrap_hold.peek().get();
+                        let row = if wc == 0 && folds.peek().is_empty() {
+                            line
+                        } else {
+                            crate::fold::DisplayMap::for_index(&li, &folds.peek(), wc, &[])
+                                .place(line, 0)
+                                .0
+                        };
+                        let t = (10.0 + row as f64 * line_px - line_px).max(0.0);
+                        scroll.scroll_to(t);
+                        scroll_top.set(t);
+                        None
+                    }
+                    crate::controller::Request::Focus => {
+                        focus.request_focus();
+                        None
+                    }
+                };
+                if let Some(sel) = sel {
+                    state.set(EditorState {
+                        doc: cur.doc.clone(),
+                        selection: Selections::single(sel),
+                    });
+                    history.peek().borrow_mut().break_group();
+                    goal.set(col_of(&text, sel.head));
+                }
+            }
+        }
+    }
+
     // ---- read model ----
     let st = state.get();
     let src = st.text();

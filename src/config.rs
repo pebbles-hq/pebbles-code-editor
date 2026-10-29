@@ -60,6 +60,8 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         soft_wrap: false,
         diff_base: None,
         keymap: crate::keymap::Keymap::default(),
+        document_id: None,
+        controller: None,
     }
 }
 
@@ -107,6 +109,8 @@ pub struct CodeEditor {
     soft_wrap: bool,
     diff_base: Option<Signal<String>>,
     keymap: crate::keymap::Keymap,
+    document_id: Option<u64>,
+    controller: Option<crate::controller::EditorController>,
 }
 
 /// Fired after each change with the minimal [`Edit`] delta; `remote` is true when the change
@@ -356,11 +360,35 @@ impl CodeEditor {
         self.keymap = keymap;
         self
     }
+    /// Identify the document being edited. The editor's internal state (selection, undo
+    /// history, scroll, folds, find/palette) is per document: it resets whenever the bound
+    /// `code` signal is a *different* signal or `document_id` changes — like a VS Code editor
+    /// switching models. Use this when one `Signal<String>` is reused for several files
+    /// (set the signal's text AND bump the id). Without it, setting the text of the same
+    /// signal is treated as an external edit of the same document (carets are remapped).
+    pub fn document_id(mut self, id: u64) -> Self {
+        self.document_id = Some(id);
+        self
+    }
+    /// Drive the caret, selection and scroll programmatically (e.g. "open at line") — see
+    /// [`EditorController`](crate::EditorController).
+    pub fn controller(mut self, controller: crate::controller::EditorController) -> Self {
+        self.controller = Some(controller);
+        self
+    }
 }
 
 impl IntoWidget for CodeEditor {
     fn into_widget(self) -> AnyWidget {
-        component_props(render_editor, Props::from(self)).into_widget()
+        // Key the editor by document identity (the bound signal + optional `document_id`), so a
+        // different document REMOUNTS it with fresh state instead of keeping the previous
+        // document's carets, history and scroll (Flutter: a new Key → a new State).
+        let key = format!(
+            "pebbles-code-editor:{}:{}",
+            self.code.raw_id(),
+            self.document_id.map_or_else(String::new, |d| d.to_string())
+        );
+        keyed(key, component_props(render_editor, Props::from(self))).into_widget()
     }
 }
 
@@ -411,6 +439,7 @@ pub(crate) struct Props {
     pub(crate) soft_wrap: bool,
     pub(crate) diff_base: Option<Signal<String>>,
     pub(crate) keymap: crate::keymap::Keymap,
+    pub(crate) controller: Option<crate::controller::EditorController>,
 }
 
 impl From<CodeEditor> for Props {
@@ -494,6 +523,7 @@ impl From<CodeEditor> for Props {
             soft_wrap: e.soft_wrap,
             diff_base: e.diff_base,
             keymap: e.keymap,
+            controller: e.controller,
         }
     }
 }

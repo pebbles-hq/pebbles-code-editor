@@ -6,6 +6,16 @@ All notable changes to `pebbles-code-editor` are documented here. The format fol
 
 ## [Unreleased]
 
+### Fixed — editor state follows the bound document; Added — `EditorController`
+The editor built its state from `code` only on first mount, so binding a *different*
+`Signal<String>` (switching files) kept the previous document's carets/undo/scroll and stale
+closures. It is now keyed by document identity: a different signal, or a changed
+`.document_id(u64)` (for a reused signal), remounts it with fresh state.
+New `editor_controller()` + `.controller(ctrl)`: `set_cursor(line, col)`, `select(anchor, head)`,
+`scroll_to(line)`, `focus()` and a reactive `cursor()` (0-based, char columns). Requests are
+applied on the next render, so "switch file + open at line" in one handler lands on the new
+document.
+
 ### Added — overridable built-in keybindings (`Keymap`)
 `code_editor(..).keymap(Keymap::new().disable(BuiltinCommand::CommandPalette).bind("F1",
 BuiltinCommand::CommandPalette))`. A disabled built-in is declined so the key bubbles to the

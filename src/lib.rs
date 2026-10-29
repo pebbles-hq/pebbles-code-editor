@@ -52,6 +52,7 @@ mod brackets;
 mod collab;
 mod commands;
 mod config;
+mod controller;
 mod diff;
 mod fold;
 mod geometry;
@@ -63,6 +64,7 @@ mod view;
 
 pub use collab::Edit;
 pub use config::{CodeEditor, code_editor};
+pub use controller::{EditorController, editor_controller};
 pub use edit::{ChangeSet, EditorState, History, Selection, Selections, Transaction};
 pub use extensions::{
     BlockWidget, Command, ConfigPatch, DecoStyle, Decoration, EditContext, Extension, GutterMark,
