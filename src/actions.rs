@@ -282,6 +282,10 @@ commands! {
     ShowTypeHierarchy => "references-view.showTypeHierarchy", "Show Type Hierarchy", [];
     /// Flip the open hierarchy: incoming / outgoing calls, supertypes / subtypes.
     ToggleHierarchyDirection => "references-view.toggleDirection", "Toggle Hierarchy Direction", [];
+    /// Go back to where the caret was before the last jump (definition, symbol, line, …).
+    NavigateBack => "workbench.action.navigateBack", "Go Back", ["Alt+Left", "Ctrl+Alt+-"];
+    /// Go forward again.
+    NavigateForward => "workbench.action.navigateForward", "Go Forward", ["Alt+Right", "Ctrl+Shift+-"];
     /// Toggle the language service's inlay hints.
     ToggleInlayHints => "editor.action.toggleInlayHints", "Toggle Inlay Hints", [];
     /// Toggle the language service's code lenses.

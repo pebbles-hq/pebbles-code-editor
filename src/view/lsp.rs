@@ -149,6 +149,9 @@ pub(crate) struct Store {
     pub(crate) lens_gate: RequestGate,
     pub(crate) lens_ver: Cell<Option<u64>>,
     pub(crate) select_gate: RequestGate,
+    /// Navigation history in this document: (back, forward) caret bytes.
+    #[allow(clippy::type_complexity)]
+    pub(crate) nav: RefCell<(Vec<usize>, Vec<usize>)>,
     pub(crate) hier_gate: RequestGate,
     pub(crate) linked_gate: RequestGate,
     /// The (caret, version) of the last linked-editing request.
@@ -239,6 +242,7 @@ pub(crate) fn hooks() -> Hooks {
             open: create_signal(false),
             query: create_signal(String::new()),
             sel: create_signal(0usize),
+            jumped: create_signal(None),
         },
         store: create_signal(Rc::new(Store::default())),
         symbols: create_signal(Rc::new(Vec::new())),
@@ -258,6 +262,7 @@ pub(crate) fn hooks() -> Hooks {
             open: create_signal(false),
             query: create_signal(String::new()),
             sel: create_signal(0usize),
+            jumped: create_signal(None),
         },
     }
 }
@@ -1556,6 +1561,38 @@ impl Lsp {
         self.with_doc(|doc, _| svc.formatting(doc, opts, reply))
     }
 
+    /// Format the document, then run `done` (also when the service declines or the reply
+    /// is dropped as stale) — the format-on-save handshake.
+    pub(crate) fn format_document_then(&self, done: Box<dyn FnOnce()>) {
+        let slot = Rc::new(RefCell::new(Some(done)));
+        let run = {
+            let s = slot.clone();
+            move || {
+                let f = s.borrow_mut().take();
+                if let Some(f) = f {
+                    f();
+                }
+            }
+        };
+        let Some(svc) = self.svc.clone().filter(|_| !self.read_only) else {
+            run();
+            return;
+        };
+        let me = self.clone();
+        let guarded = self.guard(&self.store.fmt_gate, move |e: Vec<lsp::TextEdit>| {
+            me.apply_text_edits(&e);
+        });
+        let r2 = run.clone();
+        let reply: lsp::Reply<Vec<lsp::TextEdit>> = Box::new(move |e| {
+            guarded(e);
+            r2();
+        });
+        let opts = self.fmt_options();
+        if !self.with_doc(|doc, _| svc.formatting(doc, opts, reply)) {
+            run();
+        }
+    }
+
     /// Format bytes `from..to` (range formatting; the whole document when the service has
     /// none).
     pub(crate) fn format_range(&self, from: usize, to: usize) -> bool {
@@ -1956,9 +1993,51 @@ impl Lsp {
         }
     }
 
+    /// Record a jump away from `from` (navigation history; clears the forward list).
+    pub(crate) fn record_jump(&self, from: usize) {
+        let mut n = self.store.nav.borrow_mut();
+        if n.0.last() != Some(&from) {
+            n.0.push(from);
+            if n.0.len() > 50 {
+                n.0.remove(0);
+            }
+        }
+        n.1.clear();
+    }
+
+    /// Go Back / Go Forward through the jumps made in this document.
+    pub(crate) fn navigate_history(&self, back: bool) -> bool {
+        let head = self.state.peek().primary().head;
+        let target = {
+            let mut n = self.store.nav.borrow_mut();
+            let (from, to) = if back {
+                let (a, b) = &mut *n;
+                (a, b)
+            } else {
+                let (a, b) = &mut *n;
+                (b, a)
+            };
+            let Some(t) = from.pop() else {
+                return false;
+            };
+            to.push(head);
+            t
+        };
+        let cur = self.state.peek();
+        let text = cur.text();
+        let at = target.min(text.len());
+        self.state.set(EditorState {
+            doc: cur.doc.clone(),
+            selection: crate::edit::Selections::single(crate::edit::Selection::caret(at)),
+        });
+        self.goal.set(crate::geometry::col_of(&text, at));
+        true
+    }
+
     /// Reveal `loc`: in this document move the caret to its start; elsewhere ask the host.
     pub(crate) fn go_to(&self, loc: &lsp::Location) {
         if *loc.uri == *self.uri {
+            self.record_jump(self.state.peek().primary().head);
             let cur = self.state.peek();
             let text = cur.text();
             let at = lsp::position_to_byte(&text, loc.range.start);

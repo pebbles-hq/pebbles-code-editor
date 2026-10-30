@@ -98,6 +98,8 @@ pub(crate) struct Palette {
     pub(crate) open: Signal<bool>,
     pub(crate) query: Signal<String>,
     pub(crate) sel: Signal<usize>,
+    /// Set to the caret byte a Go to Line jump left (navigation history).
+    pub(crate) jumped: Signal<Option<usize>>,
 }
 
 /// Commands whose title contains the (lowercased) query, in order.
@@ -136,6 +138,7 @@ pub(crate) fn run_selected(
             let text = ctx.text();
             let n = text.split('\n').count();
             let b = crate::geometry::byte_at(&text, line.min(n.saturating_sub(1)), col);
+            pal.jumped.set(Some(ctx.selection().1));
             ctx.select(b, b);
         }
         pal.open.set(false);

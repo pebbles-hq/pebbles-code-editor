@@ -182,6 +182,8 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
         C::PreviousProblem => env.lsp.next_problem(false),
         C::GoToSymbol => env.lsp.open_go_to_symbol(env.palette),
         C::ShowAllSymbols => env.lsp.open_workspace_symbols(env.palette),
+        C::NavigateBack => env.lsp.navigate_history(true),
+        C::NavigateForward => env.lsp.navigate_history(false),
         C::ShowCallHierarchy => env.lsp.show_hierarchy(true),
         C::ShowTypeHierarchy => env.lsp.show_hierarchy(false),
         C::ToggleHierarchyDirection => env.lsp.toggle_hier_direction(),

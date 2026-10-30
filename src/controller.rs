@@ -21,6 +21,8 @@ pub(crate) enum Request {
     Focus,
     /// Run a built-in editor command.
     Run(crate::actions::EditorCommand),
+    /// Format the document through the language service, then publish the ticket.
+    FormatForSave(u64),
 }
 
 /// A handle for driving an editor programmatically. `Copy`; create it with
@@ -38,6 +40,8 @@ pub(crate) enum Request {
 pub struct EditorController {
     pub(crate) requests: Signal<Vec<Request>>,
     pub(crate) cursor: Signal<(usize, usize)>,
+    pub(crate) save_ready: Signal<u64>,
+    pub(crate) ticket: Signal<u64>,
 }
 
 /// Create an [`EditorController`] (a hook: call it at the top level of a component, or at app
@@ -46,6 +50,8 @@ pub fn editor_controller() -> EditorController {
     EditorController {
         requests: create_signal(Vec::new()),
         cursor: create_signal((0, 0)),
+        save_ready: create_signal(0),
+        ticket: create_signal(0),
     }
 }
 
@@ -77,6 +83,22 @@ impl EditorController {
     /// any command from a host menu.
     pub fn run_command(&self, cmd: crate::actions::EditorCommand) {
         self.requests.update(|r| r.push(Request::Run(cmd)));
+    }
+
+    /// Format on save (VS Code `editor.formatOnSave`): format the document through the
+    /// language service and return a ticket; [`save_ready`](Self::save_ready) becomes that
+    /// ticket once the edits are applied (or right away when there is no formatter, it
+    /// declined, or the reply was dropped because the text changed). Write the file then.
+    pub fn format_for_save(&self) -> u64 {
+        let t = self.ticket.peek() + 1;
+        self.ticket.set(t);
+        self.requests.update(|r| r.push(Request::FormatForSave(t)));
+        t
+    }
+
+    /// The last finished [`format_for_save`](Self::format_for_save) ticket (reactive).
+    pub fn save_ready(&self) -> Signal<u64> {
+        self.save_ready
     }
 
     /// The primary caret's `(line, col)` (0-based, char columns) — reactive: reading it with

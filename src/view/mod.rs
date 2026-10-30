@@ -351,6 +351,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         open: create_signal(false),
         query: create_signal(String::new()),
         sel: create_signal(0usize),
+        jumped: create_signal(None),
     };
     let focus = create_focus();
     // View-state toggles driven by editor commands: soft-wrap override (Alt+Z), font zoom
@@ -400,6 +401,16 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         let st = state.get();
         cursor_hist.peek().borrow_mut().observe(&st);
     });
+    // Go to Line jumps feed the navigation history.
+    {
+        let l = lsp_ctl.clone();
+        create_effect(move || {
+            if let Some(from) = palette.jumped.get() {
+                l.record_jump(from);
+                palette.jumped.set(None);
+            }
+        });
+    }
     // Go to Symbol: live preview while moving through the `@` list; restore on cancel.
     {
         let l = lsp_ctl.clone();
@@ -1376,6 +1387,13 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     }
                     crate::controller::Request::Run(cmd) => {
                         commands::run(cmd, &cmd_env);
+                        None
+                    }
+                    crate::controller::Request::FormatForSave(t) => {
+                        let ready = c.save_ready;
+                        cmd_env
+                            .lsp
+                            .format_document_then(Box::new(move || ready.set(t)));
                         None
                     }
                 };

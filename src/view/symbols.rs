@@ -132,6 +132,9 @@ impl Lsp {
             .map(|(i, e)| {
                 let me = self.clone();
                 Command::new(format!("symbol.{i}"), e.title.clone(), move |_| {
+                    if let Some(prev) = me.h.sym_restore.peek() {
+                        me.record_jump(prev.primary().head);
+                    }
                     me.h.sym_restore.set(None);
                     me.h.sym_preview.set(None);
                     me.select_range(e.name.0, e.name.0);

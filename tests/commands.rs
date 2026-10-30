@@ -527,3 +527,21 @@ fn emmet_expands_on_tab_and_via_the_palette_command() {
     h.frame();
     assert_eq!(h.code.get(), "margin: 10px;");
 }
+
+#[test]
+fn navigation_history_goes_back_and_forward_across_jumps() {
+    let mut h = harness("a\nb\nc\nd");
+    h.caret(1, 0);
+    assert!(h.press("Ctrl+G"));
+    h.typ("4");
+    h.key(KeyInput::Enter);
+    assert_eq!(h.pos(), (3, 0));
+    assert!(h.press("Alt+Left"), "Go Back");
+    assert_eq!(h.pos(), (1, 0));
+    assert!(h.press("Ctrl+Shift+-"), "Go Forward");
+    assert_eq!(h.pos(), (3, 0));
+    assert!(h.press("Ctrl+Alt+-"));
+    assert_eq!(h.pos(), (1, 0));
+    assert!(h.press("Alt+Right"));
+    assert_eq!(h.pos(), (3, 0));
+}

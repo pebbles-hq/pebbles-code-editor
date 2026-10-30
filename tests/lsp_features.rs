@@ -1776,3 +1776,16 @@ fn semantic_tokens_full_delta_and_range_colour_the_text() {
     assert!(ranged > plain);
     assert!(fake.sem_calls.borrow()[0].starts_with("range:0-"));
 }
+
+#[test]
+fn format_for_save_formats_then_publishes_the_ticket() {
+    let fake = Rc::new(Fake::default());
+    *fake.fmt.borrow_mut() = vec![edit(0, 0, 0, "// fmt\n")];
+    let ctrl = pebbles_code_editor::editor_controller();
+    let (mut h, code) = mount("x\n", fake.clone(), move |e| e.controller(ctrl));
+    let t = ctrl.format_for_save();
+    assert_ne!(ctrl.save_ready().get(), t);
+    h.frames(2);
+    assert_eq!(code.get(), "// fmt\nx\n");
+    assert_eq!(ctrl.save_ready().get(), t, "ready after the edits applied");
+}
