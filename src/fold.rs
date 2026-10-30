@@ -5,36 +5,66 @@
 
 use std::collections::BTreeSet;
 
-/// The indentation-derived foldable regions as `(head_line, last_line)` pairs (see below).
+/// The foldable regions as `(head_line, last_line)` pairs: indentation-derived (a non-blank
+/// line heads a region spanning the following deeper-indented lines) plus `#region` /
+/// `#endregion` marker regions in any comment syntax. Sorted by head.
 pub(crate) fn foldable(src: &str) -> Vec<(usize, usize)> {
-    let lines: Vec<&str> = src.split('\n').collect();
-    let indent = |l: &str| l.len() - l.trim_start().len();
-    let is_blank = |l: &str| l.trim().is_empty();
-    let mut regions = Vec::new();
-    for i in 0..lines.len() {
-        if is_blank(lines[i]) {
-            continue;
-        }
-        let ind = indent(lines[i]);
-        let mut j = i + 1;
-        let mut last = i;
-        while j < lines.len() {
-            if is_blank(lines[j]) {
-                j += 1;
-                continue;
-            }
-            if indent(lines[j]) > ind {
-                last = j;
-                j += 1;
-            } else {
-                break;
-            }
-        }
-        if last > i {
-            regions.push((i, last));
-        }
+    crate::lines::regions_of(src)
+}
+
+/// The innermost region containing `line` (a region whose head is `line` wins).
+pub(crate) fn region_at(regions: &[(usize, usize)], line: usize) -> Option<(usize, usize)> {
+    if let Some(r) = regions.iter().find(|r| r.0 == line) {
+        return Some(*r);
     }
     regions
+        .iter()
+        .filter(|r| r.0 <= line && line <= r.1)
+        .min_by_key(|r| r.1 - r.0)
+        .copied()
+}
+
+/// Nesting depth of each region (1 = top level), parallel to `regions`.
+pub(crate) fn depths(regions: &[(usize, usize)]) -> Vec<usize> {
+    let mut stack: Vec<(usize, usize)> = Vec::new();
+    regions
+        .iter()
+        .map(|&r| {
+            while stack.last().is_some_and(|s| r.0 > s.1) {
+                stack.pop();
+            }
+            stack.push(r);
+            stack.len()
+        })
+        .collect()
+}
+
+/// Heads to fold for "Fold Level N": every region at depth `level` (VS Code also leaves the
+/// region containing the cursor line… open only for Fold All Except; Fold Level folds them).
+pub(crate) fn heads_at_level(regions: &[(usize, usize)], level: usize) -> Vec<usize> {
+    regions
+        .iter()
+        .zip(depths(regions))
+        .filter(|(_, d)| *d == level)
+        .map(|(r, _)| r.0)
+        .collect()
+}
+
+/// `region` itself and every region nested inside it.
+pub(crate) fn nested_heads(regions: &[(usize, usize)], region: (usize, usize)) -> Vec<usize> {
+    regions
+        .iter()
+        .filter(|r| r.0 >= region.0 && r.1 <= region.1)
+        .map(|r| r.0)
+        .collect()
+}
+
+/// Lines the folds in `folded` hide (for the "N lines" badge on a folded head).
+pub(crate) fn hidden_count(regions: &[(usize, usize)], head: usize) -> usize {
+    regions
+        .iter()
+        .find(|r| r.0 == head)
+        .map_or(0, |r| r.1 - r.0)
 }
 
 /// One visual row: a slice `[start, end)` (char columns) of buffer `line`. `first` marks the
@@ -347,5 +377,30 @@ mod tests {
         let m = DisplayMap::new(3, &folds(&[]), &[], &[4, 4, 4], 0, &[]);
         assert_eq!(m.rows(), 3);
         assert_eq!(m.place(2, 3), (2, 3));
+    }
+
+    #[test]
+    fn region_markers_fold_in_any_comment_syntax() {
+        let src = "a\n// #region Setup\nx\ny\n// #endregion\nb\n# region py\nz\n#endregion\n";
+        let r = foldable(src);
+        assert!(r.contains(&(1, 4)), "{r:?}");
+        assert!(r.contains(&(6, 8)), "{r:?}");
+        // C# style (no comment prefix) and HTML comments too.
+        assert!(foldable("#region A\nx\n#endregion").contains(&(0, 2)));
+        assert!(foldable("<!-- #region -->\nx\n<!-- #endregion -->").contains(&(0, 2)));
+        // `regional` is not a marker.
+        assert!(foldable("// regional\nx\n// endregion").is_empty());
+    }
+
+    #[test]
+    fn fold_level_nesting_and_region_lookup() {
+        let src = "a {\n  b {\n    c\n  }\n  d {\n    e\n  }\n}\nf {\n  g\n}";
+        let r = foldable(src);
+        assert_eq!(heads_at_level(&r, 1), vec![0, 8]);
+        assert_eq!(heads_at_level(&r, 2), vec![1, 4]);
+        assert_eq!(region_at(&r, 2), Some((1, 2)));
+        assert_eq!(region_at(&r, 0), Some((0, 6)));
+        assert_eq!(nested_heads(&r, (0, 6)), vec![0, 1, 4]);
+        assert_eq!(hidden_count(&r, 0), 6);
     }
 }

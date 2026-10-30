@@ -24,6 +24,66 @@ fn indent_of(l: &str) -> Option<usize> {
     }
 }
 
+/// A folding-region marker line (VS Code `#region` / `#endregion` in any comment syntax):
+/// `1` opens a region, `-1` closes one, `0` otherwise.
+pub(crate) fn marker_of(l: &str) -> i8 {
+    let mut t = l.trim_start();
+    for p in ["<!--", "//", "/*", "--", "#", ";", "'", "%"] {
+        if let Some(r) = t.strip_prefix(p) {
+            t = r.trim_start();
+            break;
+        }
+    }
+    let t = t.strip_prefix('#').unwrap_or(t);
+    let word_end = |r: &str| r.chars().next().is_none_or(|c| !c.is_alphanumeric());
+    if let Some(r) = t.strip_prefix("region")
+        && word_end(r)
+    {
+        1
+    } else if let Some(r) = t.strip_prefix("endregion")
+        && word_end(r)
+    {
+        -1
+    } else {
+        0
+    }
+}
+
+/// Indentation regions (see below) plus `#region`/`#endregion` marker regions, sorted by
+/// head; a marker region replaces an indentation region with the same head.
+fn regions_with_markers(indents: &[Option<usize>], markers: &[i8]) -> Vec<(usize, usize)> {
+    let mut out = regions_from(indents);
+    let mut stack = Vec::new();
+    let mut marked = Vec::new();
+    for (i, &m) in markers.iter().enumerate() {
+        if m > 0 {
+            stack.push(i);
+        } else if m < 0
+            && let Some(h) = stack.pop()
+            && i > h
+        {
+            marked.push((h, i));
+        }
+    }
+    if marked.is_empty() {
+        return out;
+    }
+    out.retain(|r| !marked.iter().any(|m| m.0 == r.0));
+    out.extend(marked);
+    out.sort_unstable();
+    out
+}
+
+/// The full foldable-region computation for `src` (the reference `fold::foldable` uses).
+pub(crate) fn regions_of(src: &str) -> Vec<(usize, usize)> {
+    let (mut ind, mut mk) = (Vec::new(), Vec::new());
+    for l in src.split('\n') {
+        ind.push(indent_of(l));
+        mk.push(marker_of(l));
+    }
+    regions_with_markers(&ind, &mk)
+}
+
 /// The foldable `(head, last)` regions from per-line indentation, in one stack pass.
 /// Identical to `fold::foldable`: a non-blank line heads a region spanning every following
 /// line up to (not including) the next non-blank line indented no deeper, trimmed to its last
@@ -90,6 +150,7 @@ pub(crate) struct LineIndex {
     starts: Vec<usize>,
     char_lens: Vec<usize>,
     indents: Vec<Option<usize>>,
+    markers: Vec<i8>,
     regions: Rc<Vec<(usize, usize)>>,
     max_cols: usize,
     len: usize,
@@ -101,17 +162,20 @@ impl LineIndex {
         let mut starts = vec![0];
         let mut char_lens = Vec::new();
         let mut indents = Vec::new();
+        let mut markers = Vec::new();
         for l in src.split('\n') {
             char_lens.push(l.chars().count());
             indents.push(indent_of(l));
+            markers.push(marker_of(l));
         }
         starts.extend(src.match_indices('\n').map(|(i, _)| i + 1));
-        let regions = Rc::new(regions_from(&indents));
+        let regions = Rc::new(regions_with_markers(&indents, &markers));
         let max_cols = char_lens.iter().copied().max().unwrap_or(0);
         LineIndex {
             starts,
             char_lens,
             indents,
+            markers,
             regions,
             max_cols,
             len: src.len(),
@@ -229,21 +293,26 @@ impl LineCache {
         let mut starts = Vec::new();
         let mut lens = Vec::new();
         let mut inds = Vec::new();
+        let mut marks = Vec::new();
         for l in seg.split('\n') {
             lens.push(l.chars().count());
             inds.push(indent_of(l));
+            marks.push(marker_of(l));
         }
         starts.push(start);
         starts.extend(seg.match_indices('\n').map(|(i, _)| start + i + 1));
         let removed_max = idx.char_lens[a..=b].iter().copied().max().unwrap_or(0);
         let added_max = lens.iter().copied().max().unwrap_or(0);
-        let folds_changed = inds.len() != b + 1 - a || idx.indents[a..=b] != inds[..];
+        let folds_changed = inds.len() != b + 1 - a
+            || idx.indents[a..=b] != inds[..]
+            || idx.markers[a..=b] != marks[..];
         idx.starts.splice(a..=b, starts);
         for x in &mut idx.starts[a + lens.len()..] {
             *x = (*x as isize + delta) as usize;
         }
         idx.char_lens.splice(a..=b, lens);
         idx.indents.splice(a..=b, inds);
+        idx.markers.splice(a..=b, marks);
         idx.len = nb.len();
         if added_max >= idx.max_cols {
             idx.max_cols = added_max;
@@ -251,7 +320,7 @@ impl LineCache {
             idx.max_cols = idx.char_lens.iter().copied().max().unwrap_or(0);
         }
         if folds_changed {
-            idx.regions = Rc::new(regions_from(&idx.indents));
+            idx.regions = Rc::new(regions_with_markers(&idx.indents, &idx.markers));
         }
         self.text = new.to_string();
         self.index.clone()
