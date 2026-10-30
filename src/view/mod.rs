@@ -101,6 +101,8 @@ pub(crate) struct Frame<'a> {
     pub(crate) ext_gutter_marks: &'a [GutterMark],
     /// Every diagnostic (old and LSP), resolved to bytes and sorted.
     pub(crate) diags: Rc<Vec<lsp::Diag>>,
+    /// The inactive tab stops of the live snippet (placeholder highlight).
+    pub(crate) snippet_stops: Vec<(usize, usize)>,
     /// The language-service UI (the gutter's lightbulb).
     pub(crate) lsp: &'a lsp::Lsp,
     /// The fold display-map (buffer line ↔ display row).
@@ -1923,6 +1925,17 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         doc_highlights: lsp_ctl.h.highlights.get(),
         diags: diags.clone(),
         lsp: &lsp_ctl,
+        snippet_stops: snippet
+            .get()
+            .map(|sn| {
+                sn.stops
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != sn.current)
+                    .flat_map(|(_, st)| st.ranges.iter().copied())
+                    .collect()
+            })
+            .unwrap_or_default(),
         hclip,
         ext_gutter_marks: &ext_gutter_marks,
         disp: disp.as_ref(),

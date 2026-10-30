@@ -381,6 +381,28 @@ fn snippet_session_mirrors_choices_tab_stops_and_final_stop() {
 }
 
 #[test]
+fn inactive_snippet_placeholders_get_a_background_highlight() {
+    use pebbles_code_editor::Snippet;
+    let code = create_root_signal(String::new());
+    let mut h = snippet_editor(
+        code,
+        vec![Snippet::new("pair", "${1:a} ${2:b} ${3:c}", "Pair")],
+    );
+    typ(&mut h, "pair");
+    h.key(KeyInput::Enter);
+    h.frames(1);
+    assert_eq!(code.get(), "a b c");
+    let live = h.render_node_count();
+    h.key(KeyInput::Escape); // session over: no placeholder boxes
+    h.frames(1);
+    let done = h.render_node_count();
+    assert!(
+        live >= done + 3,
+        "boxes for $2, $3 and $0 ({live} vs {done})"
+    );
+}
+
+#[test]
 fn snippet_shift_tab_nested_placeholders_and_escape() {
     use pebbles_code_editor::Snippet;
     let code = create_root_signal(String::new());

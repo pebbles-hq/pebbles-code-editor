@@ -22,6 +22,7 @@ pub(crate) fn build(f: &Frame) -> Vec<AnyWidget> {
     crate::view::decor::bracket_pair_guide(f, &mut layers);
     word_occurrences(f, &mut layers);
     crate::view::decor::occurrences(f, &mut layers);
+    crate::view::decor::snippet_placeholders(f, &mut layers);
     selection(f, &mut layers);
     bracket_match(f, &mut layers);
     crate::view::decor::linked_editing(f, &mut layers);

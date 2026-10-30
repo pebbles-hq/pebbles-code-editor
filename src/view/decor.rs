@@ -98,6 +98,24 @@ pub(crate) fn occurrences(f: &Frame, layers: &mut Vec<AnyWidget>) {
     }
 }
 
+/// The live snippet's other (inactive) placeholders: a faint background box per range (VS
+/// Code `editor.snippetTabstopHighlightBackground`); an empty stop is a thin bar.
+pub(crate) fn snippet_placeholders(f: &Frame, layers: &mut Vec<AnyWidget>) {
+    let color = with_alpha(f.theme.accent, 0.18);
+    for &(a, b) in &f.snippet_stops {
+        if b > f.src.len() || a > b {
+            continue;
+        }
+        let line = f.li.line_of(f.src, a);
+        if !f.line_visible(line) {
+            continue;
+        }
+        let (x, y) = f.xy(line, f.li.col_of(f.src, a));
+        let w = f.src[a..b].chars().take_while(|&c| c != '\n').count() as f64 * f.advance;
+        layers.push(rect(x, y, w.max(2.0), f.line_px, color));
+    }
+}
+
 /// The active indent guide: the guide of the innermost fold block containing the caret,
 /// drawn brighter over its body lines (VS Code `editor.guides.highlightActiveIndentation`).
 pub(crate) fn active_indent_guide(f: &Frame, layers: &mut Vec<AnyWidget>) {
