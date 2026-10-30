@@ -2,9 +2,10 @@
 //! headless harness, which routes presses the way the shell does (a bar under the pointer
 //! takes the press before the text).
 //!
-//! Layout used throughout: an 800×400 window, a 400 px editor without the gutter, the 14 px
-//! overview ruler at the right edge, so the vertical viewport spans x 0..786 and its bar the
-//! strip x 772..786; the horizontal bar is the strip y 386..400 over x 0..772.
+//! Layout used throughout: an 800×400 window, a 400 px editor without the gutter. The ONE
+//! vertical bar is the 14 px strip x 786..800 at the right edge (the overview ruler drawn in
+//! its track), so the text spans x 0..786; the horizontal bar is the strip y 386..400 over
+//! x 0..786. With the minimap on, it sits between the text and the bar (x 702..786).
 
 use std::collections::BTreeSet;
 
@@ -17,7 +18,7 @@ use pebbles_testing::Harness;
 const LINE: f64 = 13.5 * 1.6;
 const PAD: f64 = 10.0;
 const H: f64 = 400.0;
-const BAR_X: f64 = 779.0;
+const BAR_X: f64 = 793.0;
 const HBAR_Y: f64 = 393.0;
 
 struct Ed {
@@ -166,7 +167,6 @@ fn dragging_the_vertical_thumb_scrolls_proportionally_and_follows_outside_the_ba
     let y0 = start + len - 2.0; // near the thumb's bottom: grabbing must not jump
     e.h.button_down(Offset::new(BAR_X, y0), PointerButton::Primary);
     assert_eq!(e.top(), 0.0, "pressing the thumb does not move it");
-    assert!(e.view(Axis::Vertical).bar_active(), "active while dragged");
     e.h.pointer_move(Offset::new(BAR_X, y0 + 50.0));
     assert!(
         (e.top() - 50.0 * ratio).abs() < 1.0,
@@ -181,7 +181,6 @@ fn dragging_the_vertical_thumb_scrolls_proportionally_and_follows_outside_the_ba
         e.top()
     );
     e.h.button_up(Offset::new(300.0, y0 + 100.0), PointerButton::Primary);
-    assert!(!e.view(Axis::Vertical).bar_active());
     assert_eq!(
         e.ctrl.cursor().get(),
         (0, 0),
@@ -206,13 +205,14 @@ fn clicking_the_track_jumps_the_thumb_to_the_click() {
 fn bar_hover_state_and_arrow_cursor() {
     let mut e = mount(&lines(500), |c| c);
     e.h.hover(Offset::new(BAR_X, 100.0));
-    assert!(e.view(Axis::Vertical).bar_hovered());
     assert!(
         e.h.ui.cursor_at(Offset::new(BAR_X, 100.0)).is_none(),
         "arrow, not the I-beam"
     );
-    e.h.hover(Offset::new(300.0, 100.0));
-    assert!(!e.view(Axis::Vertical).bar_hovered());
+    assert!(
+        e.h.ui.cursor_at(Offset::new(300.0, 100.0)).is_some(),
+        "the I-beam over the text"
+    );
 }
 
 #[test]
@@ -323,15 +323,15 @@ fn thumb_follows_resize_folding_and_wrap() {
 }
 
 #[test]
-fn overview_ruler_click_centres_that_part_of_the_document() {
-    let mut e = mount(&lines(500), |c| c);
-    let (vp, content) = e.extent(Axis::Vertical);
-    e.h.click(Offset::new(793.0, 200.0));
-    let want = (0.5 * content - vp / 2.0).clamp(0.0, content - vp);
+fn overview_ruler_is_the_bar_track_and_a_click_there_centres_the_thumb() {
+    // VS Code draws the overview ruler inside the scrollbar: a click on it is a track click.
+    let mut e = mount(&lines(500), |c| c.overview_ruler(true));
+    e.h.click(Offset::new(BAR_X, 200.0));
+    let (_, _, start, len) = e.thumb(Axis::Vertical);
     assert!(
-        (e.top() - want).abs() < 1.0,
-        "ruler jump: {} vs {want}",
-        e.top()
+        (start + len / 2.0 - 200.0).abs() < 1.0,
+        "thumb centred on the click: {}",
+        start + len / 2.0
     );
 }
 
@@ -350,4 +350,107 @@ fn sticky_headers_leave_the_bar_reachable() {
         "track click at the top went to the top: {}",
         e.top()
     );
+}
+
+/// Gravel's layout: the minimap ON (84 px) and the overview ruler. VS Code draws ONE vertical
+/// bar, at the far right edge, right of the minimap, with the ruler's marks in its track. The
+/// scroll view's own bar (which sat at the text's right edge, left of the minimap) must not
+/// exist: two bars driving one offset fought each other.
+#[test]
+fn minimap_on_one_bar_at_the_far_right_and_the_minimap_slider_drags() {
+    let mut e = mount(&lines(500), |c| c.minimap(true));
+    // No scroll-view bar anywhere (the editor owns the one vertical bar).
+    for &id in &e.h.find_all::<RenderScroll>() {
+        assert_eq!(
+            e.h.object::<RenderScroll>(id).scrollbar.policy,
+            pebbles::render::ScrollbarPolicy::Hidden,
+            "a scroll view paints its own bar"
+        );
+    }
+    // The old inner bar's strip (left of the minimap: x 688..702) is text now: a press there
+    // places the caret and scrolls nothing.
+    e.h.click(Offset::new(695.0, PAD + 3.0 * LINE + LINE / 2.0));
+    assert_eq!(
+        e.ctrl.cursor().get().0,
+        3,
+        "the strip left of the minimap is text"
+    );
+    assert_eq!(e.top(), 0.0);
+
+    // Dragging the one bar (far right) scrolls proportionally; the thumb stays under the
+    // pointer at every step (no jitter).
+    let (_, track, start, len) = e.thumb(Axis::Vertical);
+    let (vp, content) = e.extent(Axis::Vertical);
+    let ratio = (content - vp) / (track - len);
+    let y0 = start + len - 2.0;
+    e.h.button_down(Offset::new(BAR_X, y0), PointerButton::Primary);
+    assert_eq!(e.top(), 0.0, "pressing the thumb does not move it");
+    let mut last = 0.0;
+    for k in 1..=10 {
+        let dy = k as f64 * 10.0;
+        e.h.pointer_move(Offset::new(BAR_X, y0 + dy));
+        let t = e.top();
+        assert!(
+            (t - dy * ratio).abs() < 1.0,
+            "step {k}: {t} vs {}",
+            dy * ratio
+        );
+        assert!(t > last, "monotonic while dragging down");
+        last = t;
+        let (_, _, s, _) = e.thumb(Axis::Vertical);
+        assert!(
+            (s - (start + dy)).abs() < 1.0,
+            "thumb follows the pointer: {s}"
+        );
+    }
+    e.h.button_up(Offset::new(BAR_X, y0 + 100.0), PointerButton::Primary);
+    assert_eq!(
+        e.ctrl.cursor().get().0,
+        3,
+        "the drag never reached the text"
+    );
+
+    // Clicking the minimap jumps there (centred), the bar follows.
+    e.h.click(Offset::new(744.0, 200.0));
+    let after = e.top();
+    assert!(after > last + 1.0, "minimap click scrolled: {after}");
+    e.h.frames(2);
+    assert_eq!(e.top(), after, "stable after the jump (no bar fighting it)");
+}
+
+/// Minimap OFF: the one bar sits right of the text, at the editor's right edge.
+#[test]
+fn minimap_off_the_bar_sits_at_the_text_right_edge() {
+    let mut e = mount(&lines(500), |c| c.minimap(false));
+    e.h.click(Offset::new(BAR_X, 300.0));
+    let (_, _, start, len) = e.thumb(Axis::Vertical);
+    assert!(
+        (start + len / 2.0 - 300.0).abs() < 1.0,
+        "track click centres the thumb"
+    );
+    e.h.click(Offset::new(780.0, PAD + LINE / 2.0 + 0.0));
+    assert!(e.top() > 0.0, "still scrolled; the click at x 780 was text");
+}
+
+/// Evidence capture (not a check): `SHOT_DIR=<dir> cargo test --test scrollbar -- --ignored
+/// shot_` renders the editor (minimap on / off) to raw RGBA `<dir>/editor-{on,off}.rgba`.
+#[test]
+#[ignore]
+fn shot_editor_scrollbar() {
+    let Ok(dir) = std::env::var("SHOT_DIR") else {
+        return;
+    };
+    for (name, mm) in [("on", true), ("off", false)] {
+        let code = create_root_signal(lines(500));
+        let w = code_editor(code)
+            .language(lang::by_name("rust"))
+            .height(300.0)
+            .minimap(mm)
+            .overview_ruler(true)
+            .into_widget();
+        let px =
+            pebbles::shell::capture::capture_rgba(w, 480, 300, Color::from_rgb8(0x1e, 0x1e, 0x1e))
+                .expect("capture");
+        std::fs::write(format!("{dir}/editor-{name}.rgba"), px).unwrap();
+    }
 }

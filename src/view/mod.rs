@@ -387,6 +387,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         hover: create_signal(false),
         grab: create_signal(None),
     };
+    let vbar = scrollbar::HBarState {
+        hover: create_signal(false),
+        grab: create_signal(None),
+    };
     let completion = create_signal::<Option<completion::Session>>(None); // autocomplete popup
     // Stale-reply gates for completion / resolve requests (persist across re-renders).
     // The live snippet session (tab stops), if any.
@@ -1647,9 +1651,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         {
             // The wrap width is the text area: the viewport minus the gutter, the side panels and
             // the vertical scrollbar's strip (text never runs under the bar).
-            let side = scrollbar::SIZE
-                + if p.overview_ruler { 14.0 } else { 0.0 }
-                + if p.minimap { 84.0 } else { 0.0 };
+            // (The overview ruler is drawn inside the bar.)
+            let side = scrollbar::SIZE + if p.minimap { 84.0 } else { 0.0 };
             (((bounds.width() - gutter_w_est - side - pad_l * 2.0) / advance).floor() as isize)
                 .max(8) as usize
         } else {
@@ -2518,7 +2521,6 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // vertical scrollbar's strip (the text keeps clear of the bar).
     let h_view = (bounds.width()
         - gutter_w_est
-        - if p.overview_ruler { 14.0 } else { 0.0 }
         - if p.minimap { 84.0 } else { 0.0 }
         - 1.0
         - scrollbar::SIZE)
@@ -2767,7 +2769,6 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         Some(h) => {
             let on_scroll_cb = p.on_scroll.clone();
             let scroll_link = p.scroll_link;
-            let bar = scrollbar::style(theme);
             // VS Code `scrollBeyondLastLine`: room for the last line to reach the top. It is
             // part of the scroll extent, so the thumb measures it too.
             let beyond = if p.scroll_beyond_last_line {
@@ -2776,13 +2777,13 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 0.0
             };
             let extent = content_h + beyond;
-            // The right strip is the vertical bar's: the text (and its clicks) stop short of it.
+            // The vertical bar is a sibling right of the text (and minimap): no strip reserved.
             let body = container()
-                .padding(EdgeInsets::only(0.0, 0.0, scrollbar::SIZE, beyond))
+                .padding(EdgeInsets::only(0.0, 0.0, 0.0, beyond))
                 .child(body)
                 .into_widget();
             let scroller = scroll_view(body)
-                .scrollbar(bar)
+                .hide_scrollbar() // the editor draws the one vertical bar (far right)
                 .controller(scroll.clone())
                 // Re-render the visible window as the viewport scrolls, and report the offset so
                 // the caller can persist/restore it (view state).
@@ -2798,11 +2799,47 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     }
                 })
                 .into_widget();
+            let scroller = sticky::overlay(&frame, scroller, scroll_top);
+            let scroller = match content_w.and_then(|cw| {
+                scrollbar::horizontal(theme, hscroll.clone(), scroll_left, cw, h_view, hbar)
+            }) {
+                Some(hb) => stack(vec![
+                    scroller,
+                    Positioned::new(hb)
+                        .left(if p.gutter { gutter_w_est } else { 0.0 })
+                        .right(0.0)
+                        .bottom(0.0)
+                        .height(scrollbar::SIZE)
+                        .into_widget(),
+                ])
+                .fit(StackFit::Expand)
+                .into_widget(),
+                None => scroller,
+            };
+            // VS Code: text | minimap | ONE vertical bar at the right edge, the overview
+            // ruler drawn in its track.
+            let mut parts: Vec<AnyWidget> = vec![expanded(scroller).into_widget()];
+            if let Some(mm) = minimap::panel(&frame, scroll.clone(), scroll_top, extent) {
+                parts.push(mm);
+            }
+            parts.push(scrollbar::vertical(
+                theme,
+                scroll.clone(),
+                scroll_top,
+                extent,
+                h,
+                vbar,
+                ruler::track(&frame, ruler::marks(&frame, &ruler_matches), extent),
+                theme.background,
+            ));
+            let inner: AnyWidget = row(parts)
+                .cross_axis_alignment(CrossAxisAlignment::Start)
+                .into_widget();
             // A wheel notch scrolls by lines (3 per notch, as VS Code / the OS default),
-            // through the smooth-scrolling setting; trackpad pixels and Shift+wheel
-            // (horizontal) go to the scroll views as they are.
+            // through the smooth-scrolling setting, over the text, minimap and bar alike;
+            // trackpad pixels and Shift+wheel (horizontal) go to the scroll views as they are.
             let wheel_v = vscroll.clone();
-            let scroller = GestureDetector::new(scroller)
+            let inner = GestureDetector::new(inner)
                 .on_pointer_signal(move |ev| {
                     let pebbles::render::ScrollUnit::Lines(l) = ev.unit else {
                         return false;
@@ -2819,43 +2856,6 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     true
                 })
                 .into_widget();
-            let scroller = sticky::overlay(&frame, scroller, scroll_top);
-            let scroller = match content_w.and_then(|cw| {
-                scrollbar::horizontal(theme, hscroll.clone(), scroll_left, cw, h_view, hbar)
-            }) {
-                Some(hb) => stack(vec![
-                    scroller,
-                    Positioned::new(hb)
-                        .left(if p.gutter { gutter_w_est } else { 0.0 })
-                        .right(scrollbar::SIZE)
-                        .bottom(0.0)
-                        .height(scrollbar::SIZE)
-                        .into_widget(),
-                ])
-                .fit(StackFit::Expand)
-                .into_widget(),
-                None => scroller,
-            };
-            let mut parts: Vec<AnyWidget> = vec![expanded(scroller).into_widget()];
-            if let Some(mm) = minimap::panel(&frame, scroll.clone(), scroll_top) {
-                parts.push(mm);
-            }
-            if let Some(r) = ruler::panel(
-                &frame,
-                ruler::marks(&frame, &ruler_matches),
-                scroll.clone(),
-                scroll_top,
-                extent,
-            ) {
-                parts.push(r);
-            }
-            let inner: AnyWidget = if parts.len() == 1 {
-                parts.pop().unwrap_or_else(|| container().into_widget())
-            } else {
-                row(parts)
-                    .cross_axis_alignment(CrossAxisAlignment::Start)
-                    .into_widget()
-            };
             container()
                 .height(h)
                 .decoration(BoxDecoration::new().color(theme.background))

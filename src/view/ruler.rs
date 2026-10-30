@@ -1,44 +1,30 @@
 //! The overview ruler (VS Code `editorOverviewRuler`): a narrow strip at the right edge of
 //! the viewport mapping the WHOLE document onto its height, with marks for the cursor,
-//! selections, find matches, diagnostics and git changes in three lanes. Click to scroll.
+//! selections, find matches, diagnostics and git changes in three lanes. Drawn in the
+//! vertical scrollbar's track ([`crate::view::scrollbar::vertical`]), as VS Code does.
 
 use pebbles::prelude::*;
-use pebbles::render::ScrollHandle;
 
 use crate::view::Frame;
-
-const W: f64 = 14.0;
+use crate::view::scrollbar::TrackPainter;
 
 /// A mark: document line, colour, lane (0 left = changes, 1 centre = selections / matches,
 /// 2 right = diagnostics, 3 = full width cursor).
 pub(crate) type Mark = (usize, Color, u8);
 
-/// Build the ruler for `marks`, or `None` when disabled / unbounded.
-pub(crate) fn panel(
-    f: &Frame,
-    marks: Vec<Mark>,
-    scroll: ScrollHandle,
-    scroll_top: Signal<f64>,
-    extent: f64,
-) -> Option<AnyWidget> {
+/// The ruler's marks as a painter for the vertical scrollbar's track (VS Code draws the
+/// overview ruler inside the scrollbar, behind the thumb), or `None` when disabled.
+pub(crate) fn track(f: &Frame, marks: Vec<Mark>, extent: f64) -> Option<TrackPainter> {
     let h = match (f.p.overview_ruler, f.p.height) {
         (true, Some(h)) => h,
         _ => return None,
     };
     let n = f.line_count.max(1) as f64;
-    // The ruler maps the whole scroll extent (the text plus any scroll-beyond-last-line
-    // room), like the scrollbar beside it, so its viewport band matches the thumb.
-    let ch = extent.max(h);
-    let text_frac = (f.content_h / ch).min(1.0);
-    let vp = f.theme.scrollbar;
-    let cur_top = scroll_top.get();
-    let painter = move |cv: &mut Canvas<'_>| {
+    // Marks map the whole scroll extent (text + scroll-beyond room), like the thumb.
+    let text_frac = (f.content_h / extent.max(h)).min(1.0);
+    Some(Box::new(move |cv: &mut Canvas<'_>| {
         let size = cv.size();
         let (w, hh) = (size.width, size.height);
-        // Viewport band.
-        let vy = (cur_top / ch) * hh;
-        let vh = ((h / ch) * hh).max(4.0);
-        cv.fill_rect(Rect::new(0.0, vy, w, (vy + vh).min(hh)), vp);
         let lane_w = w / 3.0;
         for &(line, color, lane) in &marks {
             let y = (line as f64 / n) * text_frac * hh;
@@ -50,26 +36,7 @@ pub(crate) fn panel(
             };
             cv.fill_rect(Rect::new(x0, y, x1, (y + th).min(hh)), color);
         }
-    };
-    let jump = move |s: &ScrollHandle, pos: Offset| {
-        let frac = (pos.y / h).clamp(0.0, 1.0);
-        let t = (frac * ch - h / 2.0).max(0.0);
-        s.scroll_to(t);
-        scroll_top.set(t.min((ch - h).max(0.0)));
-    };
-    let (a, b) = (scroll.clone(), scroll);
-    Some(
-        GestureDetector::new(
-            container()
-                .width(W)
-                .height(h)
-                .decoration(BoxDecoration::new().color(f.theme.background))
-                .child(canvas(painter).width(W).height(h)),
-        )
-        .on_pointer_down(action_event(move |e| jump(&a, e.position)))
-        .on_pan_update(action_event(move |e| jump(&b, e.position)))
-        .into_widget(),
-    )
+    }))
 }
 
 /// Collect the ruler marks for the frame.

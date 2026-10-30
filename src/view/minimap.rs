@@ -11,7 +11,12 @@ use crate::view::chrome::with_alpha;
 const MM_W: f64 = 84.0;
 
 /// Build the minimap panel, or `None` when the minimap is off or the editor is unbounded.
-pub(crate) fn panel(f: &Frame, scroll: ScrollHandle, scroll_top: Signal<f64>) -> Option<AnyWidget> {
+pub(crate) fn panel(
+    f: &Frame,
+    scroll: ScrollHandle,
+    scroll_top: Signal<f64>,
+    extent: f64,
+) -> Option<AnyWidget> {
     let h = match (f.p.minimap, f.p.height) {
         (true, Some(h)) => h,
         _ => return None,
@@ -26,7 +31,9 @@ pub(crate) fn panel(f: &Frame, scroll: ScrollHandle, scroll_top: Signal<f64>) ->
         })
         .collect();
     let cur_top = scroll_top.get();
-    let ch = f.content_h;
+    // The slider maps the same scroll extent as the scrollbar (text + scroll-beyond room), so
+    // a jump's clamped offset agrees with the scroll view's (no correction fighting it).
+    let ch = extent.max(h);
     let ink = with_alpha(f.theme.foreground, 0.45);
     // The viewport indicator is the minimap's scrollbar-thumb equivalent.
     let vp = f.theme.scrollbar;
