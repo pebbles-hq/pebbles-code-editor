@@ -56,6 +56,7 @@ struct Fake {
     inlays: RefCell<Vec<InlayHint>>,
     inlay_ranges: RefCell<Vec<Range>>,
     lenses: RefCell<Vec<CodeLens>>,
+    lens_calls: RefCell<usize>,
     /// Selection-range chains (innermost first, the same for every position); `None` declines.
     sel_ranges: RefCell<Option<Vec<Range>>>,
     sel_positions: RefCell<Vec<Vec<Position>>>,
@@ -241,6 +242,7 @@ impl LanguageService for Fake {
         true
     }
     fn code_lens(&self, _doc: &DocRef, reply: Reply<Vec<CodeLens>>) -> bool {
+        *self.lens_calls.borrow_mut() += 1;
         reply(self.lenses.borrow().clone());
         true
     }
@@ -1877,4 +1879,29 @@ fn late_replies_after_the_editor_unmounts_are_dropped() {
     }));
     h.frames(2);
     assert!(!h.find_text("late"));
+}
+
+#[test]
+fn controller_refresh_re_requests_inlay_hints_and_code_lenses() {
+    use pebbles_code_editor::Refresh;
+    let fake = Rc::new(Fake::default());
+    let ctrl = pebbles_code_editor::editor_controller();
+    let (mut h, _code) = mount("let x = 1;\n", fake.clone(), move |e| e.controller(ctrl));
+    h.frames(2);
+    let (inlays, lenses) = (fake.inlay_ranges.borrow().len(), *fake.lens_calls.borrow());
+    assert!(inlays > 0 && lenses > 0);
+    h.frames(2);
+    assert_eq!(
+        fake.inlay_ranges.borrow().len(),
+        inlays,
+        "unchanged text: no new request"
+    );
+    ctrl.refresh(Refresh::InlayHints);
+    h.frames(2);
+    assert_eq!(fake.inlay_ranges.borrow().len(), inlays + 1);
+    ctrl.refresh(Refresh::CodeLens);
+    h.frames(2);
+    assert_eq!(*fake.lens_calls.borrow(), lenses + 1);
+    ctrl.refresh(Refresh::SemanticTokens); // no legend: a no-op, must not panic
+    h.frames(2);
 }

@@ -341,11 +341,21 @@ pub(crate) fn key_table(km: &crate::Keymap) -> Vec<(Vec<Stroke>, EditorCommand)>
     out
 }
 
+/// The host chords of `km` ([`Keymap::host_command`](crate::Keymap::host_command)) as
+/// (strokes, index into `km.host_commands`).
+pub(crate) fn host_table(km: &crate::Keymap) -> Vec<(Vec<Stroke>, usize)> {
+    km.host_commands
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (chord, _))| parse_chord(chord).map(|s| (s, i)))
+        .collect()
+}
+
 /// What a keystroke resolved to.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Resolved {
+pub(crate) enum Resolved<T = EditorCommand> {
     /// Run this command.
-    Run(EditorCommand),
+    Run(T),
     /// The stroke is a prefix of a multi-stroke chord — wait for the next.
     Pending,
     /// No binding.
@@ -381,11 +391,11 @@ pub(crate) fn stroke_of(ev: &pebbles::core::KeyEvent) -> Option<Stroke> {
 }
 
 /// Resolve `stroke` given the strokes already pending.
-pub(crate) fn resolve(
-    table: &[(Vec<Stroke>, EditorCommand)],
+pub(crate) fn resolve<T: Copy>(
+    table: &[(Vec<Stroke>, T)],
     pending: &[Stroke],
     stroke: &Stroke,
-) -> Resolved {
+) -> Resolved<T> {
     let mut seq: Vec<Stroke> = pending.to_vec();
     seq.push(*stroke);
     if let Some((_, c)) = table.iter().find(|(k, _)| *k == seq) {

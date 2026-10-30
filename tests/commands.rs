@@ -561,3 +561,26 @@ fn navigation_history_goes_back_and_forward_across_jumps() {
     assert!(h.press("Alt+Right"));
     assert_eq!(h.pos(), (3, 0));
 }
+
+#[test]
+fn host_chords_run_the_host_command_and_keep_editor_chords() {
+    let hits = create_root_signal(Vec::<&'static str>::new());
+    let km = Keymap::new()
+        .host_command("Ctrl+K Z", move || hits.update(|v| v.push("zen")))
+        .host_command("Ctrl+K Ctrl+\\", move || {
+            hits.update(|v| v.push("split down"))
+        });
+    let mut h = harness_with("a  \nb\n", km);
+    // Ctrl+K is pending for both the host and the editor; Z completes the host chord.
+    assert!(h.press("Ctrl+K"));
+    assert!(h.press("Z"));
+    assert_eq!(hits.peek(), vec!["zen"]);
+    assert_eq!(h.code.peek(), "a  \nb\n", "Z was not typed");
+    assert!(h.press("Ctrl+K"));
+    assert!(h.press("Ctrl+\\"));
+    assert_eq!(hits.peek(), vec!["zen", "split down"]);
+    // An editor chord with the same prefix still runs (Ctrl+K Ctrl+X trims).
+    h.press("Ctrl+K");
+    h.press("Ctrl+K Ctrl+X".split(' ').nth(1).unwrap());
+    assert_eq!(h.code.peek(), "a\nb\n");
+}

@@ -11,6 +11,16 @@
 
 use pebbles::prelude::KeyInput;
 
+/// A host action bound with [`Keymap::host_command`].
+#[derive(Clone)]
+pub struct HostCommand(pub(crate) std::rc::Rc<dyn Fn()>);
+
+impl std::fmt::Debug for HostCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HostCommand")
+    }
+}
+
 /// An editor command that has a built-in keybinding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BuiltinCommand {
@@ -82,6 +92,8 @@ pub struct Keymap {
     pub(crate) unbound: Vec<crate::actions::EditorCommand>,
     /// Extra / replacement chords for editor commands.
     pub(crate) command_bindings: Vec<(String, crate::actions::EditorCommand)>,
+    /// Host (workbench) chords the focused editor runs instead of swallowing.
+    pub(crate) host_commands: Vec<(String, HostCommand)>,
 }
 
 impl Keymap {
@@ -144,6 +156,17 @@ impl Keymap {
                 .map(|(k, _)| k.clone()),
         );
         v
+    }
+
+    /// Run the host's `f` on `chord` while the editor is focused (pebbles shortcut syntax; a
+    /// space separates the strokes, e.g. `"Ctrl+K Ctrl+\\"`). For workbench chords that
+    /// share a prefix with editor chords (VS Code's `Ctrl+K Z` Zen mode, `Ctrl+K Ctrl+\\`
+    /// split down): without it the editor takes `Ctrl+K` as the start of its own chord and
+    /// swallows the second stroke. A host chord wins over an editor chord on the same keys.
+    pub fn host_command(mut self, chord: impl Into<String>, f: impl Fn() + 'static) -> Self {
+        self.host_commands
+            .push((chord.into(), HostCommand(std::rc::Rc::new(f))));
+        self
     }
 
     /// Whether `cmd`'s default chord is disabled.

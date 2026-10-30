@@ -100,6 +100,21 @@ impl Lsp {
         self.store.inlay_key.set(None);
         true
     }
+    /// Forget a feature's last request so the next render asks the service again.
+    pub(crate) fn refresh(&self, what: crate::controller::Refresh) {
+        use crate::controller::Refresh;
+        match what {
+            Refresh::InlayHints => self.store.inlay_key.set(None),
+            Refresh::CodeLens => {
+                self.store.lens_ver.set(None);
+                self.request_lenses();
+            }
+            Refresh::SemanticTokens => {
+                self.store.sem_key.set(None);
+                *self.store.sem_prev.borrow_mut() = None;
+            }
+        }
+    }
     /// Toggle code lenses.
     pub(crate) fn toggle_lenses(&self) -> bool {
         let on = self.h.lens_on.peek().unwrap_or(self.lens_default);

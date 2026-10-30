@@ -76,7 +76,7 @@ pub use config::{
     BreadcrumbPick, BreadcrumbSegment, CodeEditor, CursorBlinking, CursorStyle, LineNumbers,
     code_editor,
 };
-pub use controller::{EditorController, editor_controller};
+pub use controller::{EditorController, Refresh, editor_controller};
 pub use diff::{ChangeHunk, ChangeKind};
 pub use diff_editor::{DiffEditor, DiffSideConfig, diff_editor};
 pub use edit::{ChangeSet, EditorState, History, Selection, Selections, Transaction};
@@ -85,7 +85,7 @@ pub use extensions::{
     BlockWidget, Command, ConfigPatch, DecoStyle, Decoration, EditContext, Extension, GutterMark,
     Snapshot, extension,
 };
-pub use keymap::{BuiltinCommand, Keymap};
+pub use keymap::{BuiltinCommand, HostCommand, Keymap};
 pub use lang::{Language, SyntaxNode, SyntaxSession, Token, TokenKind, bracket_tree};
 pub use language::{LanguageService, ProviderService, RequestGate};
 pub use ops::{LineEnding, detect_indentation, detect_line_ending};

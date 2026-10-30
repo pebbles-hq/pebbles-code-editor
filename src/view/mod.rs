@@ -625,6 +625,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // so editor chords (Alt+Up, Ctrl+Shift+K, Ctrl+K Ctrl+0, …) win over caret motion.
     {
         let table = Rc::new(crate::actions::key_table(&p.keymap));
+        let host_table = Rc::new(crate::actions::host_table(&p.keymap));
+        let host_cmds = Rc::new(p.keymap.host_commands.clone());
         let env = cmd_env.clone();
         focus.on_key_event(Rc::new(move |ev: &pebbles::core::KeyEvent| {
             use pebbles::core::{KeyEventKind, KeyEventResult};
@@ -658,6 +660,13 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             }
             // A bare modifier press never resolves or cancels a pending chord.
             let pending = pending_keys.peek();
+            let host = crate::actions::resolve(&host_table, &pending, &stroke);
+            if let crate::actions::Resolved::Run(i) = host {
+                pending_keys.set(Vec::new());
+                (host_cmds[i].1.0)();
+                return KeyEventResult::Handled;
+            }
+            let host_pending = host == crate::actions::Resolved::Pending;
             match crate::actions::resolve(&table, &pending, &stroke) {
                 crate::actions::Resolved::Run(cmd) => {
                     pending_keys.set(Vec::new());
@@ -668,6 +677,12 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     }
                 }
                 crate::actions::Resolved::Pending => {
+                    let mut p = pending;
+                    p.push(stroke);
+                    pending_keys.set(p);
+                    KeyEventResult::Handled
+                }
+                crate::actions::Resolved::None if host_pending => {
                     let mut p = pending;
                     p.push(stroke);
                     pending_keys.set(p);
@@ -1423,6 +1438,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     }
                     crate::controller::Request::ApplyEdits(edits) => {
                         cmd_env.lsp.apply_text_edits(&edits);
+                        None
+                    }
+                    crate::controller::Request::Refresh(what) => {
+                        cmd_env.lsp.refresh(what);
                         None
                     }
                 };

@@ -25,6 +25,21 @@ pub(crate) enum Request {
     FormatForSave(u64),
     /// Apply text edits as one undo step (a workspace edit from the host).
     ApplyEdits(Vec<crate::language::TextEdit>),
+    /// Drop cached language-service results and ask again.
+    Refresh(Refresh),
+}
+
+/// Which language-service results [`EditorController::refresh`] re-requests — the LSP
+/// `workspace/inlayHint/refresh`, `workspace/codeLens/refresh` and
+/// `workspace/semanticTokens/refresh` server requests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refresh {
+    /// `textDocument/inlayHint` for the viewport.
+    InlayHints,
+    /// `textDocument/codeLens`.
+    CodeLens,
+    /// `textDocument/semanticTokens` (a full request, not a delta).
+    SemanticTokens,
 }
 
 /// A handle for driving an editor programmatically. `Copy`; create it with
@@ -104,6 +119,12 @@ impl EditorController {
     /// first are skipped, as VS Code does.
     pub fn apply_edits(&self, edits: Vec<crate::language::TextEdit>) {
         self.requests.update(|r| r.push(Request::ApplyEdits(edits)));
+    }
+
+    /// Re-request a language feature for the current document even though the text did not
+    /// change (the server asked for a refresh, e.g. after a project reload).
+    pub fn refresh(&self, what: Refresh) {
+        self.requests.update(|r| r.push(Request::Refresh(what)));
     }
 
     /// The last finished [`format_for_save`](Self::format_for_save) ticket (reactive).
