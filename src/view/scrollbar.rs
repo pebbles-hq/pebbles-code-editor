@@ -142,15 +142,25 @@ pub(crate) fn vertical(
     };
     let painter = move |cv: &mut Canvas<'_>| {
         let w = cv.size().width;
-        if let Some(t) = &track {
-            t(cv);
-        }
         if overflow {
             cv.fill_rect(
                 Rect::new(sb.margin, start, w - sb.margin, start + len),
                 color,
             );
         }
+    };
+    // The overview ruler is the track: its own canvas behind the thumb's.
+    let thumb = canvas(painter).width(SIZE).height(view_h).into_widget();
+    let face: AnyWidget = match track {
+        Some(t) => stack(vec![
+            canvas(move |cv: &mut Canvas<'_>| t(cv))
+                .width(SIZE)
+                .height(view_h)
+                .into_widget(),
+            thumb,
+        ])
+        .into_widget(),
+        None => thumb,
     };
     let apply = std::rc::Rc::new(move |y: f64| {
         if !overflow {
@@ -174,7 +184,7 @@ pub(crate) fn vertical(
             .width(SIZE)
             .height(view_h)
             .decoration(BoxDecoration::new().color(background))
-            .child(canvas(painter).width(SIZE).height(view_h)),
+            .child(face),
     )
     .on_pointer_down(action_event(move |e| p1(e.position.y)))
     .on_pan_start(action_event(move |e| {
