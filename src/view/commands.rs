@@ -174,6 +174,8 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
         C::FindReferences => env.lsp.navigate(crate::view::lsp::Nav::References, true),
         C::ShowReferences => env.lsp.show_references(),
         C::Rename => env.lsp.start_rename(),
+        C::QuickFix => env.lsp.quick_fix(),
+        C::AutoFix => env.lsp.auto_fix(),
         C::NextProblem => env.lsp.next_problem(true),
         C::PreviousProblem => env.lsp.next_problem(false),
         C::TriggerParameterHints => {

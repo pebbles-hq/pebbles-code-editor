@@ -169,12 +169,35 @@ pub(crate) fn palette(
         pal.sel.peek().min(matches.len() - 1)
     };
 
+    let n = matches.len();
     let field = text_field()
         .placeholder("Run a command…  (type : to go to a line)")
         .bind(pal.query)
         .autofocus()
         .on_changed(move |_| {
             pal.sel.set(0);
+        })
+        // Up / Down move the selection (wrapping); Escape closes.
+        .on_nav(move |k| match k {
+            KeyInput::Move {
+                motion: Motion::Down,
+                ..
+            } if n > 0 => {
+                pal.sel.set((pal.sel.peek().min(n - 1) + 1) % n);
+                true
+            }
+            KeyInput::Move {
+                motion: Motion::Up, ..
+            } if n > 0 => {
+                pal.sel.set((pal.sel.peek().min(n - 1) + n - 1) % n);
+                true
+            }
+            KeyInput::Escape => {
+                pal.open.set(false);
+                focus.request_focus();
+                true
+            }
+            _ => false,
         })
         .on_submit(move |_| run_selected(pal, &commands, ctx, focus));
 

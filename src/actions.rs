@@ -260,6 +260,10 @@ commands! {
     NextProblem => "editor.action.marker.next", "Go to Next Problem (Error, Warning, Info)", ["F8", "Alt+F8"];
     /// Go to the previous problem.
     PreviousProblem => "editor.action.marker.prev", "Go to Previous Problem (Error, Warning, Info)", ["Shift+F8", "Shift+Alt+F8"];
+    /// Show the code actions (quick fixes, refactors) at the caret.
+    QuickFix => "editor.action.quickFix", "Quick Fix...", ["Ctrl+."];
+    /// Apply the preferred quick fix at the caret.
+    AutoFix => "editor.action.autoFix", "Auto Fix...", ["Shift+Alt+."];
     /// Rename the symbol at the caret (with a preview for edits across files).
     Rename => "editor.action.rename", "Rename Symbol", ["F2"];
     /// Show signature help (parameter hints) for the call at the caret.

@@ -101,6 +101,8 @@ pub(crate) struct Frame<'a> {
     pub(crate) ext_gutter_marks: &'a [GutterMark],
     /// Every diagnostic (old and LSP), resolved to bytes and sorted.
     pub(crate) diags: Rc<Vec<lsp::Diag>>,
+    /// The language-service UI (the gutter's lightbulb).
+    pub(crate) lsp: &'a lsp::Lsp,
     /// The fold display-map (buffer line ↔ display row).
     pub(crate) disp: &'a crate::fold::DisplayMap,
     pub(crate) folds: Signal<std::collections::BTreeSet<usize>>,
@@ -390,6 +392,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             if on {
                 l.request_highlights();
             }
+            l.request_bulb();
         });
     }
 
@@ -1944,6 +1947,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         highlight_word_matches: find.open.get() == 0,
         doc_highlights: lsp_ctl.h.highlights.get(),
         diags: diags.clone(),
+        lsp: &lsp_ctl,
         hclip,
         ext_gutter_marks: &ext_gutter_marks,
         disp: disp.as_ref(),
@@ -2579,6 +2583,20 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let code_area: AnyWidget = match lsp_ctl.preview_layer(theme, &p.font_family) {
         Some(d) => stack(children![code_area, d]).into_widget(),
         None => code_area,
+    };
+
+    // The code-action menu (Ctrl+. / the lightbulb), a palette of the actions.
+    let code_area: AnyWidget = if lsp_ctl.h.menu.open.get() {
+        let ctx = crate::extensions::EditContext {
+            state,
+            history,
+            code,
+            goal,
+        };
+        let menu = extensions::palette(lsp_ctl.h.menu, lsp_ctl.menu_commands(), ctx, focus, theme);
+        stack(children![code_area, menu]).into_widget()
+    } else {
+        code_area
     };
 
     // ---- chrome: optional title/status bar above the code area ----

@@ -126,6 +126,9 @@ pub(crate) struct Store {
     pub(crate) link_gate: RequestGate,
     pub(crate) hl_gate: RequestGate,
     pub(crate) rename_gate: RequestGate,
+    pub(crate) action_gate: RequestGate,
+    pub(crate) bulb_gate: RequestGate,
+    bulb_at: Cell<Option<(usize, u64)>>,
     /// The (caret, version) of the last document-highlight request.
     hl_at: Cell<Option<(usize, u64)>>,
     /// Hover replies per (byte, document version).
@@ -151,6 +154,11 @@ pub(crate) struct Hooks {
     pub(crate) rename_preview: Signal<Option<RenamePreview>>,
     /// The open problem peek (F8): the diagnostic's start byte and message.
     pub(crate) problem: Signal<Option<(usize, String)>>,
+    /// The lightbulb: the caret line and the actions available there.
+    pub(crate) bulb: Signal<Option<(usize, Vec<lsp::CodeAction>)>>,
+    /// The open code-action menu's actions (shown through `menu`, a palette).
+    pub(crate) actions: Signal<Vec<lsp::CodeAction>>,
+    pub(crate) menu: crate::view::extensions::Palette,
     pub(crate) store: Signal<Rc<Store>>,
 }
 
@@ -167,6 +175,13 @@ pub(crate) fn hooks() -> Hooks {
         rename_draft: create_signal(String::new()),
         rename_preview: create_signal(None),
         problem: create_signal(None),
+        bulb: create_signal(None),
+        actions: create_signal(Vec::new()),
+        menu: crate::view::extensions::Palette {
+            open: create_signal(false),
+            query: create_signal(String::new()),
+            sel: create_signal(0usize),
+        },
         store: create_signal(Rc::new(Store::default())),
     }
 }
@@ -1209,6 +1224,149 @@ impl Lsp {
         })
     }
 
+    // ---- code actions ----------------------------------------------------------------
+
+    /// The request range (the primary selection) and the diagnostics touching it.
+    fn action_context(
+        &self,
+        trigger: lsp::CodeActionTriggerKind,
+        only: Vec<String>,
+    ) -> (lsp::Range, lsp::CodeActionContext) {
+        let st = self.state.peek();
+        let text = st.text();
+        let p = st.primary();
+        let (a, b) = (p.min(), p.max());
+        let diagnostics = self
+            .diagnostics(&text, false)
+            .into_iter()
+            .filter(|d| d.from <= b && a <= d.to)
+            .map(|d| d.d)
+            .collect();
+        (
+            lsp::bytes_to_range(&text, a, b),
+            lsp::CodeActionContext {
+                diagnostics,
+                only,
+                trigger_kind: trigger,
+            },
+        )
+    }
+
+    /// Ask for the caret's code actions in the background (drives the lightbulb).
+    pub(crate) fn request_bulb(&self) {
+        let st = self.state.peek();
+        let key = (st.primary().head, self.version());
+        if self.store.bulb_at.get() == Some(key) {
+            return;
+        }
+        self.store.bulb_at.set(Some(key));
+        let Some(svc) = self.svc.clone() else { return };
+        let line = crate::geometry::line_of(&st.text(), st.primary().head);
+        let bulb = self.h.bulb;
+        let (range, cx) = self.action_context(lsp::CodeActionTriggerKind::Automatic, Vec::new());
+        let reply = self.guard(&self.store.bulb_gate, move |v: Vec<lsp::CodeAction>| {
+            let v: Vec<_> = v.into_iter().filter(|a| a.disabled.is_none()).collect();
+            bulb.set((!v.is_empty()).then_some((line, v)));
+        });
+        let asked = self.with_doc(|doc, _| svc.code_actions(doc, range, cx, reply));
+        if !asked && bulb.peek().is_some() {
+            bulb.set(None);
+        }
+    }
+
+    /// Ctrl+.: request the actions at the selection and open the menu.
+    pub(crate) fn quick_fix(&self) -> bool {
+        let Some(svc) = self.svc.clone() else {
+            return false;
+        };
+        let me = self.clone();
+        let (range, cx) = self.action_context(lsp::CodeActionTriggerKind::Invoked, Vec::new());
+        let reply = self.guard(&self.store.action_gate, move |v: Vec<lsp::CodeAction>| {
+            me.open_menu(v);
+        });
+        self.with_doc(|doc, _| svc.code_actions(doc, range, cx, reply))
+    }
+
+    /// Shift+Alt+.: apply the preferred quick fix when there is exactly one.
+    pub(crate) fn auto_fix(&self) -> bool {
+        let Some(svc) = self.svc.clone() else {
+            return false;
+        };
+        let me = self.clone();
+        let (range, cx) =
+            self.action_context(lsp::CodeActionTriggerKind::Invoked, vec!["quickfix".into()]);
+        let reply = self.guard(&self.store.action_gate, move |v: Vec<lsp::CodeAction>| {
+            let preferred: Vec<_> = v
+                .into_iter()
+                .filter(|a| a.is_preferred && a.disabled.is_none())
+                .collect();
+            if let [a] = preferred.as_slice() {
+                me.run_action(a.clone());
+            }
+        });
+        self.with_doc(|doc, _| svc.code_actions(doc, range, cx, reply))
+    }
+
+    /// Open the code-action menu (preferred first, then quick fixes, refactors, source).
+    pub(crate) fn open_menu(&self, mut v: Vec<lsp::CodeAction>) {
+        if v.is_empty() {
+            return;
+        }
+        v.sort_by_key(|a| (!a.is_preferred, kind_rank(a.kind.as_deref())));
+        self.h.actions.set(v);
+        self.h.menu.query.set(String::new());
+        self.h.menu.sel.set(0);
+        self.h.menu.open.set(true);
+        pebbles::core::focus::set_focus(None); // let the menu field autofocus
+    }
+
+    /// The menu entries as palette commands.
+    pub(crate) fn menu_commands(&self) -> Vec<crate::extensions::Command> {
+        self.h
+            .actions
+            .peek()
+            .into_iter()
+            .enumerate()
+            .map(|(i, a)| {
+                let me = self.clone();
+                let mut title = format!("{}: {}", kind_group(a.kind.as_deref()), a.title);
+                if a.is_preferred {
+                    title.push_str(" \u{2605}");
+                }
+                if let Some(why) = &a.disabled {
+                    title.push_str(&format!(" (disabled: {why})"));
+                }
+                crate::extensions::Command::new(format!("codeAction.{i}"), title, move |_| {
+                    me.run_action(a.clone());
+                })
+            })
+            .collect()
+    }
+
+    /// Run a code action: resolve it when it carries neither edit nor command, apply its
+    /// workspace edit, then execute its command.
+    pub(crate) fn run_action(&self, a: lsp::CodeAction) {
+        if a.disabled.is_some() {
+            return;
+        }
+        let Some(svc) = self.svc.clone() else { return };
+        let me = self.clone();
+        let apply = move |a: lsp::CodeAction| {
+            if let Some(e) = &a.edit {
+                me.apply_workspace_edit(e);
+            }
+            if let (Some(c), Some(s)) = (&a.command, &me.svc) {
+                s.execute_command(c);
+            }
+        };
+        if a.edit.is_none() && a.command.is_none() {
+            let reply = self.guard(&self.store.action_gate, apply);
+            svc.resolve_code_action(a, reply);
+        } else {
+            apply(a);
+        }
+    }
+
     // ---- edits ---------------------------------------------------------------------------
 
     /// Apply `edits` (LSP ranges in the current text) as ONE undo step; the cursors map
@@ -1565,6 +1723,26 @@ impl Lsp {
         } else if let Some(svc) = &self.svc {
             svc.open_location(loc);
         }
+    }
+}
+
+/// Menu order of a code-action kind.
+fn kind_rank(kind: Option<&str>) -> u8 {
+    match kind.unwrap_or("") {
+        k if k.starts_with("quickfix") => 0,
+        k if k.starts_with("refactor") => 1,
+        k if k.starts_with("source") => 2,
+        _ => 3,
+    }
+}
+
+/// The menu group label of a code-action kind.
+fn kind_group(kind: Option<&str>) -> &'static str {
+    match kind_rank(kind) {
+        0 => "Quick Fix",
+        1 => "Refactor",
+        2 => "Source Action",
+        _ => "Action",
     }
 }
 

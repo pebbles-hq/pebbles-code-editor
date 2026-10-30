@@ -36,6 +36,9 @@ struct Fake {
     rename_edit: RefCell<Option<WorkspaceEdit>>,
     renamed_to: RefCell<Vec<String>>,
     applied: RefCell<Vec<WorkspaceEdit>>,
+    actions: RefCell<Vec<CodeAction>>,
+    action_cx: RefCell<Vec<CodeActionContext>>,
+    commands: RefCell<Vec<String>>,
 }
 
 impl LanguageService for Fake {
@@ -104,6 +107,40 @@ impl LanguageService for Fake {
     ) -> bool {
         self.renamed_to.borrow_mut().push(new_name.to_string());
         reply(self.rename_edit.borrow().clone());
+        true
+    }
+    fn code_actions(
+        &self,
+        _doc: &DocRef,
+        _range: Range,
+        cx: CodeActionContext,
+        reply: Reply<Vec<CodeAction>>,
+    ) -> bool {
+        let only = cx.only.clone();
+        self.action_cx.borrow_mut().push(cx);
+        reply(
+            self.actions
+                .borrow()
+                .iter()
+                .filter(|a| only.is_empty() || a.kind.as_ref().is_some_and(|k| only.contains(k)))
+                .cloned()
+                .collect(),
+        );
+        true
+    }
+    fn resolve_code_action(&self, action: CodeAction, reply: Reply<CodeAction>) -> bool {
+        let mut a = action;
+        a.edit = Some(WorkspaceEdit {
+            changes: vec![(
+                "file:///w/main.rs".into(),
+                vec![edit(0, 0, 0, "// resolved\n")],
+            )],
+        });
+        reply(a);
+        true
+    }
+    fn execute_command(&self, command: &LspCommand) -> bool {
+        self.commands.borrow_mut().push(command.command.clone());
         true
     }
     fn apply_workspace_edit(&self, edit: &WorkspaceEdit) -> bool {
@@ -745,4 +782,103 @@ fn diagnostics_render_by_severity_count_navigate_and_hover() {
     h.frames(1);
     assert!(!h.find_text("1 of 5 problems"));
     let _ = opened;
+}
+
+#[test]
+fn code_actions_lightbulb_menu_preferred_resolve_and_auto_fix() {
+    let fake = Rc::new(Fake::default());
+    let import = CodeAction {
+        title: "Import `foo`".into(),
+        kind: Some("quickfix".into()),
+        is_preferred: true,
+        edit: Some(WorkspaceEdit {
+            changes: vec![(
+                "file:///w/main.rs".into(),
+                vec![edit(0, 0, 0, "use foo;\n")],
+            )],
+        }),
+        command: Some(LspCommand {
+            title: "organize".into(),
+            command: "rust.organize".into(),
+            arguments: vec![],
+        }),
+        ..Default::default()
+    };
+    let extract = CodeAction {
+        title: "Extract into function".into(),
+        kind: Some("refactor.extract".into()),
+        data: Some("lazy".into()),
+        ..Default::default()
+    };
+    let disabled = CodeAction {
+        title: "Inline".into(),
+        kind: Some("refactor.inline".into()),
+        disabled: Some("not a call".into()),
+        ..Default::default()
+    };
+    *fake.actions.borrow_mut() = vec![extract.clone(), disabled, import];
+    let diags = create_root_signal(vec![diag(
+        0,
+        0,
+        3,
+        DiagnosticSeverity::Error,
+        "unresolved foo",
+    )]);
+    let (mut h, code) = mount("foo();\n", fake.clone(), |e| e.lsp_diagnostics(diags));
+    // The caret sits on the diagnostic: the background request carries it, and the
+    // lightbulb shows in the gutter.
+    {
+        let cx = fake.action_cx.borrow();
+        let last = cx.last().expect("lightbulb request");
+        assert_eq!(last.trigger_kind, CodeActionTriggerKind::Automatic);
+        assert_eq!(last.diagnostics.len(), 1);
+    }
+    assert!(h.find_text("Show Code Actions"), "lightbulb");
+    // Ctrl+. opens the menu: preferred first, then refactors; disabled ones say why.
+    h.press("Ctrl+.");
+    h.frames(2);
+    assert_eq!(
+        fake.action_cx.borrow().last().unwrap().trigger_kind,
+        CodeActionTriggerKind::Invoked
+    );
+    assert!(h.find_text("Quick Fix: Import `foo` \u{2605}"));
+    assert!(h.find_text("Refactor: Extract into function"));
+    assert!(h.find_text("Refactor: Inline (disabled: not a call)"));
+    // Enter runs the selected (preferred) action: its edit, then its command.
+    h.key(KeyInput::Enter);
+    h.frames(1);
+    assert_eq!(code.get(), "use foo;\nfoo();\n");
+    assert_eq!(*fake.commands.borrow(), vec!["rust.organize".to_string()]);
+    assert!(
+        !h.find_text("Refactor: Extract into function"),
+        "menu closed"
+    );
+    h.key(KeyInput::Undo);
+    // The lightbulb opens the same menu; an action without edit/command is resolved first.
+    tap_label(&mut h, "Show Code Actions");
+    h.frames(1);
+    assert!(h.find_text("Refactor: Extract into function"));
+    h.key(KeyInput::Move {
+        motion: Motion::Down,
+        extend: false,
+    });
+    h.key(KeyInput::Enter);
+    h.frames(1);
+    assert_eq!(
+        code.get(),
+        "// resolved\nfoo();\n",
+        "codeAction/resolve supplied the edit"
+    );
+    h.key(KeyInput::Undo);
+    // Shift+Alt+. applies the single preferred quick fix directly.
+    h.press("Shift+Alt+.");
+    h.frames(1);
+    assert_eq!(code.get(), "use foo;\nfoo();\n");
+    assert!(
+        fake.action_cx
+            .borrow()
+            .iter()
+            .any(|c| c.only == vec!["quickfix".to_string()]),
+        "auto fix asks for quick fixes only"
+    );
 }

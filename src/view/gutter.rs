@@ -210,6 +210,35 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
             .into_widget(),
         );
     }
+    // The code-action lightbulb on the caret line (click opens the menu); the quick-fix
+    // variant (an action fixing a diagnostic here) uses the warning color.
+    if let Some((line, actions)) = f.lsp.h.bulb.get()
+        && line < f.line_count
+        && f.line_visible(line)
+    {
+        let fix = actions
+            .iter()
+            .any(|a| a.kind.as_deref().is_some_and(|k| k.starts_with("quickfix")));
+        let color = if fix {
+            f.theme.diag_warning
+        } else {
+            f.theme.muted
+        };
+        let l = f.lsp.clone();
+        let sz = (f.line_px * 0.8).min(16.0);
+        nums.push(
+            Positioned::new(semantics(
+                SemanticsRole::Button,
+                "Show Code Actions",
+                GestureDetector::new(icon(tabler::BULB).size(sz).color(color))
+                    .cursor(Cursor::Pointer)
+                    .on_tap(action(move || l.open_menu(actions.clone()))),
+            ))
+            .left(1.0)
+            .top(f.y_of(line) + (f.line_px - sz) / 2.0)
+            .into_widget(),
+        );
+    }
     let gutter_col = container()
         .width(gutter_w)
         .height(f.content_h)
