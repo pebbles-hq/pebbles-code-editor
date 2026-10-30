@@ -33,6 +33,9 @@ pub(crate) struct State {
     pub(crate) scope: Signal<Option<(usize, usize)>>,
     /// Preserve Case on replace.
     pub(crate) preserve: Signal<bool>,
+    /// Focus the query field on the next build (set when the bar is opened). One-shot, so
+    /// later rebuilds don't pull focus back from the replace field.
+    pub(crate) focus_query: Signal<bool>,
 }
 
 impl State {
@@ -113,11 +116,17 @@ pub(crate) fn bar(
     };
 
     // ---- find row ----
+    let focus_query = st.focus_query.peek();
+    if focus_query {
+        st.focus_query.set(false);
+    }
     let query_field = text_field()
         .placeholder("Find")
         .bind(st.query)
+        // The query seeded from the selection / word is selected, so typing replaces it
+        // (VS Code `editor.find.seedSearchStringFromSelection`).
+        .select_range(0, st.query.peek().len())
         .bare(false)
-        .autofocus()
         .on_changed(move |s| {
             st.query.set(s.to_string());
             st.idx.set(0);
@@ -130,6 +139,11 @@ pub(crate) fn bar(
                 }
             }
         });
+    let query_field = if focus_query {
+        query_field.autofocus()
+    } else {
+        query_field
+    };
 
     // Option chips (case / whole-word / regex): a bordered Toggle so the pill is visible
     // even when inactive, with a legible label that stays readable on both states.

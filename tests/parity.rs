@@ -351,3 +351,53 @@ fn bracket_pair_guides_and_active_indent_guide_render() {
     );
     assert!(count(false, true) > count(false, false), "indent guides");
 }
+
+#[test]
+fn find_replace_shows_match_count_and_replaces_all() {
+    let code = create_root_signal(String::from("foo bar foo baz foo"));
+    let mut h = Harness::new().window(700.0, 300.0);
+    h.mount_widget(View::new(
+        Color::from_rgba8(255, 255, 255, 255),
+        code_editor(code).height(280.0).autofocus(),
+    ));
+    h.frames(3);
+    h.key(KeyInput::Replace);
+    h.frames(2);
+    let find_field = h
+        .semantics_tree()
+        .into_iter()
+        .find(|n| n.props.label == "Find")
+        .expect("find field")
+        .bounds
+        .center();
+    let _ = find_field;
+    // Ctrl+H seeds the query from the word at the caret ("foo"), selected: typing
+    // replaces it.
+    assert!(h.find_text("1/3"), "seeded query counts matches");
+    h.key(KeyInput::Insert("ba".into()));
+    h.frames(2);
+    assert!(h.find_text("1/2"), "typing replaced the seeded query");
+    h.key(KeyInput::SelectAll);
+    h.key(KeyInput::Insert("foo".into()));
+    h.frames(2);
+    assert_eq!(
+        code.get(),
+        "foo bar foo baz foo",
+        "typing went to the find field"
+    );
+    assert!(h.find_text("1/3"), "match count shown");
+    let center = |label: &str, h: &Harness| {
+        let n = h
+            .semantics_tree()
+            .into_iter()
+            .find(|n| n.props.label == label)
+            .unwrap_or_else(|| panic!("{label}"));
+        let c = n.bounds.center();
+        Offset::new(c.x, c.y)
+    };
+    // Replace All with the (empty) replacement removes every match in one step.
+    let all = center("All", &h);
+    h.click(all);
+    h.frames(2);
+    assert_eq!(code.get(), " bar  baz ");
+}

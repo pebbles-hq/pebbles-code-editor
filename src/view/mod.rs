@@ -321,6 +321,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         idx: create_signal(0usize),
         scope: create_signal(None),
         preserve: create_signal(false),
+        focus_query: create_signal(false),
     };
     let palette = extensions::Palette {
         open: create_signal(false),
@@ -759,6 +760,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     find.idx.set(0);
                     find.open
                         .set(if matches!(k, KeyInput::Replace) { 2 } else { 1 });
+                    find.focus_query.set(true);
                     pebbles::core::focus::set_focus(None);
                     return true;
                 }
