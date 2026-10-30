@@ -344,7 +344,13 @@ pub(crate) fn sections(c: &lsp::MarkupContent) -> Vec<lsp::MarkupContent> {
 impl Lsp {
     /// The current document version (bumped whenever the text differs from the last call).
     pub(crate) fn version(&self) -> u64 {
-        let doc = self.state.peek().doc;
+        // A reply that lands after the editor unmounted (the host's server answered late)
+        // finds its signals disposed: report a version no request was tagged with, so every
+        // guard drops it.
+        let Some(st) = self.state.try_peek() else {
+            return u64::MAX;
+        };
+        let doc = st.doc;
         let mut last = self.store.last_doc.borrow_mut();
         if last.as_ref() != Some(&doc) {
             self.store.ver.set(self.store.ver.get() + 1);

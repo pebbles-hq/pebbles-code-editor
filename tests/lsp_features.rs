@@ -1837,3 +1837,44 @@ fn inlay_hints_take_space_and_clicks_map_around_them() {
     h.frames(1);
     assert_eq!(code.get(), "letQ x = 1;\nnext\n");
 }
+
+thread_local! {
+    static SWITCH: RefCell<Option<(Rc<Fake>, Signal<bool>, Signal<String>)>> = const { RefCell::new(None) };
+}
+
+fn maybe_editor() -> AnyWidget {
+    let (fake, show, code) = SWITCH.with(|s| s.borrow().clone().unwrap());
+    if !show.get() {
+        return text("closed").into_widget();
+    }
+    code_editor(code)
+        .language_service(fake)
+        .document_uri("file:///w/main.rs")
+        .height(300.0)
+        .autofocus()
+        .into_widget()
+}
+
+#[test]
+fn late_replies_after_the_editor_unmounts_are_dropped() {
+    let fake = Rc::new(Fake::default());
+    let show = create_root_signal(true);
+    let code = create_root_signal(String::from("fn main() {}\n"));
+    SWITCH.with(|s| *s.borrow_mut() = Some((fake.clone(), show, code)));
+    let mut h = Harness::new().window(900.0, 500.0);
+    h.mount_widget(component(maybe_editor));
+    h.frames(3);
+    h.press("Ctrl+K");
+    h.press("Ctrl+I");
+    let (_, reply) = take(&fake.hovers);
+    // The host closes the tab while the server is still answering.
+    show.set(false);
+    h.frames(2);
+    assert!(h.find_text("closed"));
+    reply(Some(Hover {
+        contents: MarkupContent::plain("late"),
+        range: None,
+    }));
+    h.frames(2);
+    assert!(!h.find_text("late"));
+}
