@@ -486,6 +486,189 @@ pub struct SymbolInformation {
     pub container_name: Option<String>,
 }
 
+impl SymbolKind {
+    /// All kinds, in LSP order (`ALL[n - 1]` is LSP kind `n`).
+    pub const ALL: [SymbolKind; 26] = {
+        use SymbolKind::*;
+        [
+            File,
+            Module,
+            Namespace,
+            Package,
+            Class,
+            Method,
+            Property,
+            Field,
+            Constructor,
+            Enum,
+            Interface,
+            Function,
+            Variable,
+            Constant,
+            String,
+            Number,
+            Boolean,
+            Array,
+            Object,
+            Key,
+            Null,
+            EnumMember,
+            Struct,
+            Event,
+            Operator,
+            TypeParameter,
+        ]
+    };
+    /// The kind for an LSP numeric value (1-based).
+    pub fn from_lsp(n: u32) -> Option<Self> {
+        (n >= 1).then(|| Self::ALL.get(n as usize - 1).copied())?
+    }
+    /// The LSP numeric value (1-based).
+    pub fn to_lsp(self) -> u32 {
+        Self::ALL.iter().position(|k| *k == self).unwrap_or(0) as u32 + 1
+    }
+    /// The plural category label VS Code groups by in Go to Symbol (`@:`), e.g. `functions`.
+    pub fn category(self) -> &'static str {
+        use SymbolKind::*;
+        match self {
+            File => "files",
+            Module => "modules",
+            Namespace => "namespaces",
+            Package => "packages",
+            Class => "classes",
+            Method => "methods",
+            Property => "properties",
+            Field => "fields",
+            Constructor => "constructors",
+            Enum => "enumerations",
+            Interface => "interfaces",
+            Function => "functions",
+            Variable => "variables",
+            Constant => "constants",
+            String => "strings",
+            Number => "numbers",
+            Boolean => "booleans",
+            Array => "arrays",
+            Object => "objects",
+            Key => "keys",
+            Null => "null",
+            EnumMember => "enumeration members",
+            Struct => "structs",
+            Event => "events",
+            Operator => "operators",
+            TypeParameter => "type parameters",
+        }
+    }
+}
+
+impl DocumentSymbol {
+    /// A symbol with no detail and no children.
+    pub fn new(
+        name: impl Into<String>,
+        kind: SymbolKind,
+        range: Range,
+        selection_range: Range,
+    ) -> Self {
+        DocumentSymbol {
+            name: name.into(),
+            detail: None,
+            kind,
+            deprecated: false,
+            range,
+            selection_range,
+            children: Vec::new(),
+        }
+    }
+    /// Add a child symbol.
+    pub fn child(mut self, c: DocumentSymbol) -> Self {
+        self.children.push(c);
+        self
+    }
+}
+
+/// A `textDocument/documentSymbol` reply: hierarchical (`DocumentSymbol[]`) or flat
+/// (`SymbolInformation[]`, nested by range containment with [`nest_symbols`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DocumentSymbolResponse {
+    /// The hierarchical form.
+    Nested(Vec<DocumentSymbol>),
+    /// The flat form.
+    Flat(Vec<SymbolInformation>),
+}
+
+impl DocumentSymbolResponse {
+    /// The hierarchical outline (flat replies are nested by range containment).
+    pub fn into_nested(self) -> Vec<DocumentSymbol> {
+        match self {
+            DocumentSymbolResponse::Nested(v) => v,
+            DocumentSymbolResponse::Flat(v) => nest_symbols(v),
+        }
+    }
+}
+
+/// Nest flat symbols into a hierarchy: each symbol becomes a child of the smallest earlier
+/// symbol whose range contains it (the order VS Code's outline uses for flat replies).
+pub fn nest_symbols(flat: Vec<SymbolInformation>) -> Vec<DocumentSymbol> {
+    let mut v: Vec<SymbolInformation> = flat;
+    // Outer ranges first: by start, then longest.
+    v.sort_by(|a, b| {
+        (
+            a.location.range.start,
+            std::cmp::Reverse(a.location.range.end),
+        )
+            .cmp(&(
+                b.location.range.start,
+                std::cmp::Reverse(b.location.range.end),
+            ))
+    });
+    fn insert(list: &mut Vec<DocumentSymbol>, s: DocumentSymbol) {
+        if let Some(last) = list.last_mut()
+            && last.range.start <= s.range.start
+            && s.range.end <= last.range.end
+            && last.range != s.range
+        {
+            insert(&mut last.children, s);
+            return;
+        }
+        list.push(s);
+    }
+    let mut out = Vec::new();
+    for s in v {
+        let mut d = DocumentSymbol::new(s.name, s.kind, s.location.range, s.location.range);
+        d.deprecated = s.deprecated;
+        d.detail = s.container_name;
+        insert(&mut out, d);
+    }
+    out
+}
+
+/// Every symbol in pre-order with its depth.
+pub fn flatten_symbols(symbols: &[DocumentSymbol]) -> Vec<(usize, &DocumentSymbol)> {
+    fn walk<'a>(v: &'a [DocumentSymbol], d: usize, out: &mut Vec<(usize, &'a DocumentSymbol)>) {
+        for s in v {
+            out.push((d, s));
+            walk(&s.children, d + 1, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(symbols, 0, &mut out);
+    out
+}
+
+/// The chain of symbols whose range contains `pos`, outermost first (the breadcrumbs).
+pub fn symbol_path(symbols: &[DocumentSymbol], pos: Position) -> Vec<&DocumentSymbol> {
+    let mut out = Vec::new();
+    let mut level = symbols;
+    while let Some(s) = level
+        .iter()
+        .find(|s| s.range.start <= pos && pos <= s.range.end)
+    {
+        out.push(s);
+        level = &s.children;
+    }
+    out
+}
+
 /// A code lens (LSP `CodeLens`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodeLens {
@@ -924,7 +1107,7 @@ pub trait LanguageService {
         false
     }
     /// `textDocument/documentSymbol`.
-    fn document_symbols(&self, doc: &DocRef, reply: Reply<Vec<DocumentSymbol>>) -> bool {
+    fn document_symbols(&self, doc: &DocRef, reply: Reply<DocumentSymbolResponse>) -> bool {
         false
     }
     /// `workspace/symbol`.

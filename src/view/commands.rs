@@ -180,6 +180,8 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
         C::AutoFix => env.lsp.auto_fix(),
         C::NextProblem => env.lsp.next_problem(true),
         C::PreviousProblem => env.lsp.next_problem(false),
+        C::GoToSymbol => env.lsp.open_go_to_symbol(env.palette),
+        C::ShowAllSymbols => env.lsp.open_workspace_symbols(env.palette),
         C::TriggerParameterHints => {
             env.lsp
                 .request_signature(crate::language::SignatureHelpTriggerKind::Invoked, None);

@@ -47,9 +47,38 @@ struct Fake {
     range_fmt: RefCell<Option<Vec<TextEdit>>>,
     fmt_ranges: RefCell<Vec<Range>>,
     type_fmt: RefCell<Vec<(String, Position, FormattingOptions)>>,
+    /// Document symbols (`None` declines).
+    symbols: RefCell<Option<DocumentSymbolResponse>>,
+    symbol_requests: RefCell<usize>,
+    /// Workspace symbols (answered for every query; the queries are recorded).
+    ws: RefCell<Vec<SymbolInformation>>,
+    ws_queries: RefCell<Vec<String>>,
 }
 
 impl LanguageService for Fake {
+    fn document_symbols(&self, _doc: &DocRef, reply: Reply<DocumentSymbolResponse>) -> bool {
+        *self.symbol_requests.borrow_mut() += 1;
+        match self.symbols.borrow().clone() {
+            Some(r) => {
+                reply(r);
+                true
+            }
+            None => false,
+        }
+    }
+    fn workspace_symbols(&self, query: &str, reply: Reply<Vec<SymbolInformation>>) -> bool {
+        self.ws_queries.borrow_mut().push(query.to_string());
+        let q = query.to_lowercase();
+        reply(
+            self.ws
+                .borrow()
+                .iter()
+                .filter(|s| s.name.to_lowercase().contains(&q))
+                .cloned()
+                .collect(),
+        );
+        true
+    }
     fn hover(&self, _doc: &DocRef, pos: Position, reply: Reply<Option<Hover>>) -> bool {
         self.hovers.borrow_mut().push((pos, reply));
         true
@@ -1008,4 +1037,156 @@ fn formatting_document_selection_on_type_and_paste_keep_cursors_in_one_undo_step
         Some(&Range::new(Position::new(2, 1), Position::new(2, 3))),
         "the pasted text's range"
     );
+}
+
+fn rng(l0: u32, c0: u32, l1: u32, c1: u32) -> Range {
+    Range::new(Position::new(l0, c0), Position::new(l1, c1))
+}
+
+fn sym_info(
+    name: &str,
+    kind: SymbolKind,
+    uri: &str,
+    r: Range,
+    container: Option<&str>,
+) -> SymbolInformation {
+    SymbolInformation {
+        name: name.into(),
+        kind,
+        deprecated: false,
+        location: Location {
+            uri: uri.into(),
+            range: r,
+        },
+        container_name: container.map(String::from),
+    }
+}
+
+fn type_text(h: &mut Harness, s: &str) {
+    for c in s.chars() {
+        h.key(KeyInput::Insert(c.to_string()));
+    }
+    h.frames(1);
+}
+
+#[test]
+fn document_symbols_outline_go_to_symbol_with_preview_and_workspace_symbols() {
+    let text = "fn alpha() {}\nstruct Beta {\n    gamma: u8,\n}\nfn delta() {}\n";
+    let fake = Rc::new(Fake::default());
+    // A flat reply is nested by range containment.
+    *fake.symbols.borrow_mut() = Some(DocumentSymbolResponse::Flat(vec![
+        sym_info(
+            "alpha",
+            SymbolKind::Function,
+            "file:///w/main.rs",
+            rng(0, 0, 0, 13),
+            None,
+        ),
+        sym_info(
+            "Beta",
+            SymbolKind::Struct,
+            "file:///w/main.rs",
+            rng(1, 0, 3, 1),
+            None,
+        ),
+        sym_info(
+            "gamma",
+            SymbolKind::Field,
+            "file:///w/main.rs",
+            rng(2, 4, 2, 13),
+            Some("Beta"),
+        ),
+        sym_info(
+            "delta",
+            SymbolKind::Function,
+            "file:///w/main.rs",
+            rng(4, 0, 4, 13),
+            None,
+        ),
+    ]));
+    let outline = create_root_signal(Vec::<DocumentSymbol>::new());
+    let (mut h, code) = mount(text, fake.clone(), |e| e.outline(outline));
+    let o = outline.get();
+    assert_eq!(o.len(), 3, "outline published: {o:?}");
+    assert_eq!(o[1].name, "Beta");
+    assert_eq!(o[1].children[0].name, "gamma");
+    let asked = *fake.symbol_requests.borrow();
+    h.frames(2);
+    assert_eq!(
+        *fake.symbol_requests.borrow(),
+        asked,
+        "not re-requested without an edit"
+    );
+
+    // Ctrl+Shift+O lists every symbol (nested ones indented) in document order.
+    h.press("Ctrl+Shift+O");
+    h.frames(2);
+    for n in ["alpha", "Beta", "  gamma  Beta", "delta"] {
+        assert!(h.find_text(n), "{n} listed");
+    }
+    // Moving previews: the caret jumps to the symbol; Escape restores it.
+    h.key(KeyInput::Move {
+        motion: Motion::Down,
+        extend: false,
+    });
+    h.key(KeyInput::Move {
+        motion: Motion::Down,
+        extend: false,
+    });
+    h.frames(2);
+    h.key(KeyInput::Escape);
+    h.frames(2);
+    h.key(KeyInput::Insert("X".into()));
+    assert!(
+        code.get().starts_with("Xfn alpha"),
+        "cancel restores: {}",
+        code.get()
+    );
+    h.key(KeyInput::Undo);
+    // `@:` groups by kind with the category label on each group's first entry.
+    h.press("Ctrl+Shift+O");
+    h.frames(2);
+    type_text(&mut h, ":");
+    assert!(h.find_text("alpha    functions (2)"));
+    assert!(h.find_text("gamma  Beta    fields (1)"));
+    h.key(KeyInput::Escape);
+    h.frames(2);
+    // Filtering then Enter reveals the symbol's name.
+    h.press("Ctrl+Shift+O");
+    h.frames(2);
+    type_text(&mut h, "del");
+    assert!(h.find_text("delta"));
+    assert!(!h.find_text("alpha"));
+    h.key(KeyInput::Enter);
+    h.frames(2);
+    h.key(KeyInput::Insert("X".into()));
+    assert!(
+        code.get().contains("\nXfn delta"),
+        "accepted: {}",
+        code.get()
+    );
+    h.key(KeyInput::Undo);
+
+    // Ctrl+T queries the workspace through the service; accepting opens other files via the host.
+    fake.ws.borrow_mut().push(sym_info(
+        "Widget",
+        SymbolKind::Class,
+        "file:///w/ui.rs",
+        rng(7, 4, 7, 10),
+        Some("ui"),
+    ));
+    h.press("Ctrl+T");
+    h.frames(2);
+    type_text(&mut h, "wid");
+    h.frames(1);
+    assert_eq!(
+        fake.ws_queries.borrow().last().map(String::as_str),
+        Some("wid")
+    );
+    assert!(h.find_text("Widget  ui  \u{2014} ui.rs"));
+    h.key(KeyInput::Enter);
+    h.frames(1);
+    let opened = fake.opened.borrow();
+    assert_eq!(opened.last().unwrap().uri, "file:///w/ui.rs");
+    assert_eq!(opened.last().unwrap().range.start, Position::new(7, 4));
 }

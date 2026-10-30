@@ -137,6 +137,12 @@ pub(crate) struct Store {
     /// Hover replies per (byte, document version).
     pub(crate) hover_cache: RefCell<HashMap<(usize, u64), Option<lsp::Hover>>>,
     ver: Cell<u64>,
+    pub(crate) sym_gate: RequestGate,
+    /// The document version the outline was last requested for.
+    pub(crate) sym_ver: Cell<Option<u64>>,
+    pub(crate) ws_gate: RequestGate,
+    /// The last workspace-symbol query sent.
+    pub(crate) ws_query: RefCell<Option<String>>,
     last_doc: RefCell<Option<Rope>>,
 }
 
@@ -163,6 +169,14 @@ pub(crate) struct Hooks {
     pub(crate) actions: Signal<Vec<lsp::CodeAction>>,
     pub(crate) menu: crate::view::extensions::Palette,
     pub(crate) store: Signal<Rc<Store>>,
+    /// The document outline (the last document-symbol reply).
+    pub(crate) symbols: Signal<Rc<Vec<lsp::DocumentSymbol>>>,
+    /// Go to Symbol live preview: the highlighted symbol range.
+    pub(crate) sym_preview: Signal<Option<(usize, usize)>>,
+    /// The selection to restore when Go to Symbol is cancelled.
+    pub(crate) sym_restore: Signal<Option<crate::edit::Selections>>,
+    /// Workspace-symbol results for the palette's `#` query.
+    pub(crate) ws_symbols: Signal<Vec<lsp::SymbolInformation>>,
 }
 
 /// Create the hook signals (call unconditionally, once per render).
@@ -186,6 +200,10 @@ pub(crate) fn hooks() -> Hooks {
             sel: create_signal(0usize),
         },
         store: create_signal(Rc::new(Store::default())),
+        symbols: create_signal(Rc::new(Vec::new())),
+        sym_preview: create_signal(None),
+        sym_restore: create_signal(None),
+        ws_symbols: create_signal(Vec::new()),
     }
 }
 
@@ -210,6 +228,8 @@ pub(crate) struct Lsp {
     /// The editor's focus (returned to after the rename box / preview closes).
     pub(crate) focus: pebbles::core::focus::FocusNode,
     pub(crate) read_only: bool,
+    /// The host's outline signal (`CodeEditor::outline`).
+    pub(crate) outline: Option<Signal<Vec<lsp::DocumentSymbol>>>,
 }
 
 /// Map the old byte-range diagnostics onto the LSP form.
@@ -1960,7 +1980,7 @@ impl LanguageService for Chained {
     fn implementation(&self, d: &lsp::DocRef, p: lsp::Position, r: lsp::Reply<Vec<lsp::Location>>) -> bool { self.main.implementation(d, p, r) }
     fn references(&self, d: &lsp::DocRef, p: lsp::Position, i: bool, r: lsp::Reply<Vec<lsp::Location>>) -> bool { self.main.references(d, p, i, r) }
     fn document_highlight(&self, d: &lsp::DocRef, p: lsp::Position, r: lsp::Reply<Vec<lsp::DocumentHighlight>>) -> bool { self.main.document_highlight(d, p, r) }
-    fn document_symbols(&self, d: &lsp::DocRef, r: lsp::Reply<Vec<lsp::DocumentSymbol>>) -> bool { self.main.document_symbols(d, r) }
+    fn document_symbols(&self, d: &lsp::DocRef, r: lsp::Reply<lsp::DocumentSymbolResponse>) -> bool { self.main.document_symbols(d, r) }
     fn workspace_symbols(&self, q: &str, r: lsp::Reply<Vec<lsp::SymbolInformation>>) -> bool { self.main.workspace_symbols(q, r) }
     fn code_actions(&self, d: &lsp::DocRef, g: lsp::Range, c: lsp::CodeActionContext, r: lsp::Reply<Vec<lsp::CodeAction>>) -> bool { self.main.code_actions(d, g, c, r) }
     fn resolve_code_action(&self, a: lsp::CodeAction, r: lsp::Reply<lsp::CodeAction>) -> bool { self.main.resolve_code_action(a, r) }

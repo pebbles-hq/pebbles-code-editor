@@ -23,6 +23,7 @@ mod peek;
 mod ruler;
 mod search;
 mod sticky;
+mod symbols;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -380,11 +381,26 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         on_open_link: p.on_open_link.clone(),
         focus,
         read_only: p.read_only,
+        outline: p.outline,
     };
     create_effect(move || {
         let st = state.get();
         cursor_hist.peek().borrow_mut().observe(&st);
     });
+    // Go to Symbol: live preview while moving through the `@` list; restore on cancel.
+    {
+        let l = lsp_ctl.clone();
+        create_effect(move || {
+            let open = palette.open.get();
+            let q = palette.query.get();
+            let sel = palette.sel.get();
+            let _ = l.h.symbols.get();
+            l.preview_symbol(open, &q, sel);
+            if !open || !q.starts_with('#') {
+                l.reset_workspace_symbols();
+            }
+        });
+    }
     // Document highlights follow the caret (service-driven; the word fallback otherwise).
     {
         let l = lsp_ctl.clone();
@@ -395,6 +411,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 l.request_highlights();
             }
             l.request_bulb();
+            l.request_symbols();
         });
     }
 
@@ -2538,7 +2555,35 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     };
 
     // Overlay the command palette (all extension commands) when open.
-    let code_area: AnyWidget = if palette.open.get() {
+    let pal_query = if palette.open.get() {
+        palette.query.get()
+    } else {
+        String::new()
+    };
+    let code_area: AnyWidget = if palette.open.get() && pal_query.starts_with('@') {
+        let _ = lsp_ctl.h.symbols.get();
+        let ctx = crate::extensions::EditContext {
+            state,
+            history,
+            code,
+            goal,
+        };
+        let commands = lsp_ctl.symbol_commands(&pal_query);
+        let pal = extensions::palette(palette, commands, ctx, focus, theme);
+        stack(children![code_area, pal]).into_widget()
+    } else if palette.open.get() && pal_query.starts_with('#') {
+        lsp_ctl.request_workspace_symbols(&pal_query);
+        let _ = lsp_ctl.h.ws_symbols.get();
+        let ctx = crate::extensions::EditContext {
+            state,
+            history,
+            code,
+            goal,
+        };
+        let commands = lsp_ctl.workspace_symbol_commands();
+        let pal = extensions::palette(palette, commands, ctx, focus, theme);
+        stack(children![code_area, pal]).into_widget()
+    } else if palette.open.get() {
         // Built-in editor commands first (each runnable from the palette), then extensions'.
         let mut commands: Vec<crate::extensions::Command> = crate::actions::EditorCommand::ALL
             .iter()

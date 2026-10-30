@@ -272,6 +272,10 @@ commands! {
     Rename => "editor.action.rename", "Rename Symbol", ["F2"];
     /// Show signature help (parameter hints) for the call at the caret.
     TriggerParameterHints => "editor.action.triggerParameterHints", "Trigger Parameter Hints", ["Ctrl+Shift+Space"];
+    /// Go to a symbol in this document (the palette's `@` mode; `@:` groups by kind).
+    GoToSymbol => "workbench.action.gotoSymbol", "Go to Symbol in Editor...", ["Ctrl+Shift+O"];
+    /// Go to a symbol in the workspace (the palette's `#` mode, through the service).
+    ShowAllSymbols => "workbench.action.showAllSymbols", "Go to Symbol in Workspace...", ["Ctrl+T"];
 }
 
 /// One parsed keystroke.

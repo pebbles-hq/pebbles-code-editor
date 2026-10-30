@@ -123,6 +123,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         format_on_type: false,
         hover_delay: 0.3,
         lsp_diagnostics: None,
+        outline: None,
         problem_counts: None,
         emmet: false,
         inline_diff: false,
@@ -222,6 +223,7 @@ pub struct CodeEditor {
     format_on_type: bool,
     hover_delay: f64,
     lsp_diagnostics: Option<Signal<Vec<crate::language::LspDiagnostic>>>,
+    outline: Option<Signal<Vec<crate::language::DocumentSymbol>>>,
     problem_counts: Option<Signal<crate::language::ProblemCounts>>,
     emmet: bool,
     inline_diff: bool,
@@ -655,6 +657,13 @@ impl CodeEditor {
         self.lsp_diagnostics = Some(diagnostics);
         self
     }
+    /// A signal the editor keeps updated with the document outline (the language service's
+    /// `textDocument/documentSymbol` reply, refreshed per document version), for the host's
+    /// Outline view.
+    pub fn outline(mut self, outline: Signal<Vec<crate::language::DocumentSymbol>>) -> Self {
+        self.outline = Some(outline);
+        self
+    }
     /// A signal the editor keeps updated with its problem counts (errors / warnings / infos
     /// / hints), for the host's status bar or problems panel.
     pub fn problem_counts(mut self, counts: Signal<crate::language::ProblemCounts>) -> Self {
@@ -781,6 +790,7 @@ pub(crate) struct Props {
     pub(crate) format_on_type: bool,
     pub(crate) hover_delay: f64,
     pub(crate) lsp_diagnostics: Option<Signal<Vec<crate::language::LspDiagnostic>>>,
+    pub(crate) outline: Option<Signal<Vec<crate::language::DocumentSymbol>>>,
     pub(crate) problem_counts: Option<Signal<crate::language::ProblemCounts>>,
     pub(crate) emmet: bool,
     pub(crate) inline_diff: bool,
@@ -883,6 +893,7 @@ impl From<CodeEditor> for Props {
             format_on_type: e.format_on_type,
             hover_delay: e.hover_delay,
             lsp_diagnostics: e.lsp_diagnostics,
+            outline: e.outline,
             problem_counts: e.problem_counts,
             emmet: e.emmet,
             inline_diff: e.inline_diff,

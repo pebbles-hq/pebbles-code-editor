@@ -16,6 +16,7 @@ pub(crate) fn build(f: &Frame) -> Vec<AnyWidget> {
     let mut layers: Vec<AnyWidget> = Vec::new();
     diff_bands(f, &mut layers);
     current_line(f, &mut layers);
+    f.lsp.preview_layers(f, &mut layers);
     rulers(f, &mut layers);
     indent_guides(f, &mut layers);
     crate::view::decor::active_indent_guide(f, &mut layers);

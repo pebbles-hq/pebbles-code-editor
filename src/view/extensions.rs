@@ -102,7 +102,8 @@ pub(crate) struct Palette {
 
 /// Commands whose title contains the (lowercased) query, in order.
 fn filtered(commands: &[Command], query: &str) -> Vec<Command> {
-    if query.is_empty() {
+    // `@` (symbols) / `#` (workspace symbols) lists come pre-filtered by their provider.
+    if query.is_empty() || query.starts_with('@') || query.starts_with('#') {
         return commands.to_vec();
     }
     let q = query.to_lowercase();
@@ -171,7 +172,7 @@ pub(crate) fn palette(
 
     let n = matches.len();
     let field = text_field()
-        .placeholder("Run a command…  (type : to go to a line)")
+        .placeholder("Run a command…  (: go to a line, @ symbol, # workspace symbol)")
         .bind(pal.query)
         .autofocus()
         .on_changed(move |_| {
@@ -247,7 +248,13 @@ pub(crate) fn palette(
     } else if matches.is_empty() {
         rows.push(
             theme
-                .ui_text("no matching commands", 0.0)
+                .ui_text(
+                    match pal.query.peek().chars().next() {
+                        Some('@') | Some('#') => "no matching symbols",
+                        _ => "no matching commands",
+                    },
+                    0.0,
+                )
                 .color(theme.muted)
                 .into_widget(),
         );
