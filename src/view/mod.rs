@@ -145,6 +145,29 @@ pub(crate) struct InlineGhost {
     pub(crate) idx: usize,
 }
 
+/// The vertical scroll target, jumping or (with smooth scrolling) animating.
+#[derive(Clone)]
+pub(crate) struct VScroll {
+    pub(crate) handle: ScrollHandle,
+    pub(crate) smooth: Option<Signal<f64>>,
+}
+
+impl VScroll {
+    /// Scroll to `t`; `scroll_top` (the virtualization window) follows the real offset.
+    pub(crate) fn to(&self, t: f64, scroll_top: Signal<f64>) {
+        match self.smooth {
+            Some(y) => {
+                y.set(self.handle.offset());
+                pebbles::core::animation::animate_to(y, t, 0.125);
+            }
+            None => {
+                self.handle.scroll_to(t);
+                scroll_top.set(t);
+            }
+        }
+    }
+}
+
 /// Smooth-caret animation state: glide from `from` to `target` starting at `start`.
 pub(crate) struct CaretAnim {
     from: (f64, f64),
@@ -215,6 +238,26 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // `height` makes the editor a scroll viewport). Held in signals so they survive renders.
     let scroll = create_signal(ScrollHandle::new()).peek(); // vertical
     let hscroll = create_signal(ScrollHandle::new()).peek(); // horizontal
+    // Smooth scrolling: programmatic vertical scrolls tween this signal, and an effect
+    // drives the scroll handle from it.
+    let smooth_y = create_signal(0.0_f64);
+    let vscroll = VScroll {
+        handle: scroll.clone(),
+        smooth: p.smooth_scrolling.then_some(smooth_y),
+    };
+    {
+        let h = scroll.clone();
+        let started = std::cell::Cell::new(false);
+        create_effect(move || {
+            let y = smooth_y.get();
+            // Skip the initial run (no scroll requested yet).
+            if !started.replace(true) {
+                return;
+            }
+            h.scroll_to(y);
+            scroll_top.set(y);
+        });
+    }
     let scroll_left = create_signal(0.0_f64); // live horizontal offset (long-line clipping)
     let completion = create_signal::<Option<completion::Session>>(None); // autocomplete popup
     let hover_pos = create_signal::<Option<Offset>>(None); // pointer pos for hover tooltip
@@ -398,7 +441,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         syntax,
         find,
         palette,
-        scroll: scroll.clone(),
+        vscroll: vscroll.clone(),
         scroll_top,
         height: p.height,
         line_px: eff_fs * p.lh,
@@ -1005,8 +1048,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                                 .0
                         };
                         let t = (10.0 + row as f64 * line_px - line_px).max(0.0);
-                        scroll.scroll_to(t);
-                        scroll_top.set(t);
+                        vscroll.to(t, scroll_top);
                         None
                     }
                     crate::controller::Request::Focus => {
@@ -1306,7 +1348,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // editor a scroll viewport). `scroll_top` (the signal the scroll view feeds) is the
     // source of truth; we set it optimistically so the virtualized window follows now, then
     // command the scroll view to match. Only moves when the caret is off-screen.
-    let scroll_a = scroll.clone();
+    let vscroll_a = vscroll.clone();
     let hscroll_a = hscroll.clone();
     if let Some(vh) = p.height {
         create_effect(move || {
@@ -1339,8 +1381,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 None
             };
             if let Some(t) = target {
-                scroll_a.scroll_to(t);
-                scroll_top.set(t.min((content_h - vh).max(0.0)));
+                vscroll_a.to(t.min((content_h - vh).max(0.0)), scroll_top);
             }
             let x = pad_l + col as f64 * advance;
             hscroll_a.ensure_visible(x, x + advance, advance * 4.0);

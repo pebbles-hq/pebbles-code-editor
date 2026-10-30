@@ -452,3 +452,30 @@ fn builtin_and_user_snippets_complete_with_indentation() {
     h.key(KeyInput::Enter);
     assert_eq!(h.code.get(), "// Copyright me\n");
 }
+
+#[test]
+fn smooth_scrolling_animates_page_scrolls() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let src: String = (0..400).map(|i| format!("line {i}\n")).collect();
+    let top = Rc::new(Cell::new(0.0_f64));
+    let t2 = top.clone();
+    let mut h = harness_cfg(&src, Keymap::new(), move |e| {
+        e.smooth_scrolling(true).on_scroll(move |y| t2.set(y))
+    });
+    let before = top.get();
+    assert!(h.press("Alt+PageDown"));
+    // Mid-animation: moved, but not yet the full page.
+    // `tick` takes the absolute clock: the first tick anchors the tween.
+    for t in [1.0, 1.016, 1.032, 1.048] {
+        pebbles::core::animation::tick(t);
+        h.frame();
+    }
+    let mid = top.get();
+    pebbles::core::animation::tick(2.0);
+    h.frame();
+    h.frame();
+    let end = top.get();
+    assert!(end > before + 300.0, "{before} -> {mid} -> {end}");
+    assert!(mid > before && mid < end, "{before} -> {mid} -> {end}");
+}

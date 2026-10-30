@@ -116,6 +116,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         inline_suggestions: None,
         line_numbers: LineNumbers::On,
         smooth_caret: false,
+        smooth_scrolling: false,
         cursor_blinking: CursorBlinking::Blink,
         cursor_style: CursorStyle::Line,
         on_stage_hunk: None,
@@ -195,6 +196,7 @@ pub struct CodeEditor {
     cursor_style: CursorStyle,
     cursor_blinking: CursorBlinking,
     smooth_caret: bool,
+    smooth_scrolling: bool,
     line_numbers: LineNumbers,
     inline_suggestions: Option<crate::providers::InlineSuggestionProvider>,
     suggest_preview: bool,
@@ -548,6 +550,12 @@ impl CodeEditor {
         self.cursor_blinking = v;
         self
     }
+    /// Animate programmatic scrolls — paging, scroll commands, caret-into-view and
+    /// "reveal line" — over 125 ms (VS Code `editor.smoothScrolling`, default off).
+    pub fn smooth_scrolling(mut self, v: bool) -> Self {
+        self.smooth_scrolling = v;
+        self
+    }
     /// Animate the caret between positions (VS Code `editor.cursorSmoothCaretAnimation`).
     pub fn smooth_caret(mut self, v: bool) -> Self {
         self.smooth_caret = v;
@@ -662,6 +670,7 @@ pub(crate) struct Props {
     pub(crate) cursor_style: CursorStyle,
     pub(crate) cursor_blinking: CursorBlinking,
     pub(crate) smooth_caret: bool,
+    pub(crate) smooth_scrolling: bool,
     pub(crate) line_numbers: LineNumbers,
     pub(crate) inline_suggestions: Option<crate::providers::InlineSuggestionProvider>,
     pub(crate) suggest_preview: bool,
@@ -758,6 +767,7 @@ impl From<CodeEditor> for Props {
             inline_suggestions: e.inline_suggestions,
             line_numbers: e.line_numbers,
             smooth_caret: e.smooth_caret,
+            smooth_scrolling: e.smooth_scrolling,
             cursor_blinking: e.cursor_blinking,
             cursor_style: e.cursor_style,
             on_stage_hunk: e.on_stage_hunk,

@@ -75,6 +75,7 @@ fn regions_with_markers(indents: &[Option<usize>], markers: &[i8]) -> Vec<(usize
 }
 
 /// The full foldable-region computation for `src` (the reference `fold::foldable` uses).
+#[cfg(test)]
 pub(crate) fn regions_of(src: &str) -> Vec<(usize, usize)> {
     let (mut ind, mut mk) = (Vec::new(), Vec::new());
     for l in src.split('\n') {

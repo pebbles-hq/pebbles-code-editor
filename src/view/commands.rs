@@ -8,7 +8,6 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use pebbles::prelude::*;
-use pebbles::render::ScrollHandle;
 
 use crate::actions::EditorCommand as C;
 use crate::commands::dispatch;
@@ -69,7 +68,7 @@ pub(crate) struct Env {
     pub(crate) syntax: Signal<Rc<RefCell<Option<(String, Box<dyn crate::lang::SyntaxSession>)>>>>,
     pub(crate) find: crate::view::search::State,
     pub(crate) palette: crate::view::extensions::Palette,
-    pub(crate) scroll: ScrollHandle,
+    pub(crate) vscroll: crate::view::VScroll,
     pub(crate) scroll_top: Signal<f64>,
     pub(crate) height: Option<f64>,
     pub(crate) line_px: f64,
@@ -325,8 +324,7 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
                 _ => h,
             };
             let t = (env.scroll_top.peek() + step).max(0.0);
-            env.scroll.scroll_to(t);
-            env.scroll_top.set(t);
+            env.vscroll.to(t, env.scroll_top);
             true
         }
         C::Fold

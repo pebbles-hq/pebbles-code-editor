@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 /// The foldable regions as `(head_line, last_line)` pairs: indentation-derived (a non-blank
 /// line heads a region spanning the following deeper-indented lines) plus `#region` /
 /// `#endregion` marker regions in any comment syntax. Sorted by head.
+#[cfg(test)]
 pub(crate) fn foldable(src: &str) -> Vec<(usize, usize)> {
     crate::lines::regions_of(src)
 }
