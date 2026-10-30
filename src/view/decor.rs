@@ -311,6 +311,40 @@ pub(crate) fn fold_badges(f: &Frame, layers: &mut Vec<AnyWidget>) {
                 s.remove(&head);
             });
         }));
+        // Folded-region preview: hovering the badge shows the hidden lines (up to 15).
+        let last = regions
+            .iter()
+            .find(|r| r.0 == head)
+            .map_or(head, |r| r.1)
+            .min(f.li.line_count() - 1);
+        const PREVIEW_LINES: usize = 15;
+        let mut rows: Vec<AnyWidget> = (head + 1..=last.min(head + PREVIEW_LINES))
+            .map(|l| {
+                let a = f.li.line_start_of(l);
+                let b = line_end(f.src, a);
+                text(f.src[a..b].replace('\t', "    "))
+                    .size((f.fs * 0.9) as f32)
+                    .font_family(f.font_family)
+                    .color(f.theme.foreground)
+                    .into_widget()
+            })
+            .collect();
+        if last > head + PREVIEW_LINES {
+            rows.push(
+                text("⋯")
+                    .size((f.fs * 0.9) as f32)
+                    .color(f.theme.muted)
+                    .into_widget(),
+            );
+        }
+        let badge = tooltip("", badge)
+            .rich(
+                column(rows)
+                    .cross_axis_alignment(CrossAxisAlignment::Start)
+                    .main_axis_size(MainAxisSize::Min),
+            )
+            .side(Side::Bottom)
+            .show_on_focus(false);
         layers.push(
             Positioned::new(badge)
                 .left(x + f.advance)

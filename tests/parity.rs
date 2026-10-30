@@ -226,3 +226,29 @@ fn control_characters_render_as_symbols() {
     h.frames(2);
     assert!(h.find_text("␁"));
 }
+
+#[test]
+fn hovering_the_fold_badge_previews_the_hidden_lines() {
+    let code = create_root_signal(String::from("fn a() {\n    hidden_x\n    hidden_y\n}\n"));
+    let folds = create_root_signal(BTreeSet::from([0usize]));
+    let mut h = Harness::new().window(500.0, 300.0);
+    h.mount_widget(View::new(
+        Color::from_rgba8(255, 255, 255, 255),
+        pebbles::widgets::overlay::OverlayHost::wrap(code_editor(code).height(280.0).folds(folds)),
+    ));
+    h.frames(3);
+    assert!(!h.find_text("    hidden_x"));
+    // Sweep the first line until the pointer is over the badge and the preview opens.
+    let mut shown = false;
+    for (x, y) in (0..400).step_by(6).flat_map(|x| [(x, 8), (x, 14), (x, 20)]) {
+        h.hover(Offset::new(x as f64, y as f64));
+        h.advance(0.8);
+        h.frames(2);
+        if h.find_text("    hidden_x") && h.find_text("    hidden_y") {
+            shown = true;
+            break;
+        }
+    }
+    assert!(shown, "fold preview tooltip lists the hidden lines");
+    assert!(h.find_text("⋯ 2 lines"));
+}
