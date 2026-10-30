@@ -336,3 +336,13 @@ fn word_wrap_toggle_and_zoom_do_not_disturb_text() {
     assert!(h.press("Ctrl+0"));
     assert_eq!(h.code.get().len(), 300);
 }
+
+#[test]
+fn syntax_folding_uses_the_parse_tree() {
+    // A multi-line call whose argument lines are NOT indented deeper: indentation folding
+    // finds nothing here, the tree-sitter parse does.
+    let mut h = harness("fn main() {\nfoo(\n1,\n2);\n}\n");
+    h.caret(1, 0);
+    h.press("Ctrl+Shift+[");
+    assert!(h.folds.get().contains(&1), "{:?}", h.folds.get());
+}

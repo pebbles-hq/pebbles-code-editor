@@ -76,6 +76,7 @@ pub(crate) struct Env {
     pub(crate) read_only: bool,
     pub(crate) diff_base: Option<Signal<String>>,
     pub(crate) ops: Rc<OpCfg>,
+    pub(crate) line_cache: Signal<Rc<RefCell<crate::lines::LineCache>>>,
 }
 
 /// Whether `cmd` edits the document (vetoed in read-only mode).
@@ -470,7 +471,14 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
 
 /// The fold commands (they edit the fold set, never the text).
 fn run_fold(cmd: C, env: &Env, src: &str, line: usize, sels: &Selections) {
-    let regions = crate::fold::foldable(src);
+    let regions = env
+        .line_cache
+        .peek()
+        .borrow_mut()
+        .sync(src)
+        .regions()
+        .as_ref()
+        .clone();
     let mut f = env.folds.peek();
     let at = crate::fold::region_at(&regions, line);
     match cmd {

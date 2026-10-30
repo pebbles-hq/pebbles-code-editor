@@ -145,6 +145,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     #[allow(clippy::type_complexity)]
     let token_cache: Signal<Rc<RefCell<(String, Rc<Vec<Token>>)>>> =
         create_signal(Rc::new(RefCell::new((String::new(), Rc::new(Vec::new())))));
+    // Syntax fold-range cache: (parse version, ranges).
+    #[allow(clippy::type_complexity)]
+    let syntax_folds: Signal<Rc<RefCell<(u64, Option<Rc<Vec<(usize, usize)>>>)>>> =
+        create_signal(Rc::new(RefCell::new((u64::MAX, None))));
     // Bracket-colorization prefix cache: (text before the window, bracket depth there).
     let bracket_cache = create_signal(Rc::new(RefCell::new((String::new(), 0_i64))));
     // Incremental syntax session (tree-sitter languages), keyed by language name so a
@@ -337,6 +341,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         read_only,
         diff_base: p.diff_base,
         ops: ops_cfg,
+        line_cache,
     };
     // Raw-key command resolver: runs BEFORE the framework maps the key to an editing intent,
     // so editor chords (Alt+Up, Ctrl+Shift+K, Ctrl+K Ctrl+0, …) win over caret motion.
@@ -804,7 +809,38 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let sels = st.selection.clamped(&st.doc);
     let primary = sels.primary();
     let (pcc, has_primary_sel) = (primary.head, !primary.is_empty());
-    let li = line_cache.peek().borrow_mut().sync(&src);
+    // Incremental parse (tree-sitter languages) BEFORE the line index, so syntax-derived
+    // fold regions apply to this frame. Fold ranges walk the tree, so they are recomputed
+    // only when the parse changed, and only up to SYNTAX_FOLD_MAX_BYTES (~20k lines;
+    // indentation folding beyond that keeps huge files cheap).
+    const SYNTAX_FOLD_MAX_BYTES: usize = 800_000;
+    let syntax_regions: Option<Rc<Vec<(usize, usize)>>> = p.language.as_ref().and_then(|l| {
+        let cell = syntax.peek();
+        let mut slot = cell.borrow_mut();
+        let name = l.name().to_string();
+        if slot.as_ref().is_none_or(|(n, _)| *n != name) {
+            *slot = l.session().map(|s| (name, s));
+        }
+        let (_, sess) = slot.as_mut()?;
+        sess.update(&src);
+        if src.len() > SYNTAX_FOLD_MAX_BYTES {
+            return None;
+        }
+        let fc = syntax_folds.peek();
+        let mut fc = fc.borrow_mut();
+        if fc.0 != sess.version() || fc.1.is_none() {
+            let r = sess.fold_ranges();
+            *fc = (sess.version(), Some(Rc::new(r)));
+        }
+        fc.1.clone().filter(|r| !r.is_empty())
+    });
+    let li = {
+        let cell = line_cache.peek();
+        let mut lc = cell.borrow_mut();
+        lc.sync(&src);
+        lc.set_syntax_regions(syntax_regions.as_ref());
+        lc.sync(&src)
+    };
     let cl = li.line_of(&src, pcc);
     let cc = li.col_of(&src, pcc);
     let line_count = li.line_count();
@@ -892,7 +928,13 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             return byte_at(text, row.min(nlines - 1), xcol);
         }
         let clens: Vec<usize> = text.split('\n').map(|l| l.chars().count()).collect();
-        let regions = crate::fold::foldable(text);
+        let regions = line_cache
+            .peek()
+            .borrow_mut()
+            .sync(text)
+            .regions()
+            .as_ref()
+            .clone();
         let map = crate::fold::DisplayMap::new(nlines, &fset, &regions, &clens, wrap_cols, &[]);
         let r = map.row_at(row);
         let col = (r.start + xcol).min(clens.get(r.line).copied().unwrap_or(0));
@@ -971,7 +1013,6 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             *slot = l.session().map(|s| (name, s));
         }
         let (_, sess) = slot.as_mut()?;
-        sess.update(&src);
         const MARGIN: usize = 50;
         let lo = li.line_start_of(first_line.saturating_sub(MARGIN));
         let hi_line = (last_line + MARGIN).min(line_count.saturating_sub(1));

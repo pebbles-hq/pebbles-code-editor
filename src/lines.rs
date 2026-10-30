@@ -152,6 +152,9 @@ pub(crate) struct LineIndex {
     indents: Vec<Option<usize>>,
     markers: Vec<i8>,
     regions: Rc<Vec<(usize, usize)>>,
+    /// Parser-derived (syntax) regions merged with the marker regions, when the language
+    /// has an incremental parser; they replace the indentation regions. Cleared on edit.
+    syntax: Option<Rc<Vec<(usize, usize)>>>,
     max_cols: usize,
     len: usize,
 }
@@ -177,6 +180,7 @@ impl LineIndex {
             indents,
             markers,
             regions,
+            syntax: None,
             max_cols,
             len: src.len(),
         }
@@ -192,11 +196,11 @@ impl LineIndex {
     }
     /// The foldable regions (same as `fold::foldable`).
     pub(crate) fn regions(&self) -> &Rc<Vec<(usize, usize)>> {
-        &self.regions
+        self.syntax.as_ref().unwrap_or(&self.regions)
     }
     /// Whether `line` heads a foldable region.
     pub(crate) fn is_fold_head(&self, line: usize) -> bool {
-        self.regions.binary_search_by_key(&line, |r| r.0).is_ok()
+        self.regions().binary_search_by_key(&line, |r| r.0).is_ok()
     }
     /// The widest line, in chars.
     pub(crate) fn max_cols(&self) -> usize {
@@ -263,6 +267,30 @@ impl Default for LineCache {
 }
 
 impl LineCache {
+    /// Install parser-derived fold regions for the CURRENT text (merged with `#region`
+    /// markers), or `None` to fall back to indentation regions.
+    pub(crate) fn set_syntax_regions(&mut self, regions: Option<&Rc<Vec<(usize, usize)>>>) {
+        let same = match (&self.index.syntax, regions) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+            _ => false,
+        };
+        if same {
+            return;
+        }
+        let idx = Rc::make_mut(&mut self.index);
+        idx.syntax = regions.map(|r| {
+            let none: Vec<Option<usize>> = Vec::new();
+            let mut merged: Vec<(usize, usize)> = r.to_vec();
+            let marks = regions_with_markers(&none, &idx.markers);
+            merged.retain(|x| !marks.iter().any(|m| m.0 == x.0));
+            merged.extend(marks);
+            merged.sort_unstable();
+            merged.dedup_by_key(|x| x.0);
+            Rc::new(merged)
+        });
+    }
+
     /// Bring the index up to date with `new` and return it. Unchanged text is free (one
     /// compare); otherwise only the lines between the first and last differing byte are
     /// re-scanned.
@@ -271,6 +299,9 @@ impl LineCache {
             return self.index.clone();
         }
         let old = std::mem::take(&mut self.text);
+        if self.index.syntax.is_some() {
+            Rc::make_mut(&mut self.index).syntax = None;
+        }
         let (ob, nb) = (old.as_bytes(), new.as_bytes());
         let p = common_prefix(ob, nb);
         let s = common_suffix(ob, nb, ob.len().min(nb.len()) - p);
