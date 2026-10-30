@@ -276,6 +276,12 @@ commands! {
     GoToSymbol => "workbench.action.gotoSymbol", "Go to Symbol in Editor...", ["Ctrl+Shift+O"];
     /// Go to a symbol in the workspace (the palette's `#` mode, through the service).
     ShowAllSymbols => "workbench.action.showAllSymbols", "Go to Symbol in Workspace...", ["Ctrl+T"];
+    /// Show the call hierarchy of the symbol at the caret (inline peek tree).
+    ShowCallHierarchy => "references-view.showCallHierarchy", "Show Call Hierarchy", ["Shift+Alt+H"];
+    /// Show the type hierarchy of the symbol at the caret.
+    ShowTypeHierarchy => "references-view.showTypeHierarchy", "Show Type Hierarchy", [];
+    /// Flip the open hierarchy: incoming / outgoing calls, supertypes / subtypes.
+    ToggleHierarchyDirection => "references-view.toggleDirection", "Toggle Hierarchy Direction", [];
     /// Toggle the language service's inlay hints.
     ToggleInlayHints => "editor.action.toggleInlayHints", "Toggle Inlay Hints", [];
     /// Toggle the language service's code lenses.

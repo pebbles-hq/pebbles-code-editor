@@ -17,6 +17,7 @@ mod decor;
 mod diffview;
 mod extensions;
 mod gutter;
+mod hierarchy;
 mod inlay;
 mod lsp;
 mod minimap;
@@ -724,7 +725,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 return true;
             }
             // The peek view takes Up/Down/Enter/Escape while open.
-            if lsp_k.peek_key(&k) {
+            if lsp_k.peek_key(&k) || lsp_k.hier_key(&k) {
                 return true;
             }
             // Any key closes the hover (Escape is consumed by it).
@@ -1574,6 +1575,12 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 widget: w,
             });
         }
+    }
+    // The call / type hierarchy peek.
+    if let Some(b) = lsp_ctl.hier_block(&p.theme, eff_fs * p.lh)
+        && b.line < line_count
+    {
+        block_widgets.push(b);
     }
     // The problem peek (F8 / Shift+F8) below the problem's line.
     if let Some(b) = lsp_ctl.problem_block(&p.theme, eff_fs, eff_fs * p.lh, &src, &diags)

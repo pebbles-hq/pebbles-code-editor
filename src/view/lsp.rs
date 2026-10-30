@@ -149,6 +149,7 @@ pub(crate) struct Store {
     pub(crate) lens_gate: RequestGate,
     pub(crate) lens_ver: Cell<Option<u64>>,
     pub(crate) select_gate: RequestGate,
+    pub(crate) hier_gate: RequestGate,
     last_doc: RefCell<Option<Rope>>,
 }
 
@@ -196,6 +197,8 @@ pub(crate) struct Hooks {
     pub(crate) lenses: Signal<Rc<Vec<lsp::CodeLens>>>,
     /// The code-lens toggle.
     pub(crate) lens_on: Signal<Option<bool>>,
+    /// The call / type hierarchy peek.
+    pub(crate) hier: Signal<Option<crate::view::hierarchy::HierView>>,
 }
 
 /// Create the hook signals (call unconditionally, once per render).
@@ -228,6 +231,7 @@ pub(crate) fn hooks() -> Hooks {
         inlay_on: create_signal(None),
         lenses: create_signal(Rc::new(Vec::new())),
         lens_on: create_signal(None),
+        hier: create_signal(None),
         crumb_open: create_signal(None),
         crumb_menu: crate::view::extensions::Palette {
             open: create_signal(false),

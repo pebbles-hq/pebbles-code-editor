@@ -59,9 +59,78 @@ struct Fake {
     /// Selection-range chains (innermost first, the same for every position); `None` declines.
     sel_ranges: RefCell<Option<Vec<Range>>>,
     sel_positions: RefCell<Vec<Vec<Position>>>,
+    /// Hierarchy items asked about (incoming / outgoing / supertypes / subtypes).
+    hier_asked: RefCell<Vec<String>>,
+}
+
+fn item(name: &str, uri: &str, line: u32) -> CallHierarchyItem {
+    CallHierarchyItem {
+        name: name.into(),
+        kind: SymbolKind::Function,
+        detail: None,
+        uri: uri.into(),
+        range: rng(line, 0, line + 1, 0),
+        selection_range: rng(line, 3, line, 3 + name.len() as u32),
+        data: None,
+    }
 }
 
 impl LanguageService for Fake {
+    fn prepare_call_hierarchy(
+        &self,
+        _d: &DocRef,
+        _p: Position,
+        reply: Reply<Vec<CallHierarchyItem>>,
+    ) -> bool {
+        reply(vec![item("main", "file:///w/main.rs", 0)]);
+        true
+    }
+    fn incoming_calls(
+        &self,
+        it: &CallHierarchyItem,
+        reply: Reply<Vec<CallHierarchyIncomingCall>>,
+    ) -> bool {
+        self.hier_asked.borrow_mut().push(format!("in:{}", it.name));
+        reply(match it.name.as_str() {
+            "main" => vec![CallHierarchyIncomingCall {
+                from: item("run", "file:///w/run.rs", 4),
+                from_ranges: vec![rng(5, 4, 5, 8), rng(6, 4, 6, 8)],
+            }],
+            _ => vec![],
+        });
+        true
+    }
+    fn outgoing_calls(
+        &self,
+        it: &CallHierarchyItem,
+        reply: Reply<Vec<CallHierarchyOutgoingCall>>,
+    ) -> bool {
+        self.hier_asked
+            .borrow_mut()
+            .push(format!("out:{}", it.name));
+        reply(vec![CallHierarchyOutgoingCall {
+            to: item("helper", "file:///w/main.rs", 2),
+            from_ranges: vec![rng(0, 12, 0, 18)],
+        }]);
+        true
+    }
+    fn prepare_type_hierarchy(
+        &self,
+        _d: &DocRef,
+        _p: Position,
+        reply: Reply<Vec<TypeHierarchyItem>>,
+    ) -> bool {
+        reply(vec![item("Dog", "file:///w/main.rs", 0)]);
+        true
+    }
+    fn supertypes(&self, _i: &TypeHierarchyItem, reply: Reply<Vec<TypeHierarchyItem>>) -> bool {
+        reply(vec![item("Animal", "file:///w/animal.rs", 1)]);
+        true
+    }
+    fn subtypes(&self, _i: &TypeHierarchyItem, reply: Reply<Vec<TypeHierarchyItem>>) -> bool {
+        reply(vec![item("Puppy", "file:///w/puppy.rs", 1)]);
+        true
+    }
     fn selection_range(
         &self,
         _doc: &DocRef,
@@ -1482,4 +1551,60 @@ fn caret_at(h: &mut Harness, col: usize) {
             extend: false,
         });
     }
+}
+
+#[test]
+fn call_and_type_hierarchy_peek_expands_navigates_and_toggles_direction() {
+    let fake = Rc::new(Fake::default());
+    let (mut h, _code) = mount(
+        "fn main() { helper(); }\n\nfn helper() {}\n",
+        fake.clone(),
+        |e| e,
+    );
+    h.press("Shift+Alt+H");
+    h.frames(2);
+    assert!(h.find_text("Incoming Calls"));
+    assert!(h.find_text("Hierarchy main"));
+    assert!(
+        h.find_text("Hierarchy run"),
+        "root expanded with its callers"
+    );
+    assert_eq!(*fake.hier_asked.borrow(), vec!["in:main".to_string()]);
+    // Down selects the caller, Right loads its own callers, Enter reveals it via the host.
+    h.key(KeyInput::Move {
+        motion: Motion::Down,
+        extend: false,
+    });
+    h.key(KeyInput::Move {
+        motion: Motion::Right,
+        extend: false,
+    });
+    h.frames(1);
+    assert_eq!(
+        fake.hier_asked.borrow().last().map(String::as_str),
+        Some("in:run")
+    );
+    h.key(KeyInput::Enter);
+    h.frames(1);
+    let opened = fake.opened.borrow().last().cloned().unwrap();
+    assert_eq!(opened.uri, "file:///w/run.rs");
+    assert_eq!(opened.range.start, Position::new(4, 3));
+    assert!(!h.find_text("Incoming Calls"), "closed after navigating");
+    // The direction toggles to outgoing calls.
+    h.press("Shift+Alt+H");
+    h.frames(2);
+    tap_label(&mut h, "Show Outgoing Calls");
+    h.frames(1);
+    assert!(h.find_text("Outgoing Calls"));
+    assert!(h.find_text("Hierarchy helper"));
+    h.key(KeyInput::Escape);
+    h.frames(1);
+    assert!(!h.find_text("Outgoing Calls"));
+    // Type hierarchy: supertypes, then subtypes.
+    run_palette(&mut h, "Show Type Hierarchy");
+    assert!(h.find_text("Supertypes"));
+    assert!(h.find_text("Hierarchy Animal"));
+    tap_label(&mut h, "Show Subtypes");
+    h.frames(1);
+    assert!(h.find_text("Hierarchy Puppy"));
 }
