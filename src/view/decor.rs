@@ -45,6 +45,28 @@ pub(crate) fn occurrences(f: &Frame, layers: &mut Vec<AnyWidget>) {
     if !p.is_empty() {
         return;
     }
+    // The language service's highlights: write accesses stronger than reads / text.
+    if let Some(list) = &f.doc_highlights {
+        use crate::language::DocumentHighlightKind as K;
+        for &(a, b, kind) in list {
+            if a >= b || b > f.src.len() {
+                continue;
+            }
+            let line = f.li.line_of(f.src, a);
+            if !f.line_visible(line) {
+                continue;
+            }
+            let color = match kind {
+                K::Write => with_alpha(f.theme.accent, 0.28),
+                K::Read => with_alpha(f.theme.gutter_active_fg, 0.2),
+                K::Text => with_alpha(f.theme.gutter_active_fg, 0.12),
+            };
+            let (x, y) = f.xy(line, f.li.col_of(f.src, a));
+            let w = f.src[a..b].chars().take_while(|&c| c != '\n').count() as f64 * f.advance;
+            layers.push(rect(x, y, w, f.line_px, color));
+        }
+        return;
+    }
     let (a, b) = crate::geometry::word_at(f.src, p.head);
     if b <= a {
         return;

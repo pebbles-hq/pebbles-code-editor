@@ -25,6 +25,12 @@ struct Fake {
     /// Other documents' text (for peek previews).
     files: RefCell<Vec<(String, String)>>,
     opened: RefCell<Vec<Location>>,
+    refs: RefCell<Vec<Location>>,
+    /// Host references view: `Some(shown)` records the call and answers it.
+    refs_view: RefCell<Option<Vec<(Location, Vec<Location>)>>>,
+    /// Document highlights; `None` declines the request.
+    highlights: RefCell<Option<Vec<DocumentHighlight>>>,
+    hl_requests: RefCell<Vec<Position>>,
 }
 
 impl LanguageService for Fake {
@@ -39,6 +45,41 @@ impl LanguageService for Fake {
     fn implementation(&self, _doc: &DocRef, _pos: Position, reply: Reply<Vec<Location>>) -> bool {
         reply(self.impls.borrow().clone());
         true
+    }
+    fn references(
+        &self,
+        _doc: &DocRef,
+        _pos: Position,
+        include_declaration: bool,
+        reply: Reply<Vec<Location>>,
+    ) -> bool {
+        assert!(include_declaration);
+        reply(self.refs.borrow().clone());
+        true
+    }
+    fn show_references(&self, origin: &Location, locations: &[Location]) -> bool {
+        match &mut *self.refs_view.borrow_mut() {
+            Some(v) => {
+                v.push((origin.clone(), locations.to_vec()));
+                true
+            }
+            None => false,
+        }
+    }
+    fn document_highlight(
+        &self,
+        _doc: &DocRef,
+        pos: Position,
+        reply: Reply<Vec<DocumentHighlight>>,
+    ) -> bool {
+        self.hl_requests.borrow_mut().push(pos);
+        match self.highlights.borrow().clone() {
+            Some(v) => {
+                reply(v);
+                true
+            }
+            None => false,
+        }
     }
     fn read_text(&self, uri: &str) -> Option<String> {
         self.files
@@ -373,5 +414,84 @@ fn ctrl_hover_underlines_through_the_service_and_ctrl_click_navigates() {
         code.get(),
         "Xalpha beta\n",
         "Ctrl+click went to the definition"
+    );
+}
+
+#[test]
+fn references_peek_and_host_view() {
+    let fake = Rc::new(Fake::default());
+    *fake.refs.borrow_mut() = vec![
+        loc("file:///w/main.rs", 0, 0),
+        loc("file:///w/main.rs", 2, 0),
+        loc("file:///w/lib.rs", 1, 4),
+    ];
+    let (mut h, _code) = mount("foo();\nbar();\nfoo();\n", fake.clone(), |e| e);
+    h.press("Shift+F12");
+    h.frames(2);
+    assert!(h.find_text("References"));
+    assert!(h.find_text("3 results"));
+    h.key(KeyInput::Escape);
+    // Shift+Alt+F12 hands them to the host's references view (no peek)...
+    *fake.refs_view.borrow_mut() = Some(Vec::new());
+    h.press("Shift+Alt+F12");
+    h.frames(1);
+    {
+        let shown = fake.refs_view.borrow();
+        let shown = shown.as_ref().unwrap();
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].0.uri, "file:///w/main.rs");
+        assert_eq!(shown[0].1.len(), 3);
+    }
+    assert!(!h.find_text("3 results"));
+    // ...or falls back to the peek when the host has no such view.
+    *fake.refs_view.borrow_mut() = None;
+    h.press("Shift+Alt+F12");
+    h.frames(1);
+    assert!(h.find_text("3 results"));
+}
+
+#[test]
+fn document_highlights_follow_the_caret_with_word_fallback() {
+    let text = "foo x foo y foo\n";
+    let count = |hl: Option<Vec<DocumentHighlight>>| {
+        let fake = Rc::new(Fake::default());
+        *fake.highlights.borrow_mut() = hl;
+        let (mut h, _code) = mount(text, fake.clone(), |e| e);
+        h.key(KeyInput::Move {
+            motion: Motion::Right,
+            extend: false,
+        });
+        h.frames(2);
+        assert_eq!(
+            fake.hl_requests.borrow().last(),
+            Some(&Position::new(0, 1)),
+            "requested at the moved caret"
+        );
+        h.render_node_count()
+    };
+    let r = |a: u32| Range::new(Position::new(0, a), Position::new(0, a + 3));
+    let all = count(Some(vec![
+        DocumentHighlight {
+            range: r(0),
+            kind: DocumentHighlightKind::Write,
+        },
+        DocumentHighlight {
+            range: r(6),
+            kind: DocumentHighlightKind::Read,
+        },
+        DocumentHighlight {
+            range: r(12),
+            kind: DocumentHighlightKind::Text,
+        },
+    ]));
+    let one = count(Some(vec![DocumentHighlight {
+        range: r(0),
+        kind: DocumentHighlightKind::Write,
+    }]));
+    let fallback = count(None);
+    assert!(all > one, "service highlights drawn ({all} vs {one})");
+    assert!(
+        fallback > one,
+        "declined: the word occurrences are drawn ({fallback})"
     );
 }

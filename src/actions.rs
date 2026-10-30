@@ -252,6 +252,10 @@ commands! {
     PeekDefinition => "editor.action.peekDefinition", "Peek Definition", ["Alt+F12"];
     /// Peek the implementations inline.
     PeekImplementation => "editor.action.peekImplementation", "Peek Implementations", ["Ctrl+Shift+F12"];
+    /// Find all references to the symbol at the caret (inline peek).
+    FindReferences => "editor.action.referenceSearch.trigger", "Peek References", ["Shift+F12"];
+    /// Find all references and show them in the host's references view.
+    ShowReferences => "references-view.findReferences", "Find All References", ["Shift+Alt+F12"];
     /// Show signature help (parameter hints) for the call at the caret.
     TriggerParameterHints => "editor.action.triggerParameterHints", "Trigger Parameter Hints", ["Ctrl+Shift+Space"];
 }

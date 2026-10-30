@@ -94,6 +94,9 @@ pub(crate) struct Store {
     pub(crate) sig_gate: RequestGate,
     pub(crate) nav_gate: RequestGate,
     pub(crate) link_gate: RequestGate,
+    pub(crate) hl_gate: RequestGate,
+    /// The (caret, version) of the last document-highlight request.
+    hl_at: Cell<Option<(usize, u64)>>,
     /// Hover replies per (byte, document version).
     pub(crate) hover_cache: RefCell<HashMap<(usize, u64), Option<lsp::Hover>>>,
     ver: Cell<u64>,
@@ -110,6 +113,8 @@ pub(crate) struct Hooks {
     pub(crate) peek: Signal<Option<PeekView>>,
     /// The Ctrl+hover link: the word range with a definition under the pointer.
     pub(crate) link: Signal<Option<(usize, usize)>>,
+    /// The service's document highlights for the caret (`None` = use the word fallback).
+    pub(crate) highlights: Signal<Option<Vec<(usize, usize, lsp::DocumentHighlightKind)>>>,
     pub(crate) store: Signal<Rc<Store>>,
 }
 
@@ -121,6 +126,7 @@ pub(crate) fn hooks() -> Hooks {
         sig: create_signal(None),
         peek: create_signal(None),
         link: create_signal(None),
+        highlights: create_signal(None),
         store: create_signal(Rc::new(Store::default())),
     }
 }
@@ -967,6 +973,85 @@ impl Lsp {
             height,
             widget: panel.into_widget(),
         })
+    }
+
+    /// Shift+Alt+F12: find references and hand them to the host's references view; the
+    /// inline peek is the fallback when the host does not show them.
+    pub(crate) fn show_references(&self) -> bool {
+        let Some(svc) = self.svc.clone() else {
+            return false;
+        };
+        let head = self.state.peek().primary().head;
+        let (line, origin) = {
+            let text = self.state.peek().text();
+            let p = lsp::byte_to_position(&text, head);
+            (
+                crate::geometry::line_of(&text, head),
+                lsp::Location {
+                    uri: self.uri.to_string(),
+                    range: lsp::Range::new(p, p),
+                },
+            )
+        };
+        let me = self.clone();
+        let reply = self.guard(&self.store.nav_gate, move |locs: Vec<lsp::Location>| {
+            if locs.is_empty() {
+                return;
+            }
+            let shown = me
+                .svc
+                .as_ref()
+                .is_some_and(|s| s.show_references(&origin, &locs));
+            if !shown {
+                me.show_locations(Nav::References.title(), locs, true, line);
+            }
+        });
+        self.with_doc(|doc, text| {
+            svc.references(doc, lsp::byte_to_position(text, head), true, reply)
+        })
+    }
+
+    /// Ask for the document highlights at the caret (when it moved or the text changed).
+    /// A declined request falls back to the word-occurrence highlight.
+    pub(crate) fn request_highlights(&self) {
+        let st = self.state.peek();
+        let head = st.primary().head;
+        let key = (head, self.version());
+        if self.store.hl_at.get() == Some(key) {
+            return;
+        }
+        self.store.hl_at.set(Some(key));
+        let hl = self.h.highlights;
+        let Some(svc) = self.svc.clone() else {
+            return;
+        };
+        if st.selection.is_multi() || !st.primary().is_empty() {
+            if hl.peek().is_some() {
+                hl.set(None);
+            }
+            return;
+        }
+        let me = self.clone();
+        let reply = self.guard(
+            &self.store.hl_gate,
+            move |v: Vec<lsp::DocumentHighlight>| {
+                let text = me.state.peek().text();
+                let list: Vec<_> = v
+                    .iter()
+                    .map(|h| {
+                        let (a, b) = lsp::range_to_bytes(&text, h.range);
+                        (a, b, h.kind)
+                    })
+                    .collect();
+                hl.set(Some(list));
+            },
+        );
+        let asked = self.with_doc(|doc, text| {
+            svc.document_highlight(doc, lsp::byte_to_position(text, head), reply)
+        });
+        if !asked && hl.peek().is_some() {
+            hl.set(None);
+        }
     }
 
     /// Ctrl/Cmd+hover over `byte`: ask for its definition and underline the word when there

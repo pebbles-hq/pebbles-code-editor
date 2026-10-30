@@ -92,6 +92,9 @@ pub(crate) struct Frame<'a> {
     pub(crate) focused: bool,
     /// Highlight other occurrences of the selected word (off while the find bar is open).
     pub(crate) highlight_word_matches: bool,
+    /// The language service's highlights of the symbol under the caret (read / write /
+    /// text); `None` uses the word-occurrence fallback.
+    pub(crate) doc_highlights: Option<Vec<(usize, usize, crate::language::DocumentHighlightKind)>>,
     /// Long-line mode: the rendered column window `[c0, c1)` (see `LONG_LINE`).
     pub(crate) hclip: Option<(usize, usize)>,
     /// Gutter markers contributed by extensions (rendered as colored dots).
@@ -374,6 +377,17 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         let st = state.get();
         cursor_hist.peek().borrow_mut().observe(&st);
     });
+    // Document highlights follow the caret (service-driven; the word fallback otherwise).
+    {
+        let l = lsp_ctl.clone();
+        let on = p.occurrences_highlight;
+        create_effect(move || {
+            let _ = state.get();
+            if on {
+                l.request_highlights();
+            }
+        });
+    }
 
     // Two-way binding + collaboration stream. On any `code` change: if it came from OUTSIDE
     // (a remote/loader edit — `code != state.text()`), rebuild the doc and REMAP the carets
@@ -1905,6 +1919,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         color_picker,
         change_peek,
         highlight_word_matches: find.open.get() == 0,
+        doc_highlights: lsp_ctl.h.highlights.get(),
         hclip,
         ext_gutter_marks: &ext_gutter_marks,
         disp: disp.as_ref(),
