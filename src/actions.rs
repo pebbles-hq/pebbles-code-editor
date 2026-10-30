@@ -218,6 +218,12 @@ commands! {
     NextChange => "editor.action.dirtydiff.next", "Go to Next Change", ["Alt+F3"];
     /// Go to the previous change.
     PreviousChange => "editor.action.dirtydiff.previous", "Go to Previous Change", ["Shift+Alt+F3"];
+    /// Show the next inline suggestion.
+    InlineSuggestNext => "editor.action.inlineSuggest.showNext", "Show Next Inline Suggestion", ["Alt+]"];
+    /// Show the previous inline suggestion.
+    InlineSuggestPrevious => "editor.action.inlineSuggest.showPrevious", "Show Previous Inline Suggestion", ["Alt+["];
+    /// Request an inline suggestion at the caret.
+    InlineSuggestTrigger => "editor.action.inlineSuggest.trigger", "Trigger Inline Suggestion", ["Alt+\\"];
     /// Expand the selection to the enclosing syntax node.
     ExpandSelection => "editor.action.smartSelect.expand", "Expand Selection", ["Shift+Alt+Right"];
     /// Shrink the selection back.

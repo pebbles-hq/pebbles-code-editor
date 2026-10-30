@@ -1604,3 +1604,106 @@ fn tab_occupies_one_grid_column() {
         "\\tx is {width} px wide, expected 2 columns (24 px)"
     );
 }
+
+#[test]
+fn word_based_suggestions_complete_from_document_words() {
+    // No completion provider: words already in the document are suggested (VS Code
+    // `editor.wordBasedSuggestions`); Enter accepts the top match.
+    let (mut ui, mut env, code) = harness("\nalphabet beta");
+    key(&mut ui, &mut env, KeyInput::Insert("a".to_string()));
+    key(&mut ui, &mut env, KeyInput::Insert("l".to_string()));
+    key(&mut ui, &mut env, KeyInput::Enter);
+    assert_eq!(code.get(), "alphabet\nalphabet beta");
+}
+
+#[test]
+fn word_based_suggestions_can_be_disabled() {
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from("\nalphabet"));
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(
+        View::new(
+            white(),
+            code_editor(code).word_based_suggestions(false).autofocus(),
+        )
+        .into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    key(&mut ui, &mut env, KeyInput::Insert("a".to_string()));
+    key(&mut ui, &mut env, KeyInput::Enter);
+    assert_eq!(code.get(), "a\n\nalphabet");
+}
+
+fn inline_harness() -> (Ui, TextEnv, Signal<String>) {
+    use std::rc::Rc;
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    pebbles::core::keyboard::set_modifiers(false, false, false, false);
+    let code = create_root_signal(String::new());
+    let provider: pebbles_code_editor::InlineSuggestionProvider =
+        Rc::new(|src: &str, at: usize| {
+            if src[..at].ends_with("fn") {
+                vec![" main() {}".to_string(), " test() {}".to_string()]
+            } else {
+                vec![]
+            }
+        });
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(
+        View::new(
+            white(),
+            code_editor(code)
+                .word_based_suggestions(false)
+                .inline_suggestions(provider)
+                .autofocus(),
+        )
+        .into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    (ui, env, code)
+}
+
+fn chord(ui: &mut Ui, env: &mut TextEnv, c: &str) {
+    let ev = pebbles::core::shortcuts::chord_event(c).expect("chord");
+    ui.dispatch_key_event(&ev);
+    ui.rebuild_if_dirty();
+    ui.layout(env, Size::new(600.0, 400.0));
+}
+
+#[test]
+fn inline_suggestion_tab_accepts_ghost_text() {
+    let (mut ui, mut env, code) = inline_harness();
+    let before = ui.element_count();
+    key(&mut ui, &mut env, KeyInput::Insert("f".to_string()));
+    key(&mut ui, &mut env, KeyInput::Insert("n".to_string()));
+    assert!(ui.element_count() > before, "ghost text rendered");
+    key(&mut ui, &mut env, KeyInput::Indent);
+    assert_eq!(code.get(), "fn main() {}");
+}
+
+#[test]
+fn inline_suggestion_cycles_and_escape_dismisses() {
+    let (mut ui, mut env, code) = inline_harness();
+    key(&mut ui, &mut env, KeyInput::Insert("f".to_string()));
+    key(&mut ui, &mut env, KeyInput::Insert("n".to_string()));
+    chord(&mut ui, &mut env, "Alt+]");
+    key(&mut ui, &mut env, KeyInput::Indent);
+    assert_eq!(code.get(), "fn test() {}");
+    // Escape dismisses: Tab then indents instead of accepting.
+    let (mut ui, mut env, code) = inline_harness();
+    key(&mut ui, &mut env, KeyInput::Insert("f".to_string()));
+    key(&mut ui, &mut env, KeyInput::Insert("n".to_string()));
+    key(&mut ui, &mut env, KeyInput::Escape);
+    key(&mut ui, &mut env, KeyInput::Indent);
+    assert_ne!(code.get(), "fn main() {}");
+    assert!(code.get().starts_with("fn"));
+}

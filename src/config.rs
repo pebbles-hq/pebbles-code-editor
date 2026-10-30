@@ -108,6 +108,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         keymap: crate::keymap::Keymap::default(),
         document_id: None,
         controller: None,
+        suggest_preview: false,
         inline_suggestions: None,
         line_numbers: LineNumbers::On,
         smooth_caret: false,
@@ -189,6 +190,7 @@ pub struct CodeEditor {
     smooth_caret: bool,
     line_numbers: LineNumbers,
     inline_suggestions: Option<crate::providers::InlineSuggestionProvider>,
+    suggest_preview: bool,
 }
 
 /// Fired after each change with the minimal [`Edit`] delta; `remote` is true when the change
@@ -540,6 +542,11 @@ impl CodeEditor {
     pub fn change_baseline(self, base: Signal<String>) -> Self {
         self.diff_base(base)
     }
+    /// Preview the selected completion inline as ghost text at the caret (VS Code `editor.suggest.preview`, default off).
+    pub fn suggest_preview(mut self, v: bool) -> Self {
+        self.suggest_preview = v;
+        self
+    }
 }
 
 impl IntoWidget for CodeEditor {
@@ -620,6 +627,7 @@ pub(crate) struct Props {
     pub(crate) smooth_caret: bool,
     pub(crate) line_numbers: LineNumbers,
     pub(crate) inline_suggestions: Option<crate::providers::InlineSuggestionProvider>,
+    pub(crate) suggest_preview: bool,
 }
 
 impl From<CodeEditor> for Props {
@@ -704,6 +712,7 @@ impl From<CodeEditor> for Props {
             diff_base: e.diff_base,
             keymap: e.keymap,
             controller: e.controller,
+            suggest_preview: e.suggest_preview,
             inline_suggestions: e.inline_suggestions,
             line_numbers: e.line_numbers,
             smooth_caret: e.smooth_caret,

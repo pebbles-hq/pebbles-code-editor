@@ -77,6 +77,8 @@ pub(crate) struct Env {
     pub(crate) diff_base: Option<Signal<String>>,
     pub(crate) ops: Rc<OpCfg>,
     pub(crate) line_cache: Signal<Rc<RefCell<crate::lines::LineCache>>>,
+    pub(crate) inline: Signal<Option<crate::view::InlineGhost>>,
+    pub(crate) inline_provider: Option<crate::providers::InlineSuggestionProvider>,
 }
 
 /// Whether `cmd` edits the document (vetoed in read-only mode).
@@ -423,6 +425,29 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
             if let Some(l) = target {
                 select(Selections::single(Selection::caret(line_start_of(&src, l))));
             }
+            true
+        }
+        C::InlineSuggestNext | C::InlineSuggestPrevious => {
+            let Some(mut g) = env.inline.peek() else {
+                return false;
+            };
+            let n = g.items.len().max(1);
+            g.idx = if cmd == C::InlineSuggestNext {
+                (g.idx + 1) % n
+            } else {
+                (g.idx + n - 1) % n
+            };
+            env.inline.set(Some(g));
+            true
+        }
+        C::InlineSuggestTrigger => {
+            let Some(ip) = &env.inline_provider else {
+                return false;
+            };
+            let at = sels.primary().head;
+            let items: Vec<String> = ip(&src, at).into_iter().filter(|s| !s.is_empty()).collect();
+            env.inline
+                .set((!items.is_empty()).then_some(crate::view::InlineGhost { at, items, idx: 0 }));
             true
         }
         C::ExpandSelection => {

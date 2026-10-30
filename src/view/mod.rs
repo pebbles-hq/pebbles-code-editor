@@ -137,6 +137,14 @@ impl Frame<'_> {
     }
 }
 
+/// A visible inline suggestion: candidates for caret byte `at`, showing `items[idx]`.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct InlineGhost {
+    pub(crate) at: usize,
+    pub(crate) items: Vec<String>,
+    pub(crate) idx: usize,
+}
+
 /// Smooth-caret animation state: glide from `from` to `target` starting at `start`.
 pub(crate) struct CaretAnim {
     from: (f64, f64),
@@ -251,6 +259,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let color_picker = create_signal::<Option<usize>>(None);
     let change_peek = create_signal::<Option<usize>>(None); // open change-peek hunk index
     let mid_anchor = create_signal::<Option<Offset>>(None); // middle-button box-select anchor
+    let inline = create_signal::<Option<InlineGhost>>(None); // inline (ghost-text) suggestion
     let color_draft = create_signal(String::new()); // colour-picker hex field
     let zoom = create_signal(0.0_f64);
     let cursor_hist = create_signal(Rc::new(RefCell::new(commands::CursorHistory::default())));
@@ -397,6 +406,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         diff_base: p.diff_base,
         ops: ops_cfg,
         line_cache,
+        inline,
+        inline_provider: p.inline_suggestions.clone(),
     };
     // Raw-key command resolver: runs BEFORE the framework maps the key to an editing intent,
     // so editor chords (Alt+Up, Ctrl+Shift+K, Ctrl+K Ctrl+0, …) win over caret motion.
@@ -445,7 +456,12 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     }
     {
         let cfg = cfg.clone();
-        let provider = p.completion.clone();
+        // The completion source: the host provider, else word-based suggestions.
+        let provider = p
+            .completion
+            .clone()
+            .or_else(|| p.word_based_suggestions.then(completion::word_provider));
+        let inline_provider = p.inline_suggestions.clone();
         let definition = p.definition.clone();
         let format = p.format.clone();
         let sig_provider = p.signature.clone();
@@ -478,6 +494,35 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             }
             if !preedit.peek().is_empty() {
                 preedit.set(String::new());
+            }
+            // Inline (ghost-text) suggestion: Tab accepts, Escape dismisses, Alt+] / Alt+[
+            // (raw commands) cycle; any other key closes it and may re-query below.
+            if let Some(ghost) = inline.peek()
+                && completion.peek().is_none()
+            {
+                match k {
+                    KeyInput::Indent if !read_only => {
+                        let text = ghost.items.get(ghost.idx).cloned().unwrap_or_default();
+                        inline.set(None);
+                        let at = state.peek().primary().head;
+                        dispatch(
+                            state,
+                            history,
+                            code,
+                            Transaction::change_and_select(
+                                ChangeSet::insert(at, text.clone()),
+                                Selections::single(Selection::caret(at + text.len())),
+                            ),
+                            Coalesce::Never,
+                        );
+                        return true;
+                    }
+                    KeyInput::Escape => {
+                        inline.set(None);
+                        return true;
+                    }
+                    _ => inline.set(None),
+                }
             }
             if completion.peek().is_some() {
                 match k {
@@ -611,6 +656,11 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             // Decide the completion follow-up from the key *before* it's consumed: typing an
             // identifier char re-queries; backspace re-queries only while open; anything else
             // dismisses.
+            let follow_kind = match &k {
+                KeyInput::Insert(_) => 1,
+                KeyInput::Backspace | KeyInput::Delete => 2,
+                _ => 0,
+            };
             let follow = match &k {
                 KeyInput::Insert(s)
                     if !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_') =>
@@ -774,6 +824,18 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 } else {
                     completion.set(None);
                 }
+            }
+            // Re-query inline suggestions after a typing edit.
+            if let Some(ip) = &inline_provider
+                && matches!(follow_kind, 1 | 2)
+            {
+                let cur = state.peek();
+                let at = cur.primary().head;
+                let items: Vec<String> = ip(&cur.text(), at)
+                    .into_iter()
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                inline.set((!items.is_empty()).then_some(InlineGhost { at, items, idx: 0 }));
             }
             match (sig_action, &sig_provider) {
                 (1, Some(sp)) => {
@@ -1012,6 +1074,43 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         .flat_map(|f| f(&block_snap))
         .filter(|b| b.line < line_count)
         .collect();
+    // Ghost text: the inline suggestion (or the completion preview) at the caret. The first
+    // line overlays at the caret; further lines reserve rows below (a block widget).
+    let ghost_text: Option<String> = match (inline.get(), completion.get()) {
+        (Some(g), None) if g.at == primary.head => g.items.get(g.idx).cloned(),
+        (_, Some(sess)) if p.suggest_preview => sess.items.get(sess.selected).and_then(|it| {
+            let typed = &src[sess.anchor.min(primary.head)..primary.head];
+            it.insert
+                .strip_prefix(typed)
+                .filter(|rest| !rest.is_empty() && !rest.contains('$'))
+                .map(str::to_string)
+        }),
+        _ => None,
+    };
+    if let Some(g) = &ghost_text {
+        let extra: Vec<&str> = g.split('\n').skip(1).collect();
+        if !extra.is_empty() {
+            let caret_line = li.line_of(&src, primary.head);
+            let lines: Vec<AnyWidget> = extra
+                .iter()
+                .map(|l| {
+                    text(l.to_string())
+                        .size(eff_fs as f32)
+                        .line_height(p.lh as f32)
+                        .font_family(p.font_family.clone())
+                        .color(p.theme.ghost_text)
+                        .into_widget()
+                })
+                .collect();
+            block_widgets.push(crate::extensions::BlockWidget {
+                line: caret_line,
+                height: extra.len() as f64 * eff_fs * p.lh,
+                widget: column(lines)
+                    .main_axis_size(MainAxisSize::Min)
+                    .into_widget(),
+            });
+        }
+    }
     // The change peek (gutter change-bar click) is an internal block widget.
     if let (Some(d), Some(base)) = (line_diff.as_ref(), p.diff_base) {
         let cx = peek::PeekCtx {
@@ -1410,6 +1509,27 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let ruler_matches = search_matches.clone();
     let mut layers = overlays::build(&frame);
     decor::color_picker(&frame, &mut layers, state, history, code, color_draft);
+    if let Some(g) = &ghost_text {
+        let first = g.split('\n').next().unwrap_or("");
+        let l = li.line_of(&src, primary.head);
+        if !first.is_empty() && frame.line_visible(l) {
+            let (x, y) = frame.xy(l, li.col_of(&src, primary.head));
+            layers.push(
+                Positioned::new(
+                    text_rich(vec![
+                        span(first.to_string())
+                            .size(fs as f32)
+                            .font_family(p.font_family.as_str())
+                            .color(theme.ghost_text),
+                    ])
+                    .line_height(lh as f32),
+                )
+                .left(x)
+                .top(y)
+                .into_widget(),
+            );
+        }
+    }
     if !ext_decos.is_empty() {
         layers.extend(extensions::decoration_layers(&frame, &ext_decos));
     }
