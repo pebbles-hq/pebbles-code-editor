@@ -10,10 +10,13 @@
 mod chrome;
 mod commands;
 mod completion;
+mod decor;
 mod extensions;
 mod gutter;
 mod minimap;
 mod overlays;
+mod peek;
+mod ruler;
 mod search;
 mod sticky;
 
@@ -69,6 +72,16 @@ pub(crate) struct Frame<'a> {
     pub(crate) first_line: usize,
     pub(crate) last_line: usize,
     pub(crate) caret_on: bool,
+    /// Blink phase `0..1` (drives smooth / phase / expand blinking).
+    pub(crate) caret_phase: f64,
+    /// Smooth-caret offset of the primary caret from its true spot (px).
+    pub(crate) caret_offset: (f64, f64),
+    /// Linked editing applies to this language.
+    pub(crate) linked_editing_active: bool,
+    /// The colour-picker anchor (byte of the colour literal being edited).
+    pub(crate) color_picker: Signal<Option<usize>>,
+    /// The open change-peek hunk (gutter change bars set it).
+    pub(crate) change_peek: Signal<Option<usize>>,
     /// Whether the editor currently holds keyboard focus (drives active vs inactive selection).
     pub(crate) focused: bool,
     /// Highlight other occurrences of the selected word (off while the find bar is open).
@@ -121,6 +134,38 @@ impl Frame<'_> {
     /// Whether `line` is inside the rendered window AND not collapsed by a fold.
     pub(crate) fn line_visible(&self, line: usize) -> bool {
         (self.first_line..=self.last_line).contains(&line) && !self.disp.is_hidden(line)
+    }
+}
+
+/// Smooth-caret animation state: glide from `from` to `target` starting at `start`.
+pub(crate) struct CaretAnim {
+    from: (f64, f64),
+    target: (f64, f64),
+    start: std::time::Instant,
+}
+
+impl Default for CaretAnim {
+    fn default() -> Self {
+        CaretAnim {
+            from: (0.0, 0.0),
+            target: (f64::NAN, f64::NAN),
+            start: std::time::Instant::now(),
+        }
+    }
+}
+
+impl CaretAnim {
+    const DURATION: f64 = 0.08;
+    fn shown(&self, now: std::time::Instant) -> (f64, f64) {
+        if self.target.0.is_nan() {
+            return self.from;
+        }
+        let t = (now.duration_since(self.start).as_secs_f64() / Self::DURATION).min(1.0);
+        let e = 1.0 - (1.0 - t) * (1.0 - t); // ease-out
+        (
+            self.from.0 + (self.target.0 - self.from.0) * e,
+            self.from.1 + (self.target.1 - self.from.1) * e,
+        )
     }
 }
 
@@ -202,6 +247,11 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // (Ctrl+= / Ctrl+-), soft-undo cursor history (Ctrl+U), smart-select stack, and the
     // pending strokes of a multi-stroke chord (Ctrl+K …).
     let wrap_override = create_signal::<Option<bool>>(None);
+    let caret_anim = create_signal(Rc::new(RefCell::new(CaretAnim::default())));
+    let color_picker = create_signal::<Option<usize>>(None);
+    let change_peek = create_signal::<Option<usize>>(None); // open change-peek hunk index
+    let mid_anchor = create_signal::<Option<Offset>>(None); // middle-button box-select anchor
+    let color_draft = create_signal(String::new()); // colour-picker hex field
     let zoom = create_signal(0.0_f64);
     let cursor_hist = create_signal(Rc::new(RefCell::new(commands::CursorHistory::default())));
     let smart_stack = create_signal::<Vec<Selections>>(Vec::new());
@@ -404,6 +454,13 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         // instead of moving focus. When the completion popup is open it intercepts navigation
         // keys; otherwise keys flow to the command engine, and typing re-queries completion.
         let keymap = p.keymap.clone();
+        let linked_on = p.linked_editing
+            && p.language.as_ref().is_some_and(|l| {
+                matches!(
+                    l.name(),
+                    "HTML" | "XML" | "TSX" | "JavaScript" | "Markdown" | "Vue" | "Svelte"
+                )
+            });
         let handle = Rc::new(move |k: KeyInput, via_binding: bool| -> bool {
             // A built-in whose default chord the host disabled is declined, so the key
             // bubbles to the app's shortcuts. (A host `Keymap::bind` chord still runs it.)
@@ -658,7 +715,59 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     }
                 }
             }
-            apply_key(k, state, history, code, goal, read_only, &cfg);
+            // Linked editing (auto-rename tag): an edit inside a markup tag name is applied to
+            // its partner tag's name too, as one transaction (a temporary second cursor).
+            let linked_pair = if linked_on && !read_only {
+                let st = state.peek();
+                let sels = st.selection.clamped(&st.doc);
+                let pr = sels.primary();
+                let name_key = match &k {
+                    KeyInput::Insert(t) => t
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | ':' | '.')),
+                    KeyInput::Backspace | KeyInput::Delete => true,
+                    _ => false,
+                };
+                if name_key && !sels.is_multi() {
+                    let text = st.text();
+                    crate::scan_text::linked_tag_names(&text, pr.min())
+                        .filter(|(here, _)| here.0 <= pr.min() && pr.max() <= here.1)
+                        .filter(|(here, _)| {
+                            !(matches!(k, KeyInput::Backspace)
+                                && pr.is_empty()
+                                && pr.head == here.0)
+                        })
+                        .filter(|(here, _)| {
+                            !(matches!(k, KeyInput::Delete) && pr.is_empty() && pr.head == here.1)
+                        })
+                        .map(|(here, other)| {
+                            let d = |p: usize| other.0 + (p - here.0);
+                            (pr, Selection::range(d(pr.anchor), d(pr.head)))
+                        })
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            if let Some((pr, mirror)) = linked_pair {
+                let cur = state.peek();
+                let primary_first = pr.min() < mirror.min();
+                let two = Selections::new(vec![pr, mirror], if primary_first { 0 } else { 1 });
+                state.set(EditorState {
+                    doc: cur.doc.clone(),
+                    selection: two,
+                });
+                apply_key(k, state, history, code, goal, read_only, &cfg);
+                let after = state.peek();
+                let keep = after.selection.primary();
+                state.set(EditorState {
+                    doc: after.doc.clone(),
+                    selection: Selections::single(keep),
+                });
+            } else {
+                apply_key(k, state, history, code, goal, read_only, &cfg);
+            }
             if let Some(pv) = &provider {
                 if follow == 1 {
                     completion::trigger(state, completion, pv, false);
@@ -896,13 +1005,33 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         caret: primary.head,
         selection: (primary.min(), primary.max()),
     };
-    let block_widgets: Vec<crate::extensions::BlockWidget> = p
+    let mut block_widgets: Vec<crate::extensions::BlockWidget> = p
         .extensions
         .iter()
         .filter_map(|e| e.block.as_ref())
         .flat_map(|f| f(&block_snap))
         .filter(|b| b.line < line_count)
         .collect();
+    // The change peek (gutter change-bar click) is an internal block widget.
+    if let (Some(d), Some(base)) = (line_diff.as_ref(), p.diff_base) {
+        let cx = peek::PeekCtx {
+            peek: change_peek,
+            state,
+            history,
+            code,
+            base,
+            on_stage: p.on_stage_hunk.clone(),
+            theme: &p.theme,
+            fs: eff_fs,
+            line_px: eff_fs * p.lh,
+            font_family: &p.font_family,
+        };
+        if let Some(b) = peek::block(&cx, d, &src) {
+            if b.line < line_count {
+                block_widgets.push(b);
+            }
+        }
+    }
     let mut block_gaps = Vec::new();
     if !block_widgets.is_empty() {
         block_gaps = vec![0usize; line_count];
@@ -965,7 +1094,35 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         let _ = state.get();
         blink_stamp.set(blink_loop.peek());
     });
-    let caret_on = focused && (blink_loop.get() - blink_stamp.get()).rem_euclid(1.0) < 0.5;
+    let caret_phase = (blink_loop.get() - blink_stamp.get()).rem_euclid(1.0);
+    let caret_on =
+        focused && (p.cursor_blinking != crate::config::CursorBlinking::Blink || caret_phase < 0.5);
+    // Smooth caret animation: the primary caret glides from its previous spot over ~80 ms.
+    let caret_offset = {
+        let cell = caret_anim.peek();
+        let mut a = cell.borrow_mut();
+        let (tx, ty) = {
+            let l = li.line_of(&src, pcc);
+            let c = li.col_of(&src, pcc);
+            let (row, xcol) = disp.place(l, c);
+            (pad_l + xcol as f64 * advance, pad_t + row as f64 * line_px)
+        };
+        if !p.smooth_caret {
+            (0.0, 0.0)
+        } else {
+            let now = std::time::Instant::now();
+            if a.target != (tx, ty) {
+                let shown = a.shown(now);
+                *a = CaretAnim {
+                    from: shown,
+                    target: (tx, ty),
+                    start: now,
+                };
+            }
+            let (sx, sy) = a.shown(now);
+            (sx - tx, sy - ty)
+        }
+    };
 
     // ---- autoscroll ----
     // Keep the primary caret in view on every edit/move (only when a fixed height makes the
@@ -1208,7 +1365,18 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         first_line,
         last_line,
         caret_on,
+        caret_phase,
+        caret_offset,
         focused,
+        linked_editing_active: p.linked_editing
+            && p.language.as_ref().is_some_and(|l| {
+                matches!(
+                    l.name(),
+                    "HTML" | "XML" | "TSX" | "JavaScript" | "Markdown" | "Vue" | "Svelte"
+                )
+            }),
+        color_picker,
+        change_peek,
         highlight_word_matches: find.open.get() == 0,
         hclip,
         ext_gutter_marks: &ext_gutter_marks,
@@ -1239,7 +1407,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         Vec::new()
     };
 
+    let ruler_matches = search_matches.clone();
     let mut layers = overlays::build(&frame);
+    decor::color_picker(&frame, &mut layers, state, history, code, color_draft);
     if !ext_decos.is_empty() {
         layers.extend(extensions::decoration_layers(&frame, &ext_decos));
     }
@@ -1524,7 +1694,14 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     } else {
         p.height.map(|_| {
             let max_cols = li.max_cols();
-            pad_l * 2.0 + max_cols as f64 * advance
+            // At least the viewport width, so clicks (and block widgets such as the change
+            // peek) right of short lines still land on the content.
+            let avail = bounds.width()
+                - gutter_w_est
+                - if p.overview_ruler { 14.0 } else { 0.0 }
+                - if p.minimap { 84.0 } else { 0.0 }
+                - 1.0;
+            (pad_l * 2.0 + max_cols as f64 * advance).max(avail)
         })
     };
     let content_box = match content_w {
@@ -1534,6 +1711,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // Per-plugin pointer handlers: notify each extension's on_click with the byte under the
     // press. (The editor's own hit-testing above already placed the caret.)
     let click_exts = p.extensions.clone();
+    let click_link = p.on_open_link.clone();
+    let click_def = p.definition.clone();
     let click_area = GestureDetector::new(content_box)
         .on_pointer_down(action_event(move |e| {
             focus.request_focus();
@@ -1551,6 +1730,34 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             } else {
                 text_drag.set(None);
                 hit(e.position, shift, alt);
+            }
+            // Ctrl/Cmd+click: open a link under the pointer, else go to definition.
+            let ctrl = pebbles::core::keyboard::ctrl_held() || pebbles::core::keyboard::meta_held();
+            if ctrl && !shift && !alt {
+                let cur = state.peek();
+                let text = cur.text();
+                let b = p2b(&text, e.position);
+                let ls = line_start(&text, b);
+                let line = &text[ls..line_end(&text, ls)];
+                let link = crate::scan_text::find_links(line)
+                    .into_iter()
+                    .find(|&(a, z)| ls + a <= b && b <= ls + z)
+                    .map(|(a, z)| line[a..z].to_string());
+                match (link, &click_link) {
+                    (Some(url), Some(open)) => open(&url),
+                    _ => {
+                        if let Some(dp) = &click_def
+                            && let Some(target) = dp(&text, b)
+                        {
+                            state.set(EditorState {
+                                doc: cur.doc.clone(),
+                                selection: Selections::single(Selection::caret(
+                                    target.min(cur.len()),
+                                )),
+                            });
+                        }
+                    }
+                }
             }
             if click_exts.iter().any(|x| x.on_click.is_some()) {
                 let cur = state.peek();
@@ -1609,6 +1816,24 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 drop_byte.set(None);
             }
         }))
+        // Middle-button drag: column (box) selection, as VS Code.
+        .on_tertiary_tap_down(action_event(move |e| mid_anchor.set(Some(e.position))))
+        .on_tertiary_tap_up(action_event(move |e| {
+            if let Some(a) = mid_anchor.peek() {
+                column_select(a, e.position);
+                mid_anchor.set(None);
+            }
+        }))
+        // Ctrl+wheel: font zoom (VS Code `editor.mouseWheelZoom`).
+        .on_pointer_signal(move |ev| {
+            if pebbles::core::keyboard::ctrl_held() {
+                let z = zoom.peek() + if ev.delta.y < 0.0 { 1.0 } else { -1.0 };
+                zoom.set(z.clamp(-8.0, 40.0));
+                true
+            } else {
+                false
+            }
+        })
         .on_double_tap(action_event(move |e| word_select(e.position)))
         .on_triple_tap(action_event(move |e| line_select(e.position)))
         .on_hover_move(action_event(move |e| hover_pos.set(Some(e.position))))
@@ -1695,11 +1920,24 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 })
                 .into_widget();
             let scroller = sticky::overlay(&frame, scroller, scroll_top);
-            let inner: AnyWidget = match minimap::panel(&frame, scroll, scroll_top) {
-                Some(mm) => row(children![expanded(scroller), mm])
+            let mut parts: Vec<AnyWidget> = vec![expanded(scroller).into_widget()];
+            if let Some(mm) = minimap::panel(&frame, scroll.clone(), scroll_top) {
+                parts.push(mm);
+            }
+            if let Some(r) = ruler::panel(
+                &frame,
+                ruler::marks(&frame, &ruler_matches),
+                scroll.clone(),
+                scroll_top,
+            ) {
+                parts.push(r);
+            }
+            let inner: AnyWidget = if parts.len() == 1 {
+                parts.pop().unwrap_or_else(|| container().into_widget())
+            } else {
+                row(parts)
                     .cross_axis_alignment(CrossAxisAlignment::Start)
-                    .into_widget(),
-                None => scroller,
+                    .into_widget()
             };
             container()
                 .height(h)

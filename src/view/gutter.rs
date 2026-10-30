@@ -42,6 +42,44 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
             continue;
         }
         let y = f.y_of(n);
+        // Git change bar at the far left (VS Code dirty diff): added / modified bars,
+        // a deleted-lines marker; click to peek the change.
+        if let Some(d) = f.diff
+            && let Some(kind) = d.kind_at(n)
+        {
+            let hunk = d
+                .hunks
+                .iter()
+                .position(|h| h.cur.contains(&n) || (h.cur.is_empty() && h.cur.start == n))
+                .unwrap_or(0);
+            let (color, h, top) = match kind {
+                crate::diff::ChangeKind::Added => (f.theme.change_added, f.line_px, y),
+                crate::diff::ChangeKind::Modified => (f.theme.change_modified, f.line_px, y),
+                crate::diff::ChangeKind::Deleted => (f.theme.change_deleted, 4.0, y - 2.0),
+            };
+            let peek = f.change_peek;
+            nums.push(
+                Positioned::new(
+                    GestureDetector::new(
+                        container()
+                            .width(3.0)
+                            .height(h)
+                            .decoration(BoxDecoration::new().color(color)),
+                    )
+                    .cursor(Cursor::Pointer)
+                    .on_tap(action(move || {
+                        peek.set(if peek.peek() == Some(hunk) {
+                            None
+                        } else {
+                            Some(hunk)
+                        });
+                    })),
+                )
+                .left(0.0)
+                .top(top.max(0.0))
+                .into_widget(),
+            );
+        }
         if let Some(&color) = marks.get(&n) {
             nums.push(
                 Positioned::new(
@@ -51,7 +89,7 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
                             .radius(BorderRadius::all(2.0)),
                     ),
                 )
-                .left(2.0)
+                .left(5.0)
                 .top(y + f.line_px * 0.2)
                 .into_widget(),
             );
@@ -98,15 +136,22 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
                     .height(f.line_px)
                     .alignment(Alignment::CENTER_RIGHT)
                     .child(
-                        text((n + 1).to_string())
-                            .size(f.fs as f32)
-                            .line_height(f.lh as f32)
-                            .font_family(f.font_family)
-                            .color(if active {
-                                f.theme.gutter_active_fg
-                            } else {
-                                f.theme.gutter_fg
-                            }),
+                        text(match f.p.line_numbers {
+                            crate::config::LineNumbers::On => (n + 1).to_string(),
+                            crate::config::LineNumbers::Relative if n == f.cl => {
+                                (n + 1).to_string()
+                            }
+                            crate::config::LineNumbers::Relative => n.abs_diff(f.cl).to_string(),
+                            crate::config::LineNumbers::Off => String::new(),
+                        })
+                        .size(f.fs as f32)
+                        .line_height(f.lh as f32)
+                        .font_family(f.font_family)
+                        .color(if active {
+                            f.theme.gutter_active_fg
+                        } else {
+                            f.theme.gutter_fg
+                        }),
                     ),
             )
             .left(0.0)

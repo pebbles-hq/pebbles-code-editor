@@ -47,6 +47,10 @@ tree-sitter-yaml = { version = "0.7", optional = true }
 tree-sitter-bash = { version = "0.25", optional = true }
 tree-sitter-sequel = { version = "0.3", optional = true }
 
+[dev-dependencies]
+# Headless harness (semantics queries, chord presses through the shell's key routing).
+pebbles-testing = { git = "https://github.com/pebbles-hq/pebbles", rev = "45440d6b344e9ee36743ff548e9c382c8cb157e6" }
+
 [features]
 default = ["tree-sitter"]
 tree-sitter = [

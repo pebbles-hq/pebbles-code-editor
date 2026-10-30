@@ -60,14 +60,16 @@ mod geometry;
 mod highlight;
 mod lines;
 mod ops;
+mod scan_text;
 mod search;
 mod theme;
 mod view;
 
 pub use actions::EditorCommand;
 pub use collab::Edit;
-pub use config::{CodeEditor, code_editor};
+pub use config::{CodeEditor, CursorBlinking, CursorStyle, LineNumbers, code_editor};
 pub use controller::{EditorController, editor_controller};
+pub use diff::{ChangeHunk, ChangeKind};
 pub use edit::{ChangeSet, EditorState, History, Selection, Selections, Transaction};
 pub use extensions::{
     BlockWidget, Command, ConfigPatch, DecoStyle, Decoration, EditContext, Extension, GutterMark,
@@ -78,8 +80,8 @@ pub use lang::{Language, SyntaxNode, SyntaxSession, Token, TokenKind, bracket_tr
 pub use ops::{LineEnding, detect_indentation, detect_line_ending};
 pub use providers::{
     CompletionContext, CompletionItem, CompletionKind, CompletionProvider, DefinitionProvider,
-    Diagnostic, Diagnostics, FormatProvider, Hover, HoverProvider, InlayHint, InlayHints, Severity,
-    SignatureHelp, SignatureProvider,
+    Diagnostic, Diagnostics, FormatProvider, Hover, HoverProvider, InlayHint, InlayHints,
+    InlineSuggestionProvider, Severity, SignatureHelp, SignatureProvider,
 };
 pub use theme::{EditorTheme, HighlightStyle, TokenStyle};
 

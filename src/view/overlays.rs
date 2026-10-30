@@ -20,10 +20,18 @@ pub(crate) fn build(f: &Frame) -> Vec<AnyWidget> {
     current_line(f, &mut layers);
     rulers(f, &mut layers);
     indent_guides(f, &mut layers);
+    crate::view::decor::active_indent_guide(f, &mut layers);
+    crate::view::decor::bracket_pair_guide(f, &mut layers);
     word_occurrences(f, &mut layers);
+    crate::view::decor::occurrences(f, &mut layers);
     selection(f, &mut layers);
     bracket_match(f, &mut layers);
+    crate::view::decor::linked_editing(f, &mut layers);
     code_text(f, &mut layers);
+    crate::view::decor::unicode(f, &mut layers);
+    crate::view::decor::links(f, &mut layers);
+    crate::view::decor::color_swatches(f, &mut layers, f.color_picker);
+    crate::view::decor::fold_badges(f, &mut layers);
     inlay_hints(f, &mut layers);
     diagnostics(f, &mut layers);
     whitespace(f, &mut layers);
@@ -110,7 +118,8 @@ fn indent_guides(f: &Frame, layers: &mut Vec<AnyWidget>) {
             .chars()
             .take_while(|c| *c == ' ' || *c == '\t')
             .count();
-        let mut gcol = step;
+        // VS Code draws a guide at every indent level the line is indented past, from column 0.
+        let mut gcol = 0;
         while gcol < lead {
             layers.push(
                 Positioned::new(
@@ -434,25 +443,74 @@ fn inlay_hints(f: &Frame, layers: &mut Vec<AnyWidget>) {
 
 /// One blinking caret per cursor head in the visible window (all in phase).
 fn carets(f: &Frame, layers: &mut Vec<AnyWidget>) {
+    use crate::config::{CursorBlinking as B, CursorStyle as S};
     if !f.caret_on {
         return;
     }
+    // Blink shaping: smooth/phase fade the alpha, expand scales the height.
+    let wave = 0.5 + 0.5 * (std::f64::consts::TAU * f.caret_phase).cos();
+    let (alpha, scale) = match f.p.cursor_blinking {
+        B::Smooth => (wave, 1.0),
+        B::Phase => (wave * wave * (3.0 - 2.0 * wave), 1.0),
+        B::Expand => (1.0, 0.2 + 0.8 * wave),
+        _ => (1.0, 1.0),
+    };
+    let color = with_alpha(f.theme.caret, alpha as f32);
+    let primary = f.sels.primary();
     for r in f.sels.ranges() {
         let l = f.li.line_of(f.src, r.head);
         if !f.line_visible(l) {
             continue;
         }
-        let (x, y) = f.xy(l, f.li.col_of(f.src, r.head));
+        let (mut x, mut y) = f.xy(l, f.li.col_of(f.src, r.head));
+        if *r == primary {
+            x += f.caret_offset.0;
+            y += f.caret_offset.1;
+        }
+        let h = f.fs * 1.15;
+        let (w, hh, top, deco) = match f.p.cursor_style {
+            S::Line => (
+                2.0,
+                h * scale,
+                y + (f.line_px - h * scale) / 2.0,
+                BoxDecoration::new().color(color),
+            ),
+            S::LineThin => (
+                1.0,
+                h * scale,
+                y + (f.line_px - h * scale) / 2.0,
+                BoxDecoration::new().color(color),
+            ),
+            S::Block => (
+                f.advance,
+                f.line_px * scale,
+                y + f.line_px * (1.0 - scale) / 2.0,
+                BoxDecoration::new().color(with_alpha(f.theme.caret, (alpha * 0.55) as f32)),
+            ),
+            S::BlockOutline => (
+                f.advance,
+                f.line_px * scale,
+                y + f.line_px * (1.0 - scale) / 2.0,
+                BoxDecoration::new().border(Border::new(color, 1.0)),
+            ),
+            S::Underline => (
+                f.advance,
+                2.0,
+                y + f.line_px - 2.0,
+                BoxDecoration::new().color(color),
+            ),
+            S::UnderlineThin => (
+                f.advance,
+                1.0,
+                y + f.line_px - 1.0,
+                BoxDecoration::new().color(color),
+            ),
+        };
         layers.push(
-            Positioned::new(
-                container()
-                    .width(2.0)
-                    .height(f.fs * 1.15)
-                    .decoration(BoxDecoration::new().color(f.theme.caret)),
-            )
-            .left(x)
-            .top(y + (f.line_px - f.fs * 1.15) / 2.0)
-            .into_widget(),
+            Positioned::new(container().width(w).height(hh).decoration(deco))
+                .left(x)
+                .top(top)
+                .into_widget(),
         );
     }
 }

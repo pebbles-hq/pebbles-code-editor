@@ -15,6 +15,52 @@ use crate::providers::{
 use crate::theme::EditorTheme;
 use crate::view::render_editor;
 
+/// Caret shape (VS Code `editor.cursorStyle`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CursorStyle {
+    /// A 2px vertical bar (default).
+    #[default]
+    Line,
+    /// A 1px vertical bar.
+    LineThin,
+    /// A filled cell.
+    Block,
+    /// An outlined cell.
+    BlockOutline,
+    /// A thick underline.
+    Underline,
+    /// A thin underline.
+    UnderlineThin,
+}
+
+/// Caret blinking (VS Code `editor.cursorBlinking`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CursorBlinking {
+    /// On/off (default).
+    #[default]
+    Blink,
+    /// Fade in and out.
+    Smooth,
+    /// Eased fade.
+    Phase,
+    /// Grow/shrink vertically.
+    Expand,
+    /// No blinking.
+    Solid,
+}
+
+/// Line-number style (VS Code `editor.lineNumbers`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum LineNumbers {
+    /// Absolute line numbers (default).
+    #[default]
+    On,
+    /// Distance from the caret line (the caret line shows its absolute number).
+    Relative,
+    /// No line numbers (the gutter keeps fold arrows and markers).
+    Off,
+}
+
 /// Build a code editor bound to `code`. Configure fluently, then drop it into any tree.
 pub fn code_editor(code: Signal<String>) -> CodeEditor {
     CodeEditor {
@@ -62,6 +108,20 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         keymap: crate::keymap::Keymap::default(),
         document_id: None,
         controller: None,
+        inline_suggestions: None,
+        line_numbers: LineNumbers::On,
+        smooth_caret: false,
+        cursor_blinking: CursorBlinking::Blink,
+        cursor_style: CursorStyle::Line,
+        on_stage_hunk: None,
+        on_open_link: None,
+        word_based_suggestions: true,
+        overview_ruler: true,
+        linked_editing: true,
+        color_decorators: true,
+        unicode_highlight: true,
+        bracket_pair_guides: true,
+        occurrences_highlight: true,
         bracket_pair_colorization: true,
         detect_indentation: true,
     }
@@ -115,6 +175,20 @@ pub struct CodeEditor {
     controller: Option<crate::controller::EditorController>,
     detect_indentation: bool,
     bracket_pair_colorization: bool,
+    occurrences_highlight: bool,
+    bracket_pair_guides: bool,
+    unicode_highlight: bool,
+    color_decorators: bool,
+    linked_editing: bool,
+    overview_ruler: bool,
+    word_based_suggestions: bool,
+    on_open_link: Option<std::rc::Rc<dyn Fn(&str)>>,
+    on_stage_hunk: Option<std::rc::Rc<dyn Fn(&crate::diff::ChangeHunk, &str)>>,
+    cursor_style: CursorStyle,
+    cursor_blinking: CursorBlinking,
+    smooth_caret: bool,
+    line_numbers: LineNumbers,
+    inline_suggestions: Option<crate::providers::InlineSuggestionProvider>,
 }
 
 /// Fired after each change with the minimal [`Edit`] delta; `remote` is true when the change
@@ -390,6 +464,82 @@ impl CodeEditor {
         self.bracket_pair_colorization = v;
         self
     }
+    /// Highlight every occurrence of the word at the caret (VS Code `editor.occurrencesHighlight`, default on). A document-highlight provider replaces the textual match when wired.
+    pub fn occurrences_highlight(mut self, v: bool) -> Self {
+        self.occurrences_highlight = v;
+        self
+    }
+    /// Draw the bracket-pair guide of the pair enclosing the caret (VS Code `editor.guides.bracketPairs: active`, default on).
+    pub fn bracket_pair_guides(mut self, v: bool) -> Self {
+        self.bracket_pair_guides = v;
+        self
+    }
+    /// Box invisible / ambiguous Unicode characters and draw control characters as symbols (VS Code `editor.unicodeHighlight.*` + `renderControlCharacters`, default on).
+    pub fn unicode_highlight(mut self, v: bool) -> Self {
+        self.unicode_highlight = v;
+        self
+    }
+    /// Show a colour swatch (with a picker) before CSS colour literals (VS Code `editor.colorDecorators`, default on).
+    pub fn color_decorators(mut self, v: bool) -> Self {
+        self.color_decorators = v;
+        self
+    }
+    /// Edit a markup tag's opening and closing names together (VS Code `editor.linkedEditing` + auto-rename tag). Active for HTML / XML / JSX / TSX / Markdown / Vue / Svelte.
+    pub fn linked_editing(mut self, v: bool) -> Self {
+        self.linked_editing = v;
+        self
+    }
+    /// Show the overview ruler beside the scrollbar (cursor, selections, matches, diagnostics, changes) — fixed-height editors only.
+    pub fn overview_ruler(mut self, v: bool) -> Self {
+        self.overview_ruler = v;
+        self
+    }
+    /// Offer completion from words in the document when no completion provider is set (VS Code `editor.wordBasedSuggestions`, default on).
+    pub fn word_based_suggestions(mut self, v: bool) -> Self {
+        self.word_based_suggestions = v;
+        self
+    }
+    /// Open links: Ctrl/Cmd+click on a URL in the text calls `f(url)` (links are underlined while set).
+    pub fn on_open_link(mut self, f: impl Fn(&str) + 'static) -> Self {
+        self.on_open_link = Some(std::rc::Rc::new(f));
+        self
+    }
+    /// Show **Stage** in the change peek: `f(hunk, current_text_of_the_hunk_lines)` stages that change (the host runs e.g. `git apply --cached`).
+    pub fn on_stage_hunk(mut self, f: impl Fn(&crate::diff::ChangeHunk, &str) + 'static) -> Self {
+        self.on_stage_hunk = Some(std::rc::Rc::new(f));
+        self
+    }
+    /// Caret shape (VS Code `editor.cursorStyle`).
+    pub fn cursor_style(mut self, v: CursorStyle) -> Self {
+        self.cursor_style = v;
+        self
+    }
+    /// Caret blinking mode (VS Code `editor.cursorBlinking`).
+    pub fn cursor_blinking(mut self, v: CursorBlinking) -> Self {
+        self.cursor_blinking = v;
+        self
+    }
+    /// Animate the caret between positions (VS Code `editor.cursorSmoothCaretAnimation`).
+    pub fn smooth_caret(mut self, v: bool) -> Self {
+        self.smooth_caret = v;
+        self
+    }
+    /// Line-number style (VS Code `editor.lineNumbers`): absolute, relative to the caret, or off.
+    pub fn line_numbers(mut self, v: LineNumbers) -> Self {
+        self.line_numbers = v;
+        self
+    }
+    /// Inline (ghost-text) suggestions: `provider(text, caret)` returns candidate insertions shown greyed at the caret; Tab accepts, Esc dismisses, Alt+] / Alt+[ cycle.
+    pub fn inline_suggestions(mut self, p: crate::providers::InlineSuggestionProvider) -> Self {
+        self.inline_suggestions = Some(p);
+        self
+    }
+    /// The change baseline for the gutter change bars, peek, next/previous change and the
+    /// overview ruler (e.g. the file at `git show HEAD:path`). Alias of
+    /// [`diff_base`](Self::diff_base).
+    pub fn change_baseline(self, base: Signal<String>) -> Self {
+        self.diff_base(base)
+    }
 }
 
 impl IntoWidget for CodeEditor {
@@ -456,6 +606,20 @@ pub(crate) struct Props {
     pub(crate) controller: Option<crate::controller::EditorController>,
     pub(crate) detect_indentation: bool,
     pub(crate) bracket_pair_colorization: bool,
+    pub(crate) occurrences_highlight: bool,
+    pub(crate) bracket_pair_guides: bool,
+    pub(crate) unicode_highlight: bool,
+    pub(crate) color_decorators: bool,
+    pub(crate) linked_editing: bool,
+    pub(crate) overview_ruler: bool,
+    pub(crate) word_based_suggestions: bool,
+    pub(crate) on_open_link: Option<std::rc::Rc<dyn Fn(&str)>>,
+    pub(crate) on_stage_hunk: Option<std::rc::Rc<dyn Fn(&crate::diff::ChangeHunk, &str)>>,
+    pub(crate) cursor_style: CursorStyle,
+    pub(crate) cursor_blinking: CursorBlinking,
+    pub(crate) smooth_caret: bool,
+    pub(crate) line_numbers: LineNumbers,
+    pub(crate) inline_suggestions: Option<crate::providers::InlineSuggestionProvider>,
 }
 
 impl From<CodeEditor> for Props {
@@ -540,6 +704,20 @@ impl From<CodeEditor> for Props {
             diff_base: e.diff_base,
             keymap: e.keymap,
             controller: e.controller,
+            inline_suggestions: e.inline_suggestions,
+            line_numbers: e.line_numbers,
+            smooth_caret: e.smooth_caret,
+            cursor_blinking: e.cursor_blinking,
+            cursor_style: e.cursor_style,
+            on_stage_hunk: e.on_stage_hunk,
+            on_open_link: e.on_open_link,
+            word_based_suggestions: e.word_based_suggestions,
+            overview_ruler: e.overview_ruler,
+            linked_editing: e.linked_editing,
+            color_decorators: e.color_decorators,
+            unicode_highlight: e.unicode_highlight,
+            bracket_pair_guides: e.bracket_pair_guides,
+            occurrences_highlight: e.occurrences_highlight,
             bracket_pair_colorization: e.bracket_pair_colorization,
             detect_indentation: e.detect_indentation,
         }

@@ -260,6 +260,24 @@ pub struct EditorTheme {
     pub diff_added: Color,
     /// Inline-diff marker for a removed line.
     pub diff_removed: Color,
+    /// Gutter change bar: added lines (VS Code `editorGutter.addedBackground`).
+    pub change_added: Color,
+    /// Gutter change bar: modified lines (`editorGutter.modifiedBackground`).
+    pub change_modified: Color,
+    /// Gutter change marker: deleted lines (`editorGutter.deletedBackground`).
+    pub change_deleted: Color,
+    /// Overview-ruler cursor mark (`editorOverviewRuler.*` marks reuse the matching slots).
+    pub overview_cursor: Color,
+    /// Box drawn around invisible / ambiguous Unicode characters (`editorUnicodeHighlight.border`).
+    pub unicode_highlight: Color,
+    /// Bracket-pair guide lines (`editorBracketPairGuide.activeBackground1`).
+    pub bracket_guide: Color,
+    /// Ghost text of inline suggestions / suggestion preview (`editorGhostText.foreground`).
+    pub ghost_text: Color,
+    /// Background of the folded-region placeholder badge (`editor.foldPlaceholderForeground`).
+    pub fold_badge: Color,
+    /// Outline of linked-editing ranges (`editor.linkedEditingBackground`).
+    pub linked_editing: Color,
     /// The syntax palette (swappable independently of the chrome above).
     pub syntax: HighlightStyle,
     /// Base font size of the editor's own UI (status bar, find bar, command
@@ -337,6 +355,15 @@ impl EditorTheme {
             diag_hint: c(0x5D, 0x67, 0x7A),
             diff_added: a(0x6C, 0xD1, 0x8A, 0x22),
             diff_removed: a(0xE9, 0x6A, 0x6A, 0xC0),
+            change_added: a(0x2E, 0xA0, 0x43, 0xFF),
+            change_modified: a(0x00, 0x78, 0xD4, 0xFF),
+            change_deleted: a(0xF8, 0x51, 0x49, 0xFF),
+            overview_cursor: a(0xA0, 0xA0, 0xA0, 0xCC),
+            unicode_highlight: a(0xCD, 0x9D, 0x31, 0xFF),
+            bracket_guide: a(0xA0, 0xA0, 0xA0, 0x80),
+            ghost_text: a(0xFF, 0xFF, 0xFF, 0x56),
+            fold_badge: a(0x76, 0xB2, 0xF0, 0x33),
+            linked_editing: a(0xFF, 0x00, 0x00, 0x4D),
             syntax: HighlightStyle::dark(),
             ui_font_size: 12.5,
             ui_font_family: None,
@@ -377,6 +404,15 @@ impl EditorTheme {
             diag_hint: c(0x9A, 0xA1, 0xAD),
             diff_added: a(0x3E, 0x8A, 0x3E, 0x1F),
             diff_removed: a(0xC0, 0x3A, 0x4B, 0xB0),
+            change_added: a(0x2E, 0xA0, 0x43, 0xFF),
+            change_modified: a(0x00, 0x5F, 0xB8, 0xFF),
+            change_deleted: a(0xF8, 0x51, 0x49, 0xFF),
+            overview_cursor: a(0x60, 0x60, 0x60, 0xCC),
+            unicode_highlight: a(0xBF, 0x88, 0x03, 0xFF),
+            bracket_guide: a(0x60, 0x60, 0x60, 0x80),
+            ghost_text: a(0x00, 0x00, 0x00, 0x77),
+            fold_badge: a(0x24, 0x5F, 0xC2, 0x26),
+            linked_editing: a(0xFF, 0x00, 0x00, 0x30),
             syntax: HighlightStyle::light(),
             ui_font_size: 12.5,
             ui_font_family: None,
