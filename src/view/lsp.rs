@@ -189,6 +189,9 @@ pub(crate) fn hooks() -> Hooks {
     }
 }
 
+/// The host's link opener (`CodeEditor::on_open_link`).
+pub(crate) type LinkOpener = Rc<dyn Fn(&str)>;
+
 /// The language-service controller for one editor (cheap to clone).
 #[derive(Clone)]
 pub(crate) struct Lsp {
@@ -203,7 +206,7 @@ pub(crate) struct Lsp {
     pub(crate) hover_delay: f64,
     pub(crate) diag_old: Option<crate::providers::Diagnostics>,
     pub(crate) diag_lsp: Option<Signal<Vec<lsp::LspDiagnostic>>>,
-    pub(crate) on_open_link: Option<Rc<dyn Fn(&str)>>,
+    pub(crate) on_open_link: Option<LinkOpener>,
     /// The editor's focus (returned to after the rename box / preview closes).
     pub(crate) focus: pebbles::core::focus::FocusNode,
     pub(crate) read_only: bool,
@@ -711,9 +714,10 @@ impl Lsp {
         };
         match hl {
             Some((a, b)) => {
-                spans.push(base(&sig.label[..a]));
-                spans.push(base(&sig.label[a..b]).bold().underline().color(t.accent));
-                spans.push(base(&sig.label[b..]));
+                let part = |r: std::ops::Range<usize>| sig.label.get(r).unwrap_or_default();
+                spans.push(base(part(0..a)));
+                spans.push(base(part(a..b)).bold().underline().color(t.accent));
+                spans.push(base(part(b..sig.label.len())));
             }
             None => spans.push(base(&sig.label)),
         }
@@ -805,7 +809,11 @@ impl Lsp {
     ) {
         match locs.len() {
             0 => {}
-            1 if !peek => self.go_to(&locs[0]),
+            1 if !peek => {
+                if let Some(l) = locs.first() {
+                    self.go_to(l);
+                }
+            }
             _ => self.h.peek.set(Some(PeekView {
                 line,
                 title: title.to_string(),
@@ -914,9 +922,8 @@ impl Lsp {
         let mut preview: Vec<AnyWidget> = Vec::new();
         match self.text_of(&loc.uri) {
             Some(src) => {
-                let lines: Vec<&str> = src.split('\n').collect();
                 let first = (loc.range.start.line as usize).saturating_sub(2);
-                for n in first..(first + ROWS).min(lines.len()) {
+                for (n, line) in src.split('\n').enumerate().skip(first).take(ROWS) {
                     let target =
                         n >= loc.range.start.line as usize && n <= loc.range.end.line as usize;
                     let bg = if target {
@@ -939,7 +946,7 @@ impl Lsp {
                                                 .color(t.muted),
                                         )
                                         .into_widget(),
-                                    text(lines[n].to_string())
+                                    text(line.to_string())
                                         .size(fs as f32)
                                         .font_family(mono)
                                         .color(t.foreground)
@@ -1146,7 +1153,9 @@ impl Lsp {
                 .rposition(|d| d.from < head)
                 .unwrap_or(diags.len() - 1),
         };
-        let d = &diags[i];
+        let Some(d) = diags.get(i) else {
+            return false;
+        };
         let cur = self.state.peek();
         self.state.set(EditorState {
             doc: cur.doc.clone(),
@@ -1180,7 +1189,7 @@ impl Lsp {
         let i = diags
             .iter()
             .position(|d| d.from == at && d.d.message == msg)?;
-        let d = &diags[i];
+        let d = diags.get(i)?;
         let color = severity_color(t, d.d.severity());
         let (up, down, close) = (self.clone(), self.clone(), self.clone());
         let header = row(vec![
@@ -1421,9 +1430,8 @@ impl Lsp {
         let text = st.text();
         let p = st.primary();
         let (a, b) = if p.is_empty() {
-            let ls = text[..p.head].rfind('\n').map_or(0, |i| i + 1);
-            let le = text[p.head..].find('\n').map_or(text.len(), |i| p.head + i);
-            (ls, le)
+            let ls = crate::geometry::line_start(&text, p.head);
+            (ls, crate::geometry::line_end(&text, ls))
         } else {
             (p.min(), p.max())
         };
@@ -1680,12 +1688,15 @@ impl Lsp {
         let sig = self.h.rename_preview;
         for (i, (uri, edits)) in pv.edit.changes.iter().enumerate() {
             let file = uri.rsplit('/').next().unwrap_or(uri).to_string();
+            let accepted = pv.accepted.get(i).copied().unwrap_or(false);
             rows.push(
-                checkbox(pv.accepted[i])
+                checkbox(accepted)
                     .label(format!("{file} ({} edits)", edits.len()))
                     .on_changed(move |v| {
-                        if let Some(mut p) = sig.peek() {
-                            p.accepted[i] = v;
+                        if let Some(mut p) = sig.peek()
+                            && let Some(a) = p.accepted.get_mut(i)
+                        {
+                            *a = v;
                             sig.set(Some(p));
                         }
                     })
@@ -1697,7 +1708,7 @@ impl Lsp {
                     .as_deref()
                     .map(|s| {
                         let (a, b) = lsp::range_to_bytes(s, e.range);
-                        s[a..b].to_string()
+                        s.get(a..b).unwrap_or_default().to_string()
                     })
                     .unwrap_or_default();
                 rows.push(
@@ -1711,7 +1722,7 @@ impl Lsp {
                             ))
                             .size((t.ui_font_size) as f32)
                             .font_family(mono)
-                            .color(if pv.accepted[i] {
+                            .color(if accepted {
                                 t.foreground
                             } else {
                                 t.muted
@@ -1853,7 +1864,8 @@ pub(crate) fn param_range(label: &str, p: &lsp::ParameterLabel) -> Option<(usize
             // Search after the opening paren so a parameter named like the function matches
             // the parameter, not the name.
             let from = label.find('(').map_or(0, |i| i + 1);
-            label[from..]
+            label
+                .get(from..)?
                 .find(s.as_str())
                 .map(|i| (from + i, from + i + s.len()))
         }

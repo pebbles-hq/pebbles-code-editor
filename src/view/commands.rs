@@ -604,10 +604,10 @@ fn run_fold(cmd: C, env: &Env, src: &str, line: usize, sels: &Selections) {
             }
         }
         C::ToggleFold => {
-            if let Some(r) = at {
-                if !f.remove(&r.0) {
-                    f.insert(r.0);
-                }
+            if let Some(r) = at
+                && !f.remove(&r.0)
+            {
+                f.insert(r.0);
             }
         }
         C::FoldRecursively | C::UnfoldRecursively => {

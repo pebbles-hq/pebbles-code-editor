@@ -1236,7 +1236,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // focused (declined otherwise, so it falls through to other handlers / page scroll).
     for kb in p.extensions.iter().flat_map(|e| e.keys.iter()).cloned() {
         let key_exts = p.extensions.clone();
-        create_shortcut_if(&kb.chord.clone(), move || {
+        create_shortcut_if(&kb.chord, move || {
             if !focus.is_focused() {
                 return false;
             }
@@ -1508,10 +1508,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             line_px: eff_fs * p.lh,
             font_family: &p.font_family,
         };
-        if let Some(b) = peek::block(&cx, d, &src) {
-            if b.line < line_count {
-                block_widgets.push(b);
-            }
+        if let Some(b) = peek::block(&cx, d, &src)
+            && b.line < line_count
+        {
+            block_widgets.push(b);
         }
     }
     // The language-service peek (definitions / references) is an internal block widget.

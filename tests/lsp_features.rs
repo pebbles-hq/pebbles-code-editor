@@ -11,6 +11,9 @@ use pebbles_code_editor::code_editor;
 use pebbles_code_editor::language::*;
 use pebbles_testing::Harness;
 
+/// A references list the host was asked to show: (origin, locations).
+type Shown = (Location, Vec<Location>);
+
 type Pending<T> = RefCell<Vec<(Position, Reply<T>)>>;
 
 /// A language service whose replies are held until the test delivers them.
@@ -27,7 +30,7 @@ struct Fake {
     opened: RefCell<Vec<Location>>,
     refs: RefCell<Vec<Location>>,
     /// Host references view: `Some(shown)` records the call and answers it.
-    refs_view: RefCell<Option<Vec<(Location, Vec<Location>)>>>,
+    refs_view: RefCell<Option<Vec<Shown>>>,
     /// Document highlights; `None` declines the request.
     highlights: RefCell<Option<Vec<DocumentHighlight>>>,
     hl_requests: RefCell<Vec<Position>>,

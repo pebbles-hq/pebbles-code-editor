@@ -18,7 +18,7 @@ pub(crate) struct PeekCtx<'a> {
     pub(crate) history: Signal<Rc<RefCell<History>>>,
     pub(crate) code: Signal<String>,
     pub(crate) base: Signal<String>,
-    pub(crate) on_stage: Option<Rc<dyn Fn(&crate::diff::ChangeHunk, &str)>>,
+    pub(crate) on_stage: Option<crate::config::StageHunk>,
     pub(crate) theme: &'a crate::theme::EditorTheme,
     pub(crate) fs: f64,
     pub(crate) line_px: f64,

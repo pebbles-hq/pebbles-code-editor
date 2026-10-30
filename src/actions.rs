@@ -365,7 +365,7 @@ pub(crate) fn resolve(
     stroke: &Stroke,
 ) -> Resolved {
     let mut seq: Vec<Stroke> = pending.to_vec();
-    seq.push(stroke.clone());
+    seq.push(*stroke);
     if let Some((_, c)) = table.iter().find(|(k, _)| *k == seq) {
         return Resolved::Run(*c);
     }

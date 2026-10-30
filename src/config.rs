@@ -6,6 +6,11 @@
 use pebbles::prelude::*;
 
 use crate::ADVANCE_RATIO;
+
+/// The host's link opener (`CodeEditor::on_open_link`).
+pub(crate) type LinkOpener = std::rc::Rc<dyn Fn(&str)>;
+/// The host's stage-hunk callback (`CodeEditor::on_stage_hunk`).
+pub(crate) type StageHunk = std::rc::Rc<dyn Fn(&crate::diff::ChangeHunk, &str)>;
 use crate::extensions::Extension;
 use crate::lang::{Language, Token};
 use crate::providers::{
@@ -204,8 +209,8 @@ pub struct CodeEditor {
     linked_editing: bool,
     overview_ruler: bool,
     word_based_suggestions: bool,
-    on_open_link: Option<std::rc::Rc<dyn Fn(&str)>>,
-    on_stage_hunk: Option<std::rc::Rc<dyn Fn(&crate::diff::ChangeHunk, &str)>>,
+    on_open_link: Option<LinkOpener>,
+    on_stage_hunk: Option<StageHunk>,
     cursor_style: CursorStyle,
     cursor_blinking: CursorBlinking,
     smooth_caret: bool,
@@ -763,8 +768,8 @@ pub(crate) struct Props {
     pub(crate) linked_editing: bool,
     pub(crate) overview_ruler: bool,
     pub(crate) word_based_suggestions: bool,
-    pub(crate) on_open_link: Option<std::rc::Rc<dyn Fn(&str)>>,
-    pub(crate) on_stage_hunk: Option<std::rc::Rc<dyn Fn(&crate::diff::ChangeHunk, &str)>>,
+    pub(crate) on_open_link: Option<LinkOpener>,
+    pub(crate) on_stage_hunk: Option<StageHunk>,
     pub(crate) cursor_style: CursorStyle,
     pub(crate) cursor_blinking: CursorBlinking,
     pub(crate) smooth_caret: bool,

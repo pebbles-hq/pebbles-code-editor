@@ -11,6 +11,9 @@ use pebbles_code_editor::code_editor;
 use pebbles_code_editor::language::*;
 use pebbles_testing::Harness;
 
+/// Held `completionItem/resolve` requests.
+type Resolves = Rc<RefCell<Vec<(CompletionItem, Reply<CompletionItem>)>>>;
+
 type Pending = Rc<RefCell<Vec<(CompletionContext, Reply<Option<CompletionList>>)>>>;
 
 /// A language service whose completion replies are held until the test delivers them.
@@ -21,7 +24,7 @@ struct Lsp {
     incomplete: bool,
     commands: Rc<RefCell<Vec<String>>>,
     /// When set, `completionItem/resolve` is supported and its replies are held here.
-    resolves: Option<Rc<RefCell<Vec<(CompletionItem, Reply<CompletionItem>)>>>>,
+    resolves: Option<Resolves>,
 }
 
 impl LanguageService for Lsp {
