@@ -24,6 +24,7 @@ mod minimap;
 mod overlays;
 mod peek;
 mod ruler;
+mod scrollbar;
 mod search;
 mod semantic;
 mod smart_select;
@@ -381,7 +382,11 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             scroll_top.set(y);
         });
     }
-    let scroll_left = create_signal(0.0_f64); // live horizontal offset (long-line clipping)
+    let scroll_left = create_signal(0.0_f64); // live horizontal offset (clipping + the bar)
+    let hbar = scrollbar::HBarState {
+        hover: create_signal(false),
+        grab: create_signal(None),
+    };
     let completion = create_signal::<Option<completion::Session>>(None); // autocomplete popup
     // Stale-reply gates for completion / resolve requests (persist across re-renders).
     // The live snippet session (tab stops), if any.
@@ -1637,14 +1642,19 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     } else {
         0.0
     };
-    let wrap_cols = if wrap_override.get().unwrap_or(p.soft_wrap)
-        && p.height.is_some()
-        && bounds.width() > 1.0
-    {
-        (((bounds.width() - gutter_w_est - pad_l * 2.0) / advance).floor() as isize).max(8) as usize
-    } else {
-        0
-    };
+    let wrap_cols =
+        if wrap_override.get().unwrap_or(p.soft_wrap) && p.height.is_some() && bounds.width() > 1.0
+        {
+            // The wrap width is the text area: the viewport minus the gutter, the side panels and
+            // the vertical scrollbar's strip (text never runs under the bar).
+            let side = scrollbar::SIZE
+                + if p.overview_ruler { 14.0 } else { 0.0 }
+                + if p.minimap { 84.0 } else { 0.0 };
+            (((bounds.width() - gutter_w_est - side - pad_l * 2.0) / advance).floor() as isize)
+                .max(8) as usize
+        } else {
+            0
+        };
     // Extension block widgets (full-width widgets on reserved rows below a line). Collect them
     // and the per-line gap-row counts BEFORE the map so it can reserve the space.
     let block_snap = Snapshot {
@@ -2504,6 +2514,15 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // With a fixed height, bound the content to the widest line so it can overflow and scroll
     // horizontally (the gutter stays fixed, outside the horizontal scroll). Without a height
     // the editor grows to content. Soft wrap disables horizontal overflow (lines fit the width).
+    // The horizontal viewport: the editor minus the gutter, the side panels and the
+    // vertical scrollbar's strip (the text keeps clear of the bar).
+    let h_view = (bounds.width()
+        - gutter_w_est
+        - if p.overview_ruler { 14.0 } else { 0.0 }
+        - if p.minimap { 84.0 } else { 0.0 }
+        - 1.0
+        - scrollbar::SIZE)
+        .max(0.0);
     let content_w = if wrap_cols > 0 {
         None
     } else {
@@ -2511,12 +2530,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             let max_cols = li.max_cols();
             // At least the viewport width, so clicks (and block widgets such as the change
             // peek) right of short lines still land on the content.
-            let avail = bounds.width()
-                - gutter_w_est
-                - if p.overview_ruler { 14.0 } else { 0.0 }
-                - if p.minimap { 84.0 } else { 0.0 }
-                - 1.0;
-            (pad_l * 2.0 + max_cols as f64 * advance).max(avail)
+            (pad_l * 2.0 + max_cols as f64 * advance).max(h_view)
         })
     };
     // The popups' box fills at least the viewport: popups anchored to a short document
@@ -2683,10 +2697,13 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             .into_widget(),
     );
     let content_area: AnyWidget = if content_w.is_some() {
+        // Its own bar would sit under the document's last line (this view is the vertical
+        // viewport's content), so the editor draws the horizontal bar pinned to the viewport.
         SingleChildScrollView::horizontal(click_area)
             .controller(hscroll.clone())
+            .hide_scrollbar()
             .on_scroll(move |n| {
-                if hclip.is_some() || scroll_left.peek() != 0.0 {
+                if (scroll_left.peek() - n.metrics.pixels).abs() > 0.01 {
                     scroll_left.set(n.metrics.pixels);
                 }
             })
@@ -2750,7 +2767,22 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         Some(h) => {
             let on_scroll_cb = p.on_scroll.clone();
             let scroll_link = p.scroll_link;
+            let bar = scrollbar::style(theme);
+            // VS Code `scrollBeyondLastLine`: room for the last line to reach the top. It is
+            // part of the scroll extent, so the thumb measures it too.
+            let beyond = if p.scroll_beyond_last_line {
+                (h - line_px - pad_t).max(0.0)
+            } else {
+                0.0
+            };
+            let extent = content_h + beyond;
+            // The right strip is the vertical bar's: the text (and its clicks) stop short of it.
+            let body = container()
+                .padding(EdgeInsets::only(0.0, 0.0, scrollbar::SIZE, beyond))
+                .child(body)
+                .into_widget();
             let scroller = scroll_view(body)
+                .scrollbar(bar)
                 .controller(scroll.clone())
                 // Re-render the visible window as the viewport scrolls, and report the offset so
                 // the caller can persist/restore it (view state).
@@ -2766,7 +2798,44 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     }
                 })
                 .into_widget();
+            // A wheel notch scrolls by lines (3 per notch, as VS Code / the OS default),
+            // through the smooth-scrolling setting; trackpad pixels and Shift+wheel
+            // (horizontal) go to the scroll views as they are.
+            let wheel_v = vscroll.clone();
+            let scroller = GestureDetector::new(scroller)
+                .on_pointer_signal(move |ev| {
+                    let pebbles::render::ScrollUnit::Lines(l) = ev.unit else {
+                        return false;
+                    };
+                    if pebbles::core::keyboard::shift_held() || l.x != 0.0 || l.y == 0.0 {
+                        return false;
+                    }
+                    let base = wheel_v.handle.offset();
+                    let t = (base + l.y * 3.0 * line_px).clamp(0.0, wheel_v.handle.max());
+                    if (t - base).abs() < 0.5 {
+                        return false; // at the edge: let an outer view scroll
+                    }
+                    wheel_v.to(t, scroll_top);
+                    true
+                })
+                .into_widget();
             let scroller = sticky::overlay(&frame, scroller, scroll_top);
+            let scroller = match content_w.and_then(|cw| {
+                scrollbar::horizontal(theme, hscroll.clone(), scroll_left, cw, h_view, hbar)
+            }) {
+                Some(hb) => stack(vec![
+                    scroller,
+                    Positioned::new(hb)
+                        .left(if p.gutter { gutter_w_est } else { 0.0 })
+                        .right(scrollbar::SIZE)
+                        .bottom(0.0)
+                        .height(scrollbar::SIZE)
+                        .into_widget(),
+                ])
+                .fit(StackFit::Expand)
+                .into_widget(),
+                None => scroller,
+            };
             let mut parts: Vec<AnyWidget> = vec![expanded(scroller).into_widget()];
             if let Some(mm) = minimap::panel(&frame, scroll.clone(), scroll_top) {
                 parts.push(mm);
@@ -2776,6 +2845,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 ruler::marks(&frame, &ruler_matches),
                 scroll.clone(),
                 scroll_top,
+                extent,
             ) {
                 parts.push(r);
             }

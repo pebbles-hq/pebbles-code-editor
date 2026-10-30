@@ -162,6 +162,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         line_numbers: LineNumbers::On,
         smooth_caret: false,
         smooth_scrolling: false,
+        scroll_beyond_last_line: true,
         cursor_blinking: CursorBlinking::Blink,
         cursor_style: CursorStyle::Line,
         on_stage_hunk: None,
@@ -244,6 +245,7 @@ pub struct CodeEditor {
     cursor_blinking: CursorBlinking,
     smooth_caret: bool,
     smooth_scrolling: bool,
+    scroll_beyond_last_line: bool,
     line_numbers: LineNumbers,
     inline_suggestions: Option<crate::providers::InlineSuggestionProvider>,
     suggest_preview: bool,
@@ -637,6 +639,13 @@ impl CodeEditor {
         self.smooth_scrolling = v;
         self
     }
+    /// Let the last line scroll up to the top of the viewport (VS Code
+    /// `editor.scrollBeyondLastLine`, default on) — fixed-height editors only. The
+    /// scrollbar thumb measures the whole scrollable height, padding included.
+    pub fn scroll_beyond_last_line(mut self, v: bool) -> Self {
+        self.scroll_beyond_last_line = v;
+        self
+    }
     /// Animate the caret between positions (VS Code `editor.cursorSmoothCaretAnimation`).
     pub fn smooth_caret(mut self, v: bool) -> Self {
         self.smooth_caret = v;
@@ -850,6 +859,7 @@ pub(crate) struct Props {
     pub(crate) cursor_blinking: CursorBlinking,
     pub(crate) smooth_caret: bool,
     pub(crate) smooth_scrolling: bool,
+    pub(crate) scroll_beyond_last_line: bool,
     pub(crate) line_numbers: LineNumbers,
     pub(crate) inline_suggestions: Option<crate::providers::InlineSuggestionProvider>,
     pub(crate) suggest_preview: bool,
@@ -981,6 +991,7 @@ impl From<CodeEditor> for Props {
             line_numbers: e.line_numbers,
             smooth_caret: e.smooth_caret,
             smooth_scrolling: e.smooth_scrolling,
+            scroll_beyond_last_line: e.scroll_beyond_last_line,
             cursor_blinking: e.cursor_blinking,
             cursor_style: e.cursor_style,
             on_stage_hunk: e.on_stage_hunk,

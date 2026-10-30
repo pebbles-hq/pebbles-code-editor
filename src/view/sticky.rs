@@ -57,7 +57,7 @@ pub(crate) fn overlay(f: &Frame, scroller: AnyWidget, scroll_top: Signal<f64>) -
         scroller,
         Positioned::new(panel)
             .left(0.0)
-            .right(0.0)
+            .right(super::scrollbar::SIZE) // never over the vertical scrollbar
             .top(0.0)
             .height(sticky_h)
             .into_widget(),

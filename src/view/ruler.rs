@@ -19,13 +19,17 @@ pub(crate) fn panel(
     marks: Vec<Mark>,
     scroll: ScrollHandle,
     scroll_top: Signal<f64>,
+    extent: f64,
 ) -> Option<AnyWidget> {
     let h = match (f.p.overview_ruler, f.p.height) {
         (true, Some(h)) => h,
         _ => return None,
     };
     let n = f.line_count.max(1) as f64;
-    let ch = f.content_h;
+    // The ruler maps the whole scroll extent (the text plus any scroll-beyond-last-line
+    // room), like the scrollbar beside it, so its viewport band matches the thumb.
+    let ch = extent.max(h);
+    let text_frac = (f.content_h / ch).min(1.0);
     let vp = f.theme.scrollbar;
     let cur_top = scroll_top.get();
     let painter = move |cv: &mut Canvas<'_>| {
@@ -37,7 +41,7 @@ pub(crate) fn panel(
         cv.fill_rect(Rect::new(0.0, vy, w, (vy + vh).min(hh)), vp);
         let lane_w = w / 3.0;
         for &(line, color, lane) in &marks {
-            let y = (line as f64 / n) * hh;
+            let y = (line as f64 / n) * text_frac * hh;
             let (x0, x1, th) = match lane {
                 0 => (0.0, lane_w, 3.0),
                 1 => (lane_w, 2.0 * lane_w, 3.0),
