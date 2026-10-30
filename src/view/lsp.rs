@@ -153,6 +153,17 @@ pub(crate) struct Store {
     pub(crate) linked_gate: RequestGate,
     /// The (caret, version) of the last linked-editing request.
     pub(crate) linked_at: Cell<Option<(usize, u64)>>,
+    pub(crate) sem_gate: RequestGate,
+    /// (version, viewport in range mode) of the last semantic-token request.
+    pub(crate) sem_key: Cell<Option<(u64, Option<(usize, usize)>)>>,
+    /// Whether full semantic tokens are supported (`None` = not tried yet).
+    pub(crate) sem_full: Cell<Option<bool>>,
+    /// The last full result (id, data) for delta requests.
+    #[allow(clippy::type_complexity)]
+    pub(crate) sem_prev: RefCell<Option<(Option<String>, Vec<u32>)>>,
+    /// The decoded tokens and the text they belong to.
+    #[allow(clippy::type_complexity)]
+    pub(crate) sem_cache: RefCell<Option<(String, Rc<Vec<crate::lang::Token>>)>>,
     last_doc: RefCell<Option<Rope>>,
 }
 
@@ -205,6 +216,8 @@ pub(crate) struct Hooks {
     /// The service's linked-editing ranges at the caret, with the document version they
     /// belong to.
     pub(crate) linked: Signal<Option<(u64, Vec<(usize, usize)>)>>,
+    /// Bumped when semantic tokens arrive (re-renders).
+    pub(crate) sem_tick: Signal<u64>,
 }
 
 /// Create the hook signals (call unconditionally, once per render).
@@ -239,6 +252,7 @@ pub(crate) fn hooks() -> Hooks {
         lens_on: create_signal(None),
         hier: create_signal(None),
         linked: create_signal(None),
+        sem_tick: create_signal(0u64),
         crumb_open: create_signal(None),
         crumb_menu: crate::view::extensions::Palette {
             open: create_signal(false),
@@ -2114,6 +2128,10 @@ impl LanguageService for Chained {
     fn inlay_hints(&self, d: &lsp::DocRef, g: lsp::Range, r: lsp::Reply<Vec<lsp::InlayHint>>) -> bool { self.main.inlay_hints(d, g, r) }
     fn selection_range(&self, d: &lsp::DocRef, p: &[lsp::Position], r: lsp::Reply<Vec<lsp::SelectionRange>>) -> bool { self.main.selection_range(d, p, r) }
     fn linked_editing_range(&self, d: &lsp::DocRef, p: lsp::Position, r: lsp::Reply<Option<lsp::LinkedEditingRanges>>) -> bool { self.main.linked_editing_range(d, p, r) }
+    fn semantic_tokens_legend(&self) -> Option<lsp::SemanticTokensLegend> { self.main.semantic_tokens_legend() }
+    fn semantic_tokens_full(&self, d: &lsp::DocRef, r: lsp::Reply<Option<lsp::SemanticTokens>>) -> bool { self.main.semantic_tokens_full(d, r) }
+    fn semantic_tokens_full_delta(&self, d: &lsp::DocRef, p: &str, r: lsp::Reply<Option<lsp::SemanticTokensFullDeltaResult>>) -> bool { self.main.semantic_tokens_full_delta(d, p, r) }
+    fn semantic_tokens_range(&self, d: &lsp::DocRef, g: lsp::Range, r: lsp::Reply<Option<lsp::SemanticTokens>>) -> bool { self.main.semantic_tokens_range(d, g, r) }
     fn resolve_inlay_hint(&self, h: lsp::InlayHint, r: lsp::Reply<lsp::InlayHint>) -> bool { self.main.resolve_inlay_hint(h, r) }
     fn prepare_call_hierarchy(&self, d: &lsp::DocRef, p: lsp::Position, r: lsp::Reply<Vec<lsp::CallHierarchyItem>>) -> bool { self.main.prepare_call_hierarchy(d, p, r) }
     fn incoming_calls(&self, i: &lsp::CallHierarchyItem, r: lsp::Reply<Vec<lsp::CallHierarchyIncomingCall>>) -> bool { self.main.incoming_calls(i, r) }

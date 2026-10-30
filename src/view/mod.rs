@@ -25,6 +25,7 @@ mod overlays;
 mod peek;
 mod ruler;
 mod search;
+mod semantic;
 mod smart_select;
 mod sticky;
 mod symbols;
@@ -1663,6 +1664,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     };
     // Inlay hints follow the viewport and the document version.
     lsp_ctl.request_inlays(first_line, last_line);
+    lsp_ctl.request_semantic(first_line, last_line);
 
     // Pointer → byte, fold/wrap-aware: the y maps to a VISUAL row, then to its buffer line +
     // column span. When nothing is folded or wrapped this is the plain identity mapping (fast
@@ -1887,6 +1889,12 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             *c = (src.clone(), toks);
         }
         c.1.clone()
+    };
+    // Semantic tokens: the language service's (full / delta / range), then any host-pushed
+    // tokens (`CodeEditor::semantic_tokens`) on top.
+    let tokens: Rc<Vec<Token>> = match lsp_ctl.semantic_for(&src) {
+        Some(sem) if !sem.is_empty() => Rc::new(merge_tokens(&tokens, &sem)),
+        _ => tokens,
     };
     let tokens: Rc<Vec<Token>> = match p.semantic {
         Some(sig) => {

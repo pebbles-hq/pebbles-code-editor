@@ -64,6 +64,11 @@ struct Fake {
     /// Linked-editing ranges; their replies are held until the test delivers them.
     linked: RefCell<Option<Vec<Range>>>,
     linked_pending: RefCell<Vec<Reply<Option<LinkedEditingRanges>>>>,
+    /// Semantic tokens: `Some` enables the legend; `sem_full` / `sem_delta` toggle support.
+    sem_data: RefCell<Option<Vec<u32>>>,
+    sem_full: RefCell<bool>,
+    sem_delta: RefCell<bool>,
+    sem_calls: RefCell<Vec<String>>,
 }
 
 fn item(name: &str, uri: &str, line: u32) -> CallHierarchyItem {
@@ -79,6 +84,59 @@ fn item(name: &str, uri: &str, line: u32) -> CallHierarchyItem {
 }
 
 impl LanguageService for Fake {
+    fn semantic_tokens_legend(&self) -> Option<SemanticTokensLegend> {
+        self.sem_data
+            .borrow()
+            .as_ref()
+            .map(|_| SemanticTokensLegend {
+                token_types: vec!["function".into(), "variable".into()],
+                token_modifiers: vec![],
+            })
+    }
+    fn semantic_tokens_full(&self, _d: &DocRef, reply: Reply<Option<SemanticTokens>>) -> bool {
+        if !*self.sem_full.borrow() {
+            return false;
+        }
+        self.sem_calls.borrow_mut().push("full".into());
+        reply(Some(SemanticTokens {
+            result_id: Some("1".into()),
+            data: self.sem_data.borrow().clone().unwrap(),
+        }));
+        true
+    }
+    fn semantic_tokens_full_delta(
+        &self,
+        _d: &DocRef,
+        prev: &str,
+        reply: Reply<Option<SemanticTokensFullDeltaResult>>,
+    ) -> bool {
+        if !*self.sem_delta.borrow() {
+            return false;
+        }
+        self.sem_calls.borrow_mut().push(format!("delta:{prev}"));
+        reply(Some(SemanticTokensFullDeltaResult::Delta(
+            SemanticTokensDelta {
+                result_id: Some("2".into()),
+                edits: vec![],
+            },
+        )));
+        true
+    }
+    fn semantic_tokens_range(
+        &self,
+        _d: &DocRef,
+        r: Range,
+        reply: Reply<Option<SemanticTokens>>,
+    ) -> bool {
+        self.sem_calls
+            .borrow_mut()
+            .push(format!("range:{}-{}", r.start.line, r.end.line));
+        reply(Some(SemanticTokens {
+            result_id: None,
+            data: self.sem_data.borrow().clone().unwrap(),
+        }));
+        true
+    }
     fn linked_editing_range(
         &self,
         _d: &DocRef,
@@ -1659,4 +1717,62 @@ fn linked_editing_ranges_from_the_service_mirror_edits_until_the_next_reply() {
     caret_at(&mut h, 6);
     h.key(KeyInput::Insert("Q".into()));
     assert_eq!(code.get(), "let aZQbc = 1; aZbc + aZbc;\n");
+}
+
+/// The distinct glyph brushes drawn (text colours on screen).
+fn glyph_colors(h: &mut Harness) -> std::collections::HashSet<String> {
+    use pebbles::render::paint::display_list::Op;
+    fn walk(ops: &[Op], out: &mut std::collections::HashSet<String>) {
+        for op in ops {
+            match op {
+                Op::Glyphs { brush, .. } => {
+                    out.insert(format!("{brush:?}"));
+                }
+                Op::Fragment { ops, .. } => walk(ops, out),
+                _ => {}
+            }
+        }
+    }
+    let scene = h.draw();
+    let mut out = std::collections::HashSet::new();
+    walk(scene.ops(), &mut out);
+    out
+}
+
+#[test]
+fn semantic_tokens_full_delta_and_range_colour_the_text() {
+    let text = "value = compute;\n";
+    let colors = |fake: Rc<Fake>| {
+        let (mut h, code) = mount(text, fake, |e| e);
+        h.frames(2);
+        let c = glyph_colors(&mut h).len();
+        (h, code, c)
+    };
+    // No legend: plain text in one colour (no language set).
+    let (_, _, plain) = colors(Rc::new(Fake::default()));
+    // Full tokens: `compute` (0,8 len 7) is a function.
+    let fake = Rc::new(Fake::default());
+    *fake.sem_data.borrow_mut() = Some(vec![0, 8, 7, 0, 0]);
+    *fake.sem_full.borrow_mut() = true;
+    *fake.sem_delta.borrow_mut() = true;
+    let (mut h, _code, full) = colors(fake.clone());
+    assert!(
+        full > plain,
+        "the function token is coloured ({full} vs {plain})"
+    );
+    assert_eq!(*fake.sem_calls.borrow(), vec!["full".to_string()]);
+    // An edit asks for a delta against the previous result id; colours survive.
+    h.key(KeyInput::Insert("x".into()));
+    h.frames(2);
+    assert_eq!(
+        fake.sem_calls.borrow().last().map(String::as_str),
+        Some("delta:1")
+    );
+    assert!(glyph_colors(&mut h).len() > plain);
+    // No full support: the viewport range is requested instead.
+    let fake = Rc::new(Fake::default());
+    *fake.sem_data.borrow_mut() = Some(vec![0, 8, 7, 0, 0]);
+    let (_, _, ranged) = colors(fake.clone());
+    assert!(ranged > plain);
+    assert!(fake.sem_calls.borrow()[0].starts_with("range:0-"));
 }

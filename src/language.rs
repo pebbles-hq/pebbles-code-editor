@@ -861,6 +861,110 @@ pub struct LinkedEditingRanges {
     pub word_pattern: Option<String>,
 }
 
+/// The server's semantic-token legend (LSP `SemanticTokensLegend`): `data` indexes these.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SemanticTokensLegend {
+    /// Token type names (`namespace`, `function`, `variable`, …).
+    pub token_types: Vec<String>,
+    /// Token modifier names (`declaration`, `readonly`, `deprecated`, …), one bit each.
+    pub token_modifiers: Vec<String>,
+}
+
+/// Encoded semantic tokens (LSP `SemanticTokens`): 5 integers per token — delta line,
+/// delta start (UTF-16, relative to the previous token on the same line), length, type
+/// index, modifier bits.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SemanticTokens {
+    /// An id for a later delta request.
+    pub result_id: Option<String>,
+    /// The encoded tokens.
+    pub data: Vec<u32>,
+}
+
+/// One edit of a semantic-token delta (LSP `SemanticTokensEdit`), in `data` indices.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SemanticTokensEdit {
+    /// The first integer replaced.
+    pub start: u32,
+    /// How many integers are removed.
+    pub delete_count: u32,
+    /// The integers inserted.
+    pub data: Vec<u32>,
+}
+
+/// A delta against the previous result (LSP `SemanticTokensDelta`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SemanticTokensDelta {
+    /// The id of this result.
+    pub result_id: Option<String>,
+    /// The edits, applied to the previous `data`.
+    pub edits: Vec<SemanticTokensEdit>,
+}
+
+/// A `textDocument/semanticTokens/full/delta` reply: full tokens or a delta.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SemanticTokensFullDeltaResult {
+    /// Full tokens.
+    Tokens(SemanticTokens),
+    /// A delta against the previous result.
+    Delta(SemanticTokensDelta),
+}
+
+/// A decoded semantic token.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SemanticToken {
+    /// The range (one line).
+    pub range: Range,
+    /// The type name from the legend.
+    pub token_type: String,
+    /// The modifier names set.
+    pub modifiers: Vec<String>,
+}
+
+/// Apply delta edits to the previous `data` (edits are in ascending order of `start`, as
+/// LSP sends them; applied back to front so indices stay valid).
+pub fn apply_semantic_edits(data: &[u32], edits: &[SemanticTokensEdit]) -> Vec<u32> {
+    let mut out = data.to_vec();
+    let mut sorted: Vec<&SemanticTokensEdit> = edits.iter().collect();
+    sorted.sort_by_key(|e| std::cmp::Reverse(e.start));
+    for e in sorted {
+        let s = (e.start as usize).min(out.len());
+        let end = (s + e.delete_count as usize).min(out.len());
+        out.splice(s..end, e.data.iter().copied());
+    }
+    out
+}
+
+/// Decode `data` against `legend`; unknown type indices are skipped.
+pub fn decode_semantic_tokens(data: &[u32], legend: &SemanticTokensLegend) -> Vec<SemanticToken> {
+    let mut out = Vec::new();
+    let (mut line, mut col) = (0u32, 0u32);
+    for t in data.chunks_exact(5) {
+        if t[0] > 0 {
+            line += t[0];
+            col = t[1];
+        } else {
+            col += t[1];
+        }
+        let Some(ty) = legend.token_types.get(t[3] as usize) else {
+            continue;
+        };
+        let modifiers = legend
+            .token_modifiers
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i < 32 && t[4] & (1 << i) != 0)
+            .map(|(_, m)| m.clone())
+            .collect();
+        out.push(SemanticToken {
+            range: Range::new(Position::new(line, col), Position::new(line, col + t[2])),
+            token_type: ty.clone(),
+            modifiers,
+        });
+    }
+    out
+}
+
 /// Formatting options (LSP `FormattingOptions`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FormattingOptions {
@@ -1292,6 +1396,33 @@ pub trait LanguageService {
     ) -> bool {
         false
     }
+    /// The semantic-token legend (`semanticTokensProvider.legend`); `None` = no semantic
+    /// tokens.
+    fn semantic_tokens_legend(&self) -> Option<SemanticTokensLegend> {
+        None
+    }
+    /// `textDocument/semanticTokens/full`.
+    fn semantic_tokens_full(&self, doc: &DocRef, reply: Reply<Option<SemanticTokens>>) -> bool {
+        false
+    }
+    /// `textDocument/semanticTokens/full/delta` against `previous_result_id`.
+    fn semantic_tokens_full_delta(
+        &self,
+        doc: &DocRef,
+        previous_result_id: &str,
+        reply: Reply<Option<SemanticTokensFullDeltaResult>>,
+    ) -> bool {
+        false
+    }
+    /// `textDocument/semanticTokens/range` (used when full tokens are unsupported).
+    fn semantic_tokens_range(
+        &self,
+        doc: &DocRef,
+        range: Range,
+        reply: Reply<Option<SemanticTokens>>,
+    ) -> bool {
+        false
+    }
     /// `textDocument/inlayHint`.
     fn inlay_hints(&self, doc: &DocRef, range: Range, reply: Reply<Vec<InlayHint>>) -> bool {
         false
@@ -1593,6 +1724,37 @@ mod tests {
         assert_eq!(byte_to_position(text, l1 + 1), Position::new(1, 0));
         let r = bytes_to_range(text, l1 + 2, l1 + 9);
         assert_eq!(range_to_bytes(text, r), (l1 + 2, l1 + 9));
+    }
+
+    #[test]
+    fn semantic_tokens_decode_relative_positions_and_apply_deltas() {
+        let legend = SemanticTokensLegend {
+            token_types: vec!["function".into(), "variable".into()],
+            token_modifiers: vec!["declaration".into(), "readonly".into()],
+        };
+        // fn at (0,3) len 4; var at (0,10) len 1 readonly; fn at (2,1) len 2.
+        let data = vec![0, 3, 4, 0, 1, 0, 7, 1, 1, 2, 2, 1, 2, 0, 0];
+        let t = decode_semantic_tokens(&data, &legend);
+        assert_eq!(t.len(), 3);
+        assert_eq!(
+            t[0].range,
+            Range::new(Position::new(0, 3), Position::new(0, 7))
+        );
+        assert_eq!(t[0].modifiers, vec!["declaration".to_string()]);
+        assert_eq!(t[1].range.start, Position::new(0, 10));
+        assert_eq!(t[1].modifiers, vec!["readonly".to_string()]);
+        assert_eq!(t[2].range.start, Position::new(2, 1));
+        // A delta replacing the last token's length.
+        let edits = [SemanticTokensEdit {
+            start: 12,
+            delete_count: 1,
+            data: vec![5],
+        }];
+        let d = apply_semantic_edits(&data, &edits);
+        assert_eq!(
+            decode_semantic_tokens(&d, &legend)[2].range.end,
+            Position::new(2, 6)
+        );
     }
 
     #[test]

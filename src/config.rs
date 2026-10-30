@@ -459,8 +459,11 @@ impl CodeEditor {
         self.extensions.extend(exts);
         self
     }
-    /// Overlay provider/LSP **semantic tokens** on top of the lexical highlighting (a reactive
+    /// Overlay host-computed **semantic tokens** on top of the lexical highlighting (a reactive
     /// list). Semantic tokens win on any overlap and re-highlight when the signal changes.
+    /// A [`language_service`](Self::language_service) with a semantic-token legend supplies
+    /// LSP semantic tokens itself (full / delta / range); tokens from this signal are layered
+    /// on top of those.
     pub fn semantic_tokens(mut self, tokens: Signal<Vec<Token>>) -> Self {
         self.semantic = Some(tokens);
         self
