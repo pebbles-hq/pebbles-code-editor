@@ -7,6 +7,29 @@ use pebbles::prelude::*;
 
 use crate::ADVANCE_RATIO;
 
+/// A breadcrumb path segment supplied by the host (`CodeEditor::breadcrumb_path`): its
+/// label and the entries its dropdown lists (e.g. the other files in that folder).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BreadcrumbSegment {
+    /// The shown label.
+    pub label: String,
+    /// The dropdown entries (siblings); `label` among them is preselected.
+    pub siblings: Vec<String>,
+}
+
+impl BreadcrumbSegment {
+    /// A segment with its sibling list.
+    pub fn new(label: impl Into<String>, siblings: Vec<String>) -> Self {
+        BreadcrumbSegment {
+            label: label.into(),
+            siblings,
+        }
+    }
+}
+
+/// Called with (segment index, picked entry) when a path segment's dropdown entry is chosen.
+pub type BreadcrumbPick = std::rc::Rc<dyn Fn(usize, &str)>;
+
 /// The host's link opener (`CodeEditor::on_open_link`).
 pub(crate) type LinkOpener = std::rc::Rc<dyn Fn(&str)>;
 /// The host's stage-hunk callback (`CodeEditor::on_stage_hunk`).
@@ -124,6 +147,9 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         hover_delay: 0.3,
         lsp_diagnostics: None,
         outline: None,
+        breadcrumbs: false,
+        breadcrumb_path: Vec::new(),
+        on_breadcrumb_pick: None,
         problem_counts: None,
         emmet: false,
         inline_diff: false,
@@ -224,6 +250,9 @@ pub struct CodeEditor {
     hover_delay: f64,
     lsp_diagnostics: Option<Signal<Vec<crate::language::LspDiagnostic>>>,
     outline: Option<Signal<Vec<crate::language::DocumentSymbol>>>,
+    breadcrumbs: bool,
+    breadcrumb_path: Vec<BreadcrumbSegment>,
+    on_breadcrumb_pick: Option<BreadcrumbPick>,
     problem_counts: Option<Signal<crate::language::ProblemCounts>>,
     emmet: bool,
     inline_diff: bool,
@@ -664,6 +693,25 @@ impl CodeEditor {
         self.outline = Some(outline);
         self
     }
+    /// Show the breadcrumbs bar above the code (VS Code `breadcrumbs.enabled`): the
+    /// [`breadcrumb_path`](Self::breadcrumb_path) segments, then the document symbols
+    /// containing the caret. Each segment opens a dropdown of its siblings / children;
+    /// Ctrl+Shift+; focuses the bar (arrows move, Enter opens), Ctrl+Shift+. focuses and
+    /// opens the last segment.
+    pub fn breadcrumbs(mut self, on: bool) -> Self {
+        self.breadcrumbs = on;
+        self
+    }
+    /// The path segments shown before the symbols (e.g. folders and the file name).
+    pub fn breadcrumb_path(mut self, path: Vec<BreadcrumbSegment>) -> Self {
+        self.breadcrumb_path = path;
+        self
+    }
+    /// Called when an entry of a path segment's dropdown is picked: (segment, entry).
+    pub fn on_breadcrumb_pick(mut self, f: impl Fn(usize, &str) + 'static) -> Self {
+        self.on_breadcrumb_pick = Some(std::rc::Rc::new(f));
+        self
+    }
     /// A signal the editor keeps updated with its problem counts (errors / warnings / infos
     /// / hints), for the host's status bar or problems panel.
     pub fn problem_counts(mut self, counts: Signal<crate::language::ProblemCounts>) -> Self {
@@ -791,6 +839,9 @@ pub(crate) struct Props {
     pub(crate) hover_delay: f64,
     pub(crate) lsp_diagnostics: Option<Signal<Vec<crate::language::LspDiagnostic>>>,
     pub(crate) outline: Option<Signal<Vec<crate::language::DocumentSymbol>>>,
+    pub(crate) breadcrumbs: bool,
+    pub(crate) breadcrumb_path: Vec<BreadcrumbSegment>,
+    pub(crate) on_breadcrumb_pick: Option<BreadcrumbPick>,
     pub(crate) problem_counts: Option<Signal<crate::language::ProblemCounts>>,
     pub(crate) emmet: bool,
     pub(crate) inline_diff: bool,
@@ -894,6 +945,9 @@ impl From<CodeEditor> for Props {
             hover_delay: e.hover_delay,
             lsp_diagnostics: e.lsp_diagnostics,
             outline: e.outline,
+            breadcrumbs: e.breadcrumbs,
+            breadcrumb_path: e.breadcrumb_path,
+            on_breadcrumb_pick: e.on_breadcrumb_pick,
             problem_counts: e.problem_counts,
             emmet: e.emmet,
             inline_diff: e.inline_diff,

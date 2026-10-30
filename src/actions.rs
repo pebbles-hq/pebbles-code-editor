@@ -276,6 +276,10 @@ commands! {
     GoToSymbol => "workbench.action.gotoSymbol", "Go to Symbol in Editor...", ["Ctrl+Shift+O"];
     /// Go to a symbol in the workspace (the palette's `#` mode, through the service).
     ShowAllSymbols => "workbench.action.showAllSymbols", "Go to Symbol in Workspace...", ["Ctrl+T"];
+    /// Focus the breadcrumbs bar (arrows move between segments, Enter opens one).
+    FocusBreadcrumbs => "breadcrumbs.focus", "Focus Breadcrumbs", ["Ctrl+Shift+;"];
+    /// Focus the breadcrumbs and open the last segment's dropdown.
+    FocusAndSelectBreadcrumbs => "breadcrumbs.focusAndSelect", "Focus and Select Breadcrumbs", ["Ctrl+Shift+."];
 }
 
 /// One parsed keystroke.

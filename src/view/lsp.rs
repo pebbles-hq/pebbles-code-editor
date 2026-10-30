@@ -177,6 +177,11 @@ pub(crate) struct Hooks {
     pub(crate) sym_restore: Signal<Option<crate::edit::Selections>>,
     /// Workspace-symbol results for the palette's `#` query.
     pub(crate) ws_symbols: Signal<Vec<lsp::SymbolInformation>>,
+    /// The keyboard-focused breadcrumb segment.
+    pub(crate) crumb_focus: Signal<Option<usize>>,
+    /// The segment whose dropdown is open (shown through `crumb_menu`).
+    pub(crate) crumb_open: Signal<Option<usize>>,
+    pub(crate) crumb_menu: crate::view::extensions::Palette,
 }
 
 /// Create the hook signals (call unconditionally, once per render).
@@ -204,6 +209,13 @@ pub(crate) fn hooks() -> Hooks {
         sym_preview: create_signal(None),
         sym_restore: create_signal(None),
         ws_symbols: create_signal(Vec::new()),
+        crumb_focus: create_signal(None),
+        crumb_open: create_signal(None),
+        crumb_menu: crate::view::extensions::Palette {
+            open: create_signal(false),
+            query: create_signal(String::new()),
+            sel: create_signal(0usize),
+        },
     }
 }
 
@@ -230,6 +242,8 @@ pub(crate) struct Lsp {
     pub(crate) read_only: bool,
     /// The host's outline signal (`CodeEditor::outline`).
     pub(crate) outline: Option<Signal<Vec<lsp::DocumentSymbol>>>,
+    /// The breadcrumbs config.
+    pub(crate) crumbs: Rc<crate::view::breadcrumbs::Crumbs>,
 }
 
 /// Map the old byte-range diagnostics onto the LSP form.

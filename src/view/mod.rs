@@ -12,6 +12,7 @@ mod commands;
 mod completion;
 mod markdown;
 pub(crate) use completion::prefix_start as completion_prefix_start;
+mod breadcrumbs;
 mod decor;
 mod diffview;
 mod extensions;
@@ -382,6 +383,11 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         focus,
         read_only: p.read_only,
         outline: p.outline,
+        crumbs: Rc::new(breadcrumbs::Crumbs {
+            enabled: p.breadcrumbs,
+            path: Rc::new(p.breadcrumb_path.clone()),
+            on_pick: p.on_breadcrumb_pick.clone(),
+        }),
     };
     create_effect(move || {
         let st = state.get();
@@ -586,6 +592,15 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             let Some(stroke) = crate::actions::stroke_of(ev) else {
                 return KeyEventResult::Ignored;
             };
+            // A focused breadcrumbs bar takes the arrows / Enter / Escape.
+            if env.lsp.h.crumb_focus.peek().is_some() {
+                let name = ["Left", "Right", "Enter", "Down", "Space", "Escape"]
+                    .into_iter()
+                    .find(|k| crate::actions::parse_chord(k).is_some_and(|c| c[0] == stroke));
+                if env.lsp.crumb_key(name.unwrap_or("")) {
+                    return KeyEventResult::Handled;
+                }
+            }
             // Signature help with overloads: Alt+Up / Alt+Down cycle them (over Move Line).
             if env.lsp.h.sig.peek().is_some() {
                 for (chord, d) in [("Alt+Up", -1), ("Alt+Down", 1)] {
@@ -2618,6 +2633,26 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         None => code_area,
     };
 
+    // The breadcrumb dropdown (a palette of the segment's siblings / children).
+    let code_area: AnyWidget = if lsp_ctl.h.crumb_menu.open.get() {
+        let ctx = crate::extensions::EditContext {
+            state,
+            history,
+            code,
+            goal,
+        };
+        let menu = extensions::palette(
+            lsp_ctl.h.crumb_menu,
+            lsp_ctl.open_crumb_commands(),
+            ctx,
+            focus,
+            theme,
+        );
+        stack(children![code_area, menu]).into_widget()
+    } else {
+        code_area
+    };
+
     // The code-action menu (Ctrl+. / the lightbulb), a palette of the actions.
     let code_area: AnyWidget = if lsp_ctl.h.menu.open.get() {
         let ctx = crate::extensions::EditContext {
@@ -2650,6 +2685,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 .decoration(BoxDecoration::new().color(theme.border))
                 .into_widget(),
         );
+    }
+    if p.breadcrumbs {
+        col.push(lsp_ctl.breadcrumb_bar(theme));
     }
     col.push(code_area);
 

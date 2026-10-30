@@ -1190,3 +1190,98 @@ fn document_symbols_outline_go_to_symbol_with_preview_and_workspace_symbols() {
     assert_eq!(opened.last().unwrap().uri, "file:///w/ui.rs");
     assert_eq!(opened.last().unwrap().range.start, Position::new(7, 4));
 }
+
+#[test]
+fn breadcrumbs_show_path_and_symbol_chain_with_dropdowns_and_keyboard_focus() {
+    use pebbles_code_editor::BreadcrumbSegment;
+    let text = "mod outer {\n    fn inner() {}\n    fn other() {}\n}\n";
+    let fake = Rc::new(Fake::default());
+    let sym = |n: &str, k, r: Range, sel: Range| DocumentSymbol::new(n, k, r, sel);
+    *fake.symbols.borrow_mut() = Some(DocumentSymbolResponse::Nested(vec![
+        sym(
+            "outer",
+            SymbolKind::Module,
+            rng(0, 0, 3, 1),
+            rng(0, 4, 0, 9),
+        )
+        .child(sym(
+            "inner",
+            SymbolKind::Function,
+            rng(1, 4, 1, 17),
+            rng(1, 7, 1, 12),
+        ))
+        .child(sym(
+            "other",
+            SymbolKind::Function,
+            rng(2, 4, 2, 17),
+            rng(2, 7, 2, 12),
+        )),
+    ]));
+    let picked = Rc::new(RefCell::new(Vec::<(usize, String)>::new()));
+    let pk = picked.clone();
+    let (mut h, code) = mount(text, fake.clone(), move |e| {
+        e.breadcrumbs(true)
+            .breadcrumb_path(vec![
+                BreadcrumbSegment::new("src", vec!["src".into(), "tests".into()]),
+                BreadcrumbSegment::new("main.rs", vec!["lib.rs".into(), "main.rs".into()]),
+            ])
+            .on_breadcrumb_pick(move |i, s| pk.borrow_mut().push((i, s.to_string())))
+    });
+    // Caret inside `inner`: path segments, then the symbol chain.
+    h.key(KeyInput::Move {
+        motion: Motion::Down,
+        extend: false,
+    });
+    for _ in 0..8 {
+        h.key(KeyInput::Move {
+            motion: Motion::Right,
+            extend: false,
+        });
+    }
+    h.frames(2);
+    for l in ["src", "main.rs", "outer", "inner"] {
+        assert!(h.find_text(&format!("Breadcrumb {l}")), "{l} segment");
+    }
+    // Clicking a symbol segment lists its siblings (the current one preselected); pick one.
+    tap_label(&mut h, "Breadcrumb inner");
+    h.frames(1);
+    h.key(KeyInput::Move {
+        motion: Motion::Down,
+        extend: false,
+    });
+    h.key(KeyInput::Enter);
+    h.frames(2);
+    assert!(h.find_text("Breadcrumb other"), "caret moved into other");
+    h.key(KeyInput::Insert("X".into()));
+    assert!(code.get().contains("fn Xother"), "{}", code.get());
+    h.key(KeyInput::Undo);
+    h.frames(1);
+    // Ctrl+Shift+; focuses the bar; Left moves to the file segment; Enter opens its siblings.
+    h.press("Ctrl+Shift+;");
+    h.press("Left");
+    h.press("Left");
+    h.frames(1);
+    h.press("Enter");
+    h.frames(2);
+    assert!(h.find_text("lib.rs"));
+    h.key(KeyInput::Move {
+        motion: Motion::Up,
+        extend: false,
+    });
+    h.key(KeyInput::Enter);
+    h.frames(1);
+    assert_eq!(*picked.borrow(), vec![(1, "lib.rs".to_string())]);
+    // Ctrl+Shift+. opens the last segment's dropdown directly (siblings + its children).
+    assert!(
+        !h.find_text("inner"),
+        "only the chain (outer › other) is shown"
+    );
+    h.press("Ctrl+Shift+.");
+    h.frames(2);
+    assert!(
+        h.find_text("inner"),
+        "the last segment's siblings are listed"
+    );
+    h.key(KeyInput::Escape);
+    h.frames(1);
+}

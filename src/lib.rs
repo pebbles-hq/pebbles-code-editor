@@ -72,7 +72,10 @@ mod view;
 
 pub use actions::EditorCommand;
 pub use collab::Edit;
-pub use config::{CodeEditor, CursorBlinking, CursorStyle, LineNumbers, code_editor};
+pub use config::{
+    BreadcrumbPick, BreadcrumbSegment, CodeEditor, CursorBlinking, CursorStyle, LineNumbers,
+    code_editor,
+};
 pub use controller::{EditorController, editor_controller};
 pub use diff::{ChangeHunk, ChangeKind};
 pub use diff_editor::{DiffEditor, DiffSideConfig, diff_editor};
