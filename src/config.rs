@@ -148,6 +148,8 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         lsp_diagnostics: None,
         outline: None,
         breadcrumbs: false,
+        inlay_hints_enabled: true,
+        code_lens: true,
         breadcrumb_path: Vec::new(),
         on_breadcrumb_pick: None,
         problem_counts: None,
@@ -251,6 +253,8 @@ pub struct CodeEditor {
     lsp_diagnostics: Option<Signal<Vec<crate::language::LspDiagnostic>>>,
     outline: Option<Signal<Vec<crate::language::DocumentSymbol>>>,
     breadcrumbs: bool,
+    inlay_hints_enabled: bool,
+    code_lens: bool,
     breadcrumb_path: Vec<BreadcrumbSegment>,
     on_breadcrumb_pick: Option<BreadcrumbPick>,
     problem_counts: Option<Signal<crate::language::ProblemCounts>>,
@@ -702,6 +706,18 @@ impl CodeEditor {
         self.breadcrumbs = on;
         self
     }
+    /// Show the language service's inlay hints (VS Code `editor.inlayHints.enabled`, default
+    /// on; toggled at runtime by `editor.action.toggleInlayHints`).
+    pub fn inlay_hints_enabled(mut self, on: bool) -> Self {
+        self.inlay_hints_enabled = on;
+        self
+    }
+    /// Show the language service's code lenses (VS Code `editor.codeLens`, default on;
+    /// toggled at runtime by `editor.action.toggleCodeLens`).
+    pub fn code_lens(mut self, on: bool) -> Self {
+        self.code_lens = on;
+        self
+    }
     /// The path segments shown before the symbols (e.g. folders and the file name).
     pub fn breadcrumb_path(mut self, path: Vec<BreadcrumbSegment>) -> Self {
         self.breadcrumb_path = path;
@@ -840,6 +856,8 @@ pub(crate) struct Props {
     pub(crate) lsp_diagnostics: Option<Signal<Vec<crate::language::LspDiagnostic>>>,
     pub(crate) outline: Option<Signal<Vec<crate::language::DocumentSymbol>>>,
     pub(crate) breadcrumbs: bool,
+    pub(crate) inlay_hints_enabled: bool,
+    pub(crate) code_lens: bool,
     pub(crate) breadcrumb_path: Vec<BreadcrumbSegment>,
     pub(crate) on_breadcrumb_pick: Option<BreadcrumbPick>,
     pub(crate) problem_counts: Option<Signal<crate::language::ProblemCounts>>,
@@ -946,6 +964,8 @@ impl From<CodeEditor> for Props {
             lsp_diagnostics: e.lsp_diagnostics,
             outline: e.outline,
             breadcrumbs: e.breadcrumbs,
+            inlay_hints_enabled: e.inlay_hints_enabled,
+            code_lens: e.code_lens,
             breadcrumb_path: e.breadcrumb_path,
             on_breadcrumb_pick: e.on_breadcrumb_pick,
             problem_counts: e.problem_counts,

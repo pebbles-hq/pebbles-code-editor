@@ -143,6 +143,11 @@ pub(crate) struct Store {
     pub(crate) ws_gate: RequestGate,
     /// The last workspace-symbol query sent.
     pub(crate) ws_query: RefCell<Option<String>>,
+    pub(crate) inlay_gate: RequestGate,
+    /// (version, first line, last line) of the last inlay-hint request.
+    pub(crate) inlay_key: Cell<Option<(u64, usize, usize)>>,
+    pub(crate) lens_gate: RequestGate,
+    pub(crate) lens_ver: Cell<Option<u64>>,
     last_doc: RefCell<Option<Rope>>,
 }
 
@@ -182,6 +187,14 @@ pub(crate) struct Hooks {
     /// The segment whose dropdown is open (shown through `crumb_menu`).
     pub(crate) crumb_open: Signal<Option<usize>>,
     pub(crate) crumb_menu: crate::view::extensions::Palette,
+    /// The service's inlay hints for the visible range.
+    pub(crate) inlays: Signal<Rc<Vec<lsp::InlayHint>>>,
+    /// The inlay-hint toggle (`None` = the configured default).
+    pub(crate) inlay_on: Signal<Option<bool>>,
+    /// The code lenses (resolved in place).
+    pub(crate) lenses: Signal<Rc<Vec<lsp::CodeLens>>>,
+    /// The code-lens toggle.
+    pub(crate) lens_on: Signal<Option<bool>>,
 }
 
 /// Create the hook signals (call unconditionally, once per render).
@@ -210,6 +223,10 @@ pub(crate) fn hooks() -> Hooks {
         sym_restore: create_signal(None),
         ws_symbols: create_signal(Vec::new()),
         crumb_focus: create_signal(None),
+        inlays: create_signal(Rc::new(Vec::new())),
+        inlay_on: create_signal(None),
+        lenses: create_signal(Rc::new(Vec::new())),
+        lens_on: create_signal(None),
         crumb_open: create_signal(None),
         crumb_menu: crate::view::extensions::Palette {
             open: create_signal(false),
@@ -244,6 +261,10 @@ pub(crate) struct Lsp {
     pub(crate) outline: Option<Signal<Vec<lsp::DocumentSymbol>>>,
     /// The breadcrumbs config.
     pub(crate) crumbs: Rc<crate::view::breadcrumbs::Crumbs>,
+    /// Inlay hints / code lenses shown by default (`CodeEditor::inlay_hints_enabled` /
+    /// `code_lens`).
+    pub(crate) inlay_default: bool,
+    pub(crate) lens_default: bool,
 }
 
 /// Map the old byte-range diagnostics onto the LSP form.
@@ -2008,6 +2029,7 @@ impl LanguageService for Chained {
     fn prepare_rename(&self, d: &lsp::DocRef, p: lsp::Position, r: lsp::Reply<Option<lsp::Range>>) -> bool { self.main.prepare_rename(d, p, r) }
     fn rename(&self, d: &lsp::DocRef, p: lsp::Position, n: &str, r: lsp::Reply<Option<lsp::WorkspaceEdit>>) -> bool { self.main.rename(d, p, n, r) }
     fn inlay_hints(&self, d: &lsp::DocRef, g: lsp::Range, r: lsp::Reply<Vec<lsp::InlayHint>>) -> bool { self.main.inlay_hints(d, g, r) }
+    fn resolve_inlay_hint(&self, h: lsp::InlayHint, r: lsp::Reply<lsp::InlayHint>) -> bool { self.main.resolve_inlay_hint(h, r) }
     fn prepare_call_hierarchy(&self, d: &lsp::DocRef, p: lsp::Position, r: lsp::Reply<Vec<lsp::CallHierarchyItem>>) -> bool { self.main.prepare_call_hierarchy(d, p, r) }
     fn incoming_calls(&self, i: &lsp::CallHierarchyItem, r: lsp::Reply<Vec<lsp::CallHierarchyIncomingCall>>) -> bool { self.main.incoming_calls(i, r) }
     fn outgoing_calls(&self, i: &lsp::CallHierarchyItem, r: lsp::Reply<Vec<lsp::CallHierarchyOutgoingCall>>) -> bool { self.main.outgoing_calls(i, r) }

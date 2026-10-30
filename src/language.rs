@@ -710,13 +710,39 @@ pub enum InlayHintKind {
     Parameter,
 }
 
+/// One part of a composite inlay-hint label (LSP `InlayHintLabelPart`): clicking it reveals
+/// `location` or runs `command`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InlayHintLabelPart {
+    /// The text.
+    pub value: String,
+    /// Tooltip for this part.
+    pub tooltip: Option<MarkupContent>,
+    /// Where clicking goes (e.g. the type's definition).
+    pub location: Option<Location>,
+    /// The command clicking runs.
+    pub command: Option<LspCommand>,
+}
+
+impl InlayHintLabelPart {
+    /// A plain part.
+    pub fn new(value: impl Into<String>) -> Self {
+        InlayHintLabelPart {
+            value: value.into(),
+            ..Default::default()
+        }
+    }
+}
+
 /// An inlay hint (LSP `InlayHint`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InlayHint {
     /// Where it is shown.
     pub position: Position,
-    /// The label.
+    /// The label (used when `label_parts` is empty).
     pub label: String,
+    /// A composite label with clickable parts (LSP `InlayHintLabelPart[]`).
+    pub label_parts: Vec<InlayHintLabelPart>,
     /// The kind.
     pub kind: Option<InlayHintKind>,
     /// Pad before.
@@ -725,6 +751,32 @@ pub struct InlayHint {
     pub padding_right: bool,
     /// Tooltip.
     pub tooltip: Option<MarkupContent>,
+    /// Opaque data for `resolve_inlay_hint`.
+    pub data: Option<String>,
+}
+
+impl InlayHint {
+    /// A hint with a plain label.
+    pub fn new(position: Position, label: impl Into<String>, kind: Option<InlayHintKind>) -> Self {
+        InlayHint {
+            position,
+            label: label.into(),
+            label_parts: Vec::new(),
+            kind,
+            padding_left: false,
+            padding_right: false,
+            tooltip: None,
+            data: None,
+        }
+    }
+    /// The label parts (a plain label as one part).
+    pub fn parts(&self) -> Vec<InlayHintLabelPart> {
+        if self.label_parts.is_empty() {
+            vec![InlayHintLabelPart::new(self.label.clone())]
+        } else {
+            self.label_parts.clone()
+        }
+    }
 }
 
 /// An item of a call or type hierarchy (LSP `CallHierarchyItem` / `TypeHierarchyItem`).
@@ -1182,6 +1234,10 @@ pub trait LanguageService {
     }
     /// `textDocument/inlayHint`.
     fn inlay_hints(&self, doc: &DocRef, range: Range, reply: Reply<Vec<InlayHint>>) -> bool {
+        false
+    }
+    /// `inlayHint/resolve` (fill in tooltip / label-part locations lazily).
+    fn resolve_inlay_hint(&self, hint: InlayHint, reply: Reply<InlayHint>) -> bool {
         false
     }
     /// `textDocument/prepareCallHierarchy`.

@@ -276,6 +276,10 @@ commands! {
     GoToSymbol => "workbench.action.gotoSymbol", "Go to Symbol in Editor...", ["Ctrl+Shift+O"];
     /// Go to a symbol in the workspace (the palette's `#` mode, through the service).
     ShowAllSymbols => "workbench.action.showAllSymbols", "Go to Symbol in Workspace...", ["Ctrl+T"];
+    /// Toggle the language service's inlay hints.
+    ToggleInlayHints => "editor.action.toggleInlayHints", "Toggle Inlay Hints", [];
+    /// Toggle the language service's code lenses.
+    ToggleCodeLens => "editor.action.toggleCodeLens", "Toggle Code Lens", [];
     /// Focus the breadcrumbs bar (arrows move between segments, Enter opens one).
     FocusBreadcrumbs => "breadcrumbs.focus", "Focus Breadcrumbs", ["Ctrl+Shift+;"];
     /// Focus the breadcrumbs and open the last segment's dropdown.

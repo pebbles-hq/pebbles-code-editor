@@ -17,6 +17,7 @@ mod decor;
 mod diffview;
 mod extensions;
 mod gutter;
+mod inlay;
 mod lsp;
 mod minimap;
 mod overlays;
@@ -388,6 +389,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             path: Rc::new(p.breadcrumb_path.clone()),
             on_pick: p.on_breadcrumb_pick.clone(),
         }),
+        inlay_default: p.inlay_hints_enabled,
+        lens_default: p.code_lens,
     };
     create_effect(move || {
         let st = state.get();
@@ -418,6 +421,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             }
             l.request_bulb();
             l.request_symbols();
+            l.request_lenses();
         });
     }
 
@@ -935,6 +939,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     return true;
                 }
                 KeyInput::CommandPalette => {
+                    palette.query.set(String::new());
+                    palette.sel.set(0);
                     palette.open.set(true);
                     pebbles::core::focus::set_focus(None); // let the palette field autofocus
                     return true;
@@ -1361,8 +1367,14 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // stays exact and matches the rendered text (which gets the same letter_spacing).
     let advance = fs * p.advance_ratio + p.letter_spacing;
     let pad_l = 14.0;
-    let pad_t = 10.0;
     let theme = &p.theme;
+    // Code lenses: a row above their line (line 0's lens widens the top padding).
+    let mut lens_rows = lsp_ctl.lens_rows(theme, fs, &src);
+    let top_lens = match lens_rows.first() {
+        Some((0, _)) => Some(lens_rows.remove(0).1),
+        _ => None,
+    };
+    let pad_t = 10.0 + if top_lens.is_some() { line_px } else { 0.0 };
 
     // All cursors/selections; the primary drives the current-line band + status line.
     let sels = st.selection.clamped(&st.doc);
@@ -1552,6 +1564,16 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     {
         block_widgets.push(b);
     }
+    // Code lenses above their line = a row below the previous line.
+    for (line, w) in lens_rows {
+        if line < line_count {
+            block_widgets.push(crate::extensions::BlockWidget {
+                line: line - 1,
+                height: line_px,
+                widget: w,
+            });
+        }
+    }
     // The problem peek (F8 / Shift+F8) below the problem's line.
     if let Some(b) = lsp_ctl.problem_block(&p.theme, eff_fs, eff_fs * p.lh, &src, &diags)
         && b.line < line_count
@@ -1600,6 +1622,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     } else {
         (0, line_count - 1)
     };
+    // Inlay hints follow the viewport and the document version.
+    lsp_ctl.request_inlays(first_line, last_line);
 
     // Pointer → byte, fold/wrap-aware: the y maps to a VISUAL row, then to its buffer line +
     // column span. When nothing is folded or wrapped this is the plain identity mapping (fast
@@ -1999,6 +2023,15 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
 
     let ruler_matches = search_matches.clone();
     let mut layers = overlays::build(&frame);
+    if let Some(w) = top_lens {
+        layers.push(
+            Positioned::new(container().height(line_px).child(w))
+                .left(pad_l)
+                .right(0.0)
+                .top(10.0)
+                .into_widget(),
+        );
+    }
     decor::color_picker(&frame, &mut layers, state, history, code, color_draft);
     if let Some(g) = &ghost_text {
         let first = g.split('\n').next().unwrap_or("");

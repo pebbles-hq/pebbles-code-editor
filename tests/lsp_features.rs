@@ -53,9 +53,44 @@ struct Fake {
     /// Workspace symbols (answered for every query; the queries are recorded).
     ws: RefCell<Vec<SymbolInformation>>,
     ws_queries: RefCell<Vec<String>>,
+    inlays: RefCell<Vec<InlayHint>>,
+    inlay_ranges: RefCell<Vec<Range>>,
+    lenses: RefCell<Vec<CodeLens>>,
 }
 
 impl LanguageService for Fake {
+    fn inlay_hints(&self, _doc: &DocRef, range: Range, reply: Reply<Vec<InlayHint>>) -> bool {
+        self.inlay_ranges.borrow_mut().push(range);
+        reply(self.inlays.borrow().clone());
+        true
+    }
+    fn resolve_inlay_hint(&self, hint: InlayHint, reply: Reply<InlayHint>) -> bool {
+        let mut h = hint;
+        h.label_parts = vec![InlayHintLabelPart {
+            command: Some(LspCommand {
+                title: "show".into(),
+                command: "hint.resolved".into(),
+                arguments: vec![],
+            }),
+            ..InlayHintLabelPart::new(h.label.clone())
+        }];
+        reply(h);
+        true
+    }
+    fn code_lens(&self, _doc: &DocRef, reply: Reply<Vec<CodeLens>>) -> bool {
+        reply(self.lenses.borrow().clone());
+        true
+    }
+    fn resolve_code_lens(&self, lens: CodeLens, reply: Reply<CodeLens>) -> bool {
+        let mut l = lens;
+        l.command = Some(LspCommand {
+            title: "1 reference".into(),
+            command: "lens.refs".into(),
+            arguments: vec![],
+        });
+        reply(l);
+        true
+    }
     fn document_symbols(&self, _doc: &DocRef, reply: Reply<DocumentSymbolResponse>) -> bool {
         *self.symbol_requests.borrow_mut() += 1;
         match self.symbols.borrow().clone() {
@@ -1284,4 +1319,99 @@ fn breadcrumbs_show_path_and_symbol_chain_with_dropdowns_and_keyboard_focus() {
     );
     h.key(KeyInput::Escape);
     h.frames(1);
+}
+
+fn cmd(title: &str, id: &str) -> LspCommand {
+    LspCommand {
+        title: title.into(),
+        command: id.into(),
+        arguments: vec![],
+    }
+}
+
+fn run_palette(h: &mut Harness, title: &str) {
+    h.key(KeyInput::CommandPalette);
+    h.frames(1);
+    type_text(h, title);
+    h.key(KeyInput::Enter);
+    h.frames(2);
+}
+
+#[test]
+fn inlay_hints_and_code_lenses_render_click_resolve_refresh_and_toggle() {
+    let fake = Rc::new(Fake::default());
+    let mut ty = InlayHint::new(Position::new(0, 5), "", Some(InlayHintKind::Type));
+    ty.label_parts = vec![
+        InlayHintLabelPart::new(": "),
+        InlayHintLabelPart {
+            location: Some(Location {
+                uri: "file:///w/types.rs".into(),
+                range: rng(3, 0, 3, 3),
+            }),
+            tooltip: Some(MarkupContent::plain("i32 is a primitive")),
+            ..InlayHintLabelPart::new("i32")
+        },
+    ];
+    let mut param = InlayHint::new(Position::new(0, 10), "a:", Some(InlayHintKind::Parameter));
+    param.padding_right = true;
+    param.data = Some("p".into());
+    *fake.inlays.borrow_mut() = vec![ty, param];
+    *fake.lenses.borrow_mut() = vec![
+        CodeLens {
+            range: rng(0, 0, 0, 3),
+            command: Some(cmd("Run", "lens.run")),
+            data: None,
+        },
+        CodeLens {
+            range: rng(2, 0, 2, 2),
+            command: None,
+            data: Some("refs".into()),
+        },
+    ];
+    let (mut h, _code) = mount(
+        "let x = f(1);\nlet y = 2;\nfn main() {}\n",
+        fake.clone(),
+        |e| e,
+    );
+    h.frames(2);
+    let asked = fake.inlay_ranges.borrow().len();
+    assert!(asked >= 1, "requested for the viewport");
+    assert_eq!(fake.inlay_ranges.borrow()[0].start, Position::new(0, 0));
+    // Clickable label parts: a location part reveals it through the host.
+    assert!(h.find_text("Inlay hint : "));
+    tap_label(&mut h, "Inlay hint i32");
+    assert_eq!(
+        fake.opened.borrow().last().unwrap().uri,
+        "file:///w/types.rs"
+    );
+    // A part with nothing to act on is resolved first, then its command runs.
+    tap_label(&mut h, "Inlay hint a:");
+    assert_eq!(
+        fake.commands.borrow().last().map(String::as_str),
+        Some("hint.resolved")
+    );
+    // Code lenses: one above line 0, one resolved lazily above line 2; clicking runs it.
+    assert!(h.find_text("Code lens Run"));
+    assert!(
+        h.find_text("Code lens 1 reference"),
+        "unresolved lens resolved"
+    );
+    tap_label(&mut h, "Code lens 1 reference");
+    assert_eq!(
+        fake.commands.borrow().last().map(String::as_str),
+        Some("lens.refs")
+    );
+    // Not re-requested on a plain re-render; an edit refreshes.
+    h.frames(2);
+    assert_eq!(fake.inlay_ranges.borrow().len(), asked);
+    h.key(KeyInput::Insert("z".into()));
+    h.frames(2);
+    assert!(fake.inlay_ranges.borrow().len() > asked, "edit re-requests");
+    // Toggles.
+    run_palette(&mut h, "Toggle Inlay Hints");
+    assert!(!h.find_text("Inlay hint i32"));
+    run_palette(&mut h, "Toggle Code Lens");
+    assert!(!h.find_text("Code lens Run"));
+    run_palette(&mut h, "Toggle Inlay Hints");
+    assert!(h.find_text("Inlay hint i32"));
 }

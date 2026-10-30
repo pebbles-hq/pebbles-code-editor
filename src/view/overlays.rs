@@ -33,6 +33,7 @@ pub(crate) fn build(f: &Frame) -> Vec<AnyWidget> {
     crate::view::decor::color_swatches(f, &mut layers, f.color_picker);
     crate::view::decor::fold_badges(f, &mut layers);
     inlay_hints(f, &mut layers);
+    f.lsp.inlay_layers(f, &mut layers);
     diagnostics(f, &mut layers);
     whitespace(f, &mut layers);
     carets(f, &mut layers);

@@ -182,6 +182,8 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
         C::PreviousProblem => env.lsp.next_problem(false),
         C::GoToSymbol => env.lsp.open_go_to_symbol(env.palette),
         C::ShowAllSymbols => env.lsp.open_workspace_symbols(env.palette),
+        C::ToggleInlayHints => env.lsp.toggle_inlays(),
+        C::ToggleCodeLens => env.lsp.toggle_lenses(),
         C::FocusBreadcrumbs => env.lsp.focus_breadcrumbs(false),
         C::FocusAndSelectBreadcrumbs => env.lsp.focus_breadcrumbs(true),
         C::TriggerParameterHints => {
