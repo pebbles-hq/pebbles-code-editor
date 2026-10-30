@@ -464,6 +464,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         let inline_provider = p.inline_suggestions.clone();
         let definition = p.definition.clone();
         let format = p.format.clone();
+        let format_on_paste = p.format_on_paste;
         let sig_provider = p.signature.clone();
         let ro_exts = p.extensions.clone(); // for read-only-range veto
         // Register as a *code* editor so the shell routes Tab/Shift+Tab here (indent/outdent)
@@ -816,7 +817,38 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     selection: Selections::single(keep),
                 });
             } else {
+                let was_paste = matches!(k, KeyInput::Paste);
                 apply_key(k, state, history, code, goal, read_only, &cfg);
+                // Format on paste: a separate undo step after the paste.
+                if was_paste
+                    && format_on_paste
+                    && !read_only
+                    && let Some(fp) = &format
+                {
+                    let cur = state.peek();
+                    let old = cur.text();
+                    let new = fp(&old);
+                    if new != old {
+                        // Keep the caret on the same line/column-from-end of its line.
+                        let head = cur.primary().head;
+                        let tail = old.len() - head;
+                        let caret = new.len().saturating_sub(tail);
+                        let mut caret = caret.min(new.len());
+                        while !new.is_char_boundary(caret) {
+                            caret -= 1;
+                        }
+                        dispatch(
+                            state,
+                            history,
+                            code,
+                            Transaction::change_and_select(
+                                ChangeSet::replace(0, old.len(), new),
+                                Selections::single(Selection::caret(caret)),
+                            ),
+                            Coalesce::Never,
+                        );
+                    }
+                }
             }
             if let Some(pv) = &provider {
                 if follow == 1 {

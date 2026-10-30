@@ -109,6 +109,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         document_id: None,
         controller: None,
         suggest_preview: false,
+        format_on_paste: false,
         inline_suggestions: None,
         line_numbers: LineNumbers::On,
         smooth_caret: false,
@@ -191,6 +192,7 @@ pub struct CodeEditor {
     line_numbers: LineNumbers,
     inline_suggestions: Option<crate::providers::InlineSuggestionProvider>,
     suggest_preview: bool,
+    format_on_paste: bool,
 }
 
 /// Fired after each change with the minimal [`Edit`] delta; `remote` is true when the change
@@ -547,6 +549,13 @@ impl CodeEditor {
         self.suggest_preview = v;
         self
     }
+    /// Run the [`format`](Self::format) provider after each paste (VS Code
+    /// `editor.formatOnPaste`, default off). The format is its own undo step, so one undo
+    /// restores the pasted text as typed.
+    pub fn format_on_paste(mut self, v: bool) -> Self {
+        self.format_on_paste = v;
+        self
+    }
 }
 
 impl IntoWidget for CodeEditor {
@@ -628,6 +637,7 @@ pub(crate) struct Props {
     pub(crate) line_numbers: LineNumbers,
     pub(crate) inline_suggestions: Option<crate::providers::InlineSuggestionProvider>,
     pub(crate) suggest_preview: bool,
+    pub(crate) format_on_paste: bool,
 }
 
 impl From<CodeEditor> for Props {
@@ -713,6 +723,7 @@ impl From<CodeEditor> for Props {
             keymap: e.keymap,
             controller: e.controller,
             suggest_preview: e.suggest_preview,
+            format_on_paste: e.format_on_paste,
             inline_suggestions: e.inline_suggestions,
             line_numbers: e.line_numbers,
             smooth_caret: e.smooth_caret,

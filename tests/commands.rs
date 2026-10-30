@@ -20,6 +20,14 @@ struct H {
 }
 
 fn harness_with(initial: &str, keymap: Keymap) -> H {
+    harness_cfg(initial, keymap, |e| e)
+}
+
+fn harness_cfg(
+    initial: &str,
+    keymap: Keymap,
+    cfg: impl FnOnce(pebbles_code_editor::CodeEditor) -> pebbles_code_editor::CodeEditor,
+) -> H {
     pebbles::widgets::overlay::init();
     pebbles::core::focus::init();
     pebbles::core::keyboard::set_modifiers(false, false, false, false);
@@ -31,13 +39,13 @@ fn harness_with(initial: &str, keymap: Keymap) -> H {
     ui.mount_root(
         View::new(
             Color::from_rgba8(255, 255, 255, 255),
-            code_editor(code)
+            cfg(code_editor(code)
                 .language(pebbles_code_editor::lang::by_name("rust"))
                 .height(400.0)
                 .folds(folds)
                 .keymap(keymap)
                 .controller(ctrl)
-                .autofocus(),
+                .autofocus()),
         )
         .into_widget(),
     );
@@ -360,4 +368,17 @@ fn find_seeds_from_word_and_f3_cycles_matches() {
     assert_eq!(h.pos(), (0, 3)); // wrapped
     h.press("Shift+F3"); // previous from the first match wraps to the last one
     assert_eq!(h.pos(), (0, 19));
+}
+
+#[test]
+fn format_on_paste_formats_as_a_separate_undo_step() {
+    use std::rc::Rc;
+    let fmt: pebbles_code_editor::FormatProvider = Rc::new(|s: &str| s.replace("  ", " "));
+    let mut h = harness_cfg("", Keymap::new(), |e| e.format(fmt).format_on_paste(true));
+    pebbles::core::clipboard::write("a  b");
+    h.key(KeyInput::Paste);
+    assert_eq!(h.code.get(), "a b");
+    assert_eq!(h.pos(), (0, 3));
+    h.key(KeyInput::Undo);
+    assert_eq!(h.code.get(), "a  b", "undo restores the paste as-is");
 }
