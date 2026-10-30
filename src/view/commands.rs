@@ -173,6 +173,7 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
             .navigate(crate::view::lsp::Nav::Implementation, true),
         C::FindReferences => env.lsp.navigate(crate::view::lsp::Nav::References, true),
         C::ShowReferences => env.lsp.show_references(),
+        C::Rename => env.lsp.start_rename(),
         C::TriggerParameterHints => {
             env.lsp
                 .request_signature(crate::language::SignatureHelpTriggerKind::Invoked, None);

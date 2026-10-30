@@ -87,6 +87,36 @@ pub(crate) struct PeekView {
     pub(crate) sel: usize,
 }
 
+/// The inline rename box over `from..to`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RenameView {
+    pub(crate) from: usize,
+    pub(crate) to: usize,
+}
+
+/// The rename preview: the workspace edit and which files are accepted.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RenamePreview {
+    pub(crate) edit: lsp::WorkspaceEdit,
+    pub(crate) accepted: Vec<bool>,
+}
+
+impl RenamePreview {
+    /// The edit restricted to the accepted files.
+    pub(crate) fn accepted_edit(&self) -> lsp::WorkspaceEdit {
+        lsp::WorkspaceEdit {
+            changes: self
+                .edit
+                .changes
+                .iter()
+                .zip(&self.accepted)
+                .filter(|(_, a)| **a)
+                .map(|(c, _)| c.clone())
+                .collect(),
+        }
+    }
+}
+
 /// Non-reactive per-editor state (gates, caches, the document version counter).
 #[derive(Default)]
 pub(crate) struct Store {
@@ -95,6 +125,7 @@ pub(crate) struct Store {
     pub(crate) nav_gate: RequestGate,
     pub(crate) link_gate: RequestGate,
     pub(crate) hl_gate: RequestGate,
+    pub(crate) rename_gate: RequestGate,
     /// The (caret, version) of the last document-highlight request.
     hl_at: Cell<Option<(usize, u64)>>,
     /// Hover replies per (byte, document version).
@@ -115,6 +146,9 @@ pub(crate) struct Hooks {
     pub(crate) link: Signal<Option<(usize, usize)>>,
     /// The service's document highlights for the caret (`None` = use the word fallback).
     pub(crate) highlights: Signal<Option<Vec<(usize, usize, lsp::DocumentHighlightKind)>>>,
+    pub(crate) rename: Signal<Option<RenameView>>,
+    pub(crate) rename_draft: Signal<String>,
+    pub(crate) rename_preview: Signal<Option<RenamePreview>>,
     pub(crate) store: Signal<Rc<Store>>,
 }
 
@@ -127,6 +161,9 @@ pub(crate) fn hooks() -> Hooks {
         peek: create_signal(None),
         link: create_signal(None),
         highlights: create_signal(None),
+        rename: create_signal(None),
+        rename_draft: create_signal(String::new()),
+        rename_preview: create_signal(None),
         store: create_signal(Rc::new(Store::default())),
     }
 }
@@ -146,6 +183,9 @@ pub(crate) struct Lsp {
     pub(crate) diag_old: Option<crate::providers::Diagnostics>,
     pub(crate) diag_lsp: Option<Signal<Vec<lsp::LspDiagnostic>>>,
     pub(crate) on_open_link: Option<Rc<dyn Fn(&str)>>,
+    /// The editor's focus (returned to after the rename box / preview closes).
+    pub(crate) focus: pebbles::core::focus::FocusNode,
+    pub(crate) read_only: bool,
 }
 
 /// Map the old byte-range diagnostics onto the LSP form.
@@ -1052,6 +1092,319 @@ impl Lsp {
         if !asked && hl.peek().is_some() {
             hl.set(None);
         }
+    }
+
+    // ---- edits ---------------------------------------------------------------------------
+
+    /// Apply `edits` (LSP ranges in the current text) as ONE undo step; the cursors map
+    /// through the change. Overlapping edits after the first are dropped.
+    pub(crate) fn apply_text_edits(&self, edits: &[lsp::TextEdit]) -> bool {
+        if edits.is_empty() || self.read_only {
+            return false;
+        }
+        let text = self.state.peek().text();
+        let mut changes: Vec<crate::edit::Change> = edits
+            .iter()
+            .map(|e| {
+                let (from, to) = lsp::range_to_bytes(&text, e.range);
+                crate::edit::Change {
+                    from,
+                    to: to.max(from),
+                    insert: e.new_text.clone(),
+                }
+            })
+            .collect();
+        changes.sort_by_key(|c| (c.from, c.to));
+        let mut kept: Vec<crate::edit::Change> = Vec::new();
+        for c in changes {
+            if kept.last().is_some_and(|l| c.from < l.to) {
+                continue;
+            }
+            if c.from == c.to && c.insert.is_empty() {
+                continue;
+            }
+            if text.get(c.from..c.to) == Some(c.insert.as_str()) {
+                continue; // no-op
+            }
+            kept.push(c);
+        }
+        if kept.is_empty() {
+            return false;
+        }
+        crate::commands::dispatch(
+            self.state,
+            self.history,
+            self.code,
+            crate::edit::Transaction::change(crate::edit::ChangeSet::from_changes(kept)),
+            crate::edit::Coalesce::Never,
+        );
+        self.history.peek().borrow_mut().break_group();
+        let now = self.state.peek();
+        self.goal
+            .set(crate::geometry::col_of(&now.text(), now.primary().head));
+        true
+    }
+
+    /// Apply a workspace edit: this document's edits as one undo step, the rest through the
+    /// host's `apply_workspace_edit`.
+    pub(crate) fn apply_workspace_edit(&self, edit: &lsp::WorkspaceEdit) {
+        let mut others = lsp::WorkspaceEdit::default();
+        for (uri, edits) in &edit.changes {
+            if **uri == *self.uri {
+                self.apply_text_edits(edits);
+            } else {
+                others.changes.push((uri.clone(), edits.clone()));
+            }
+        }
+        if !others.changes.is_empty()
+            && let Some(svc) = &self.svc
+        {
+            svc.apply_workspace_edit(&others);
+        }
+    }
+
+    // ---- rename ----------------------------------------------------------------------------
+
+    /// F2: ask `prepareRename` (or take the word when unsupported) and open the inline box.
+    pub(crate) fn start_rename(&self) -> bool {
+        let Some(svc) = self.svc.clone() else {
+            return false;
+        };
+        if self.read_only {
+            return false;
+        }
+        let head = self.state.peek().primary().head;
+        let me = self.clone();
+        let reply = self.guard(&self.store.rename_gate, move |r: Option<lsp::Range>| {
+            if let Some(r) = r {
+                let text = me.state.peek().text();
+                let (a, b) = lsp::range_to_bytes(&text, r);
+                me.open_rename(a, b);
+            }
+        });
+        let asked = self.with_doc(|doc, text| {
+            svc.prepare_rename(doc, lsp::byte_to_position(text, head), reply)
+        });
+        if !asked {
+            let text = self.state.peek().text();
+            if let Some((a, b)) = crate::view::word_range_at(&text, head) {
+                self.open_rename(a, b);
+            }
+        }
+        true
+    }
+
+    fn open_rename(&self, from: usize, to: usize) {
+        let text = self.state.peek().text();
+        self.h
+            .rename_draft
+            .set(text.get(from..to).unwrap_or_default().to_string());
+        self.h.rename.set(Some(RenameView { from, to }));
+        pebbles::core::focus::set_focus(None); // let the rename field autofocus
+    }
+
+    /// Close the rename box (focus returns to the editor).
+    pub(crate) fn cancel_rename(&self) {
+        self.h.rename.set(None);
+        self.focus.request_focus();
+    }
+
+    /// Submit the new name: apply this document's edits directly, or preview when the
+    /// edit touches other files (or `preview` — Shift+Enter).
+    pub(crate) fn submit_rename(&self, preview: bool) {
+        let Some(rv) = self.h.rename.peek() else {
+            return;
+        };
+        let name = self.h.rename_draft.peek();
+        self.cancel_rename();
+        let Some(svc) = self.svc.clone() else { return };
+        let text = self.state.peek().text();
+        if name.is_empty() || text.get(rv.from..rv.to) == Some(name.as_str()) {
+            return;
+        }
+        let me = self.clone();
+        let reply = self.guard(
+            &self.store.rename_gate,
+            move |e: Option<lsp::WorkspaceEdit>| {
+                let Some(e) = e else { return };
+                let only_here = e.changes.iter().all(|(u, _)| **u == *me.uri);
+                if preview || !only_here {
+                    let n = e.changes.len();
+                    me.h.rename_preview.set(Some(RenamePreview {
+                        edit: e,
+                        accepted: vec![true; n],
+                    }));
+                } else {
+                    me.apply_workspace_edit(&e);
+                }
+            },
+        );
+        self.with_doc(|doc, text| {
+            svc.rename(doc, lsp::byte_to_position(text, rv.from), &name, reply)
+        });
+    }
+
+    /// Apply the accepted files of the preview and close it.
+    pub(crate) fn apply_preview(&self) {
+        if let Some(p) = self.h.rename_preview.peek() {
+            self.h.rename_preview.set(None);
+            self.apply_workspace_edit(&p.accepted_edit());
+        }
+        self.focus.request_focus();
+    }
+
+    /// The inline rename box over the symbol.
+    pub(crate) fn rename_layer(&self, f: &Frame) -> Option<AnyWidget> {
+        let rv = self.h.rename.get()?;
+        let line = f.li.line_of(f.src, rv.from.min(f.src.len()));
+        let (x, y) = f.xy(line, f.li.col_of(f.src, rv.from.min(f.src.len())));
+        let n = self.h.rename_draft.peek().chars().count();
+        let (me, me2) = (self.clone(), self.clone());
+        let field = text_field()
+            .bind(self.h.rename_draft)
+            .autofocus()
+            .select_range(0, n)
+            .width(240.0)
+            .on_nav(move |k| match k {
+                KeyInput::Escape => {
+                    me.cancel_rename();
+                    true
+                }
+                KeyInput::Enter => {
+                    me.submit_rename(pebbles::core::keyboard::shift_held());
+                    true
+                }
+                _ => false,
+            })
+            .on_submit(move |_| me2.submit_rename(pebbles::core::keyboard::shift_held()));
+        let hint = f
+            .theme
+            .ui_text("Enter to rename, Shift+Enter to preview", -1.0)
+            .color(f.theme.muted);
+        let panel = container()
+            .decoration(
+                BoxDecoration::new()
+                    .color(f.theme.overlay_bg)
+                    .radius(BorderRadius::all(f.theme.overlay_radius))
+                    .border(Border::new(f.theme.accent, 1.0)),
+            )
+            .padding(EdgeInsets::all(4.0))
+            .child(
+                column(vec![field.into_widget(), hint.into_widget()])
+                    .main_axis_size(MainAxisSize::Min),
+            );
+        Some(
+            Positioned::new(panel)
+                .left((x - 4.0).max(0.0))
+                .top((y - 4.0).max(0.0))
+                .into_widget(),
+        )
+    }
+
+    /// The rename preview dialog: every file with its edits, a checkbox per file, Apply /
+    /// Discard.
+    pub(crate) fn preview_layer(
+        &self,
+        t: &crate::theme::EditorTheme,
+        mono: &str,
+    ) -> Option<AnyWidget> {
+        let pv = self.h.rename_preview.get()?;
+        let total: usize = pv.edit.changes.iter().map(|(_, e)| e.len()).sum();
+        let mut rows: Vec<AnyWidget> = vec![
+            t.ui_text(
+                format!("Rename: {total} edits in {} files", pv.edit.changes.len()),
+                1.0,
+            )
+            .color(t.foreground)
+            .into_widget(),
+            gap_h(6.0).into_widget(),
+        ];
+        let sig = self.h.rename_preview;
+        for (i, (uri, edits)) in pv.edit.changes.iter().enumerate() {
+            let file = uri.rsplit('/').next().unwrap_or(uri).to_string();
+            rows.push(
+                checkbox(pv.accepted[i])
+                    .label(format!("{file} ({} edits)", edits.len()))
+                    .on_changed(move |v| {
+                        if let Some(mut p) = sig.peek() {
+                            p.accepted[i] = v;
+                            sig.set(Some(p));
+                        }
+                    })
+                    .into_widget(),
+            );
+            let src = self.text_of(uri);
+            for e in edits.iter().take(8) {
+                let old = src
+                    .as_deref()
+                    .map(|s| {
+                        let (a, b) = lsp::range_to_bytes(s, e.range);
+                        s[a..b].to_string()
+                    })
+                    .unwrap_or_default();
+                rows.push(
+                    container()
+                        .padding(EdgeInsets::only(24.0, 0.0, 0.0, 0.0))
+                        .child(
+                            text(format!(
+                                "{}: {old} \u{2192} {}",
+                                e.range.start.line + 1,
+                                e.new_text
+                            ))
+                            .size((t.ui_font_size) as f32)
+                            .font_family(mono)
+                            .color(if pv.accepted[i] {
+                                t.foreground
+                            } else {
+                                t.muted
+                            }),
+                        )
+                        .into_widget(),
+                );
+            }
+        }
+        let (a, d) = (self.clone(), self.clone());
+        rows.push(gap_h(8.0).into_widget());
+        rows.push(
+            row(vec![
+                expanded(gap_w(1.0)).into_widget(),
+                button("Discard")
+                    .size(ButtonSize::Sm)
+                    .variant(ButtonVariant::Secondary)
+                    .on_pressed(move || {
+                        d.h.rename_preview.set(None);
+                        d.focus.request_focus();
+                    })
+                    .into_widget(),
+                gap_w(6.0).into_widget(),
+                button("Apply")
+                    .size(ButtonSize::Sm)
+                    .on_pressed(move || a.apply_preview())
+                    .into_widget(),
+            ])
+            .into_widget(),
+        );
+        let panel = container()
+            .width(520.0)
+            .decoration(
+                BoxDecoration::new()
+                    .color(t.overlay_bg)
+                    .radius(BorderRadius::all(t.overlay_radius + 2.0))
+                    .border(Border::new(t.border, 1.0)),
+            )
+            .padding(EdgeInsets::all(10.0))
+            .child(
+                column(rows)
+                    .cross_axis_alignment(CrossAxisAlignment::Start)
+                    .main_axis_size(MainAxisSize::Min),
+            );
+        Some(
+            Positioned::new(align(Alignment::TOP_CENTER, panel))
+                .left(0.0)
+                .right(0.0)
+                .top(40.0)
+                .into_widget(),
+        )
     }
 
     /// Ctrl/Cmd+hover over `byte`: ask for its definition and underline the word when there

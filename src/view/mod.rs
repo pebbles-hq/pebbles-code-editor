@@ -372,6 +372,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         diag_old: p.diagnostics,
         diag_lsp: p.lsp_diagnostics,
         on_open_link: p.on_open_link.clone(),
+        focus,
+        read_only: p.read_only,
     };
     create_effect(move || {
         let st = state.get();
@@ -2005,6 +2007,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     if let Some(l) = lsp_ctl.hover_layer(&frame) {
         layers.push(l);
     }
+    // The inline rename box (F2).
+    if let Some(l) = lsp_ctl.rename_layer(&frame) {
+        layers.push(l);
+    }
     // Signature help: a panel just above the caret line while typing a call.
     if let Some(l) = lsp_ctl.sig_layer(&frame) {
         layers.push(l);
@@ -2545,6 +2551,12 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         stack(children![code_area, pal]).into_widget()
     } else {
         code_area
+    };
+
+    // The rename preview dialog (edits across files, accepted per file).
+    let code_area: AnyWidget = match lsp_ctl.preview_layer(theme, &p.font_family) {
+        Some(d) => stack(children![code_area, d]).into_widget(),
+        None => code_area,
     };
 
     // ---- chrome: optional title/status bar above the code area ----

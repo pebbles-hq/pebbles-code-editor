@@ -31,6 +31,11 @@ struct Fake {
     /// Document highlights; `None` declines the request.
     highlights: RefCell<Option<Vec<DocumentHighlight>>>,
     hl_requests: RefCell<Vec<Position>>,
+    /// `prepareRename`: `None` declines (word fallback).
+    prepare: RefCell<Option<Option<Range>>>,
+    rename_edit: RefCell<Option<WorkspaceEdit>>,
+    renamed_to: RefCell<Vec<String>>,
+    applied: RefCell<Vec<WorkspaceEdit>>,
 }
 
 impl LanguageService for Fake {
@@ -80,6 +85,30 @@ impl LanguageService for Fake {
             }
             None => false,
         }
+    }
+    fn prepare_rename(&self, _doc: &DocRef, _pos: Position, reply: Reply<Option<Range>>) -> bool {
+        match *self.prepare.borrow() {
+            Some(r) => {
+                reply(r);
+                true
+            }
+            None => false,
+        }
+    }
+    fn rename(
+        &self,
+        _doc: &DocRef,
+        _pos: Position,
+        new_name: &str,
+        reply: Reply<Option<WorkspaceEdit>>,
+    ) -> bool {
+        self.renamed_to.borrow_mut().push(new_name.to_string());
+        reply(self.rename_edit.borrow().clone());
+        true
+    }
+    fn apply_workspace_edit(&self, edit: &WorkspaceEdit) -> bool {
+        self.applied.borrow_mut().push(edit.clone());
+        true
     }
     fn read_text(&self, uri: &str) -> Option<String> {
         self.files
@@ -494,4 +523,113 @@ fn document_highlights_follow_the_caret_with_word_fallback() {
         fallback > one,
         "declined: the word occurrences are drawn ({fallback})"
     );
+}
+
+/// Click the centre of the widget whose accessible label is `label`.
+fn tap_label(h: &mut Harness, label: &str) {
+    let node = h
+        .semantics_tree()
+        .into_iter()
+        .find(|n| n.props.label == label)
+        .unwrap_or_else(|| panic!("no widget labelled {label:?}"));
+    let b = node.bounds;
+    h.click(Offset::new(b.x0 + b.width() / 2.0, b.y0 + b.height() / 2.0));
+    h.frames(1);
+}
+
+fn edit(line: u32, col: u32, len: u32, new: &str) -> TextEdit {
+    TextEdit::new(
+        Range::new(Position::new(line, col), Position::new(line, col + len)),
+        new,
+    )
+}
+
+#[test]
+fn rename_box_applies_one_undo_step_and_previews_cross_file_edits() {
+    let fake = Rc::new(Fake::default());
+    fake.files
+        .borrow_mut()
+        .push(("file:///w/lib.rs".into(), "use main::foo;\n".into()));
+    let (mut h, code) = mount("let foo = 1;\nfoo + foo;\n", fake.clone(), |e| e);
+    let original = code.get();
+    for _ in 0..5 {
+        h.key(KeyInput::Move {
+            motion: Motion::Right,
+            extend: false,
+        });
+    }
+    // prepareRename gives the range; the box opens over it with the name selected.
+    *fake.prepare.borrow_mut() = Some(Some(Range::new(Position::new(0, 4), Position::new(0, 7))));
+    *fake.rename_edit.borrow_mut() = Some(WorkspaceEdit {
+        changes: vec![(
+            "file:///w/main.rs".into(),
+            vec![
+                edit(0, 4, 3, "bar"),
+                edit(1, 0, 3, "bar"),
+                edit(1, 6, 3, "bar"),
+            ],
+        )],
+    });
+    h.press("F2");
+    h.frames(2);
+    assert!(h.find_text("Enter to rename, Shift+Enter to preview"));
+    for c in "bar".chars() {
+        h.key(KeyInput::Insert(c.to_string()));
+    }
+    h.key(KeyInput::Enter);
+    h.frames(1);
+    assert_eq!(*fake.renamed_to.borrow(), vec!["bar".to_string()]);
+    assert_eq!(code.get(), "let bar = 1;\nbar + bar;\n");
+    assert!(
+        fake.applied.borrow().is_empty(),
+        "same-document edits applied locally"
+    );
+    assert!(
+        !h.find_text("Enter to rename, Shift+Enter to preview"),
+        "box closed"
+    );
+    h.key(KeyInput::Undo);
+    assert_eq!(code.get(), original, "one undo step");
+    // Edits across files open the preview; unticking a file leaves it out.
+    *fake.prepare.borrow_mut() = None; // declined: the word at the caret
+    *fake.rename_edit.borrow_mut() = Some(WorkspaceEdit {
+        changes: vec![
+            ("file:///w/main.rs".into(), vec![edit(0, 4, 3, "baz")]),
+            ("file:///w/lib.rs".into(), vec![edit(0, 10, 3, "baz")]),
+        ],
+    });
+    h.press("F2");
+    h.frames(2);
+    for c in "baz".chars() {
+        h.key(KeyInput::Insert(c.to_string()));
+    }
+    h.key(KeyInput::Enter);
+    h.frames(2);
+    assert!(h.find_text("Rename: 2 edits in 2 files"));
+    assert!(
+        h.find_text("1: foo \u{2192} baz"),
+        "each edit listed with its old text"
+    );
+    tap_label(&mut h, "lib.rs (1 edits)");
+    tap_label(&mut h, "Apply");
+    assert_eq!(code.get(), "let baz = 1;\nfoo + foo;\n");
+    assert!(
+        fake.applied.borrow().is_empty(),
+        "the discarded file is not sent"
+    );
+    h.key(KeyInput::Undo);
+    // Accept everything: the other file goes through the host's apply_workspace_edit.
+    h.press("F2");
+    h.frames(2);
+    for c in "baz".chars() {
+        h.key(KeyInput::Insert(c.to_string()));
+    }
+    h.key(KeyInput::Enter);
+    h.frames(2);
+    tap_label(&mut h, "Apply");
+    assert_eq!(code.get(), "let baz = 1;\nfoo + foo;\n");
+    let applied = fake.applied.borrow();
+    assert_eq!(applied.len(), 1);
+    assert_eq!(applied[0].changes.len(), 1);
+    assert_eq!(applied[0].changes[0].0, "file:///w/lib.rs");
 }
