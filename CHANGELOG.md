@@ -6,6 +6,38 @@ All notable changes to `pebbles-code-editor` are documented here. The format fol
 
 ## [Unreleased]
 
+### Added — VS Code editor parity (phase 1)
+- **Syntax:** incremental tree-sitter highlighting (Rust, TOML, JSON, Markdown, JS, TS/TSX,
+  Python, Go, C, C++, HTML, CSS, YAML, Shell, SQL) with injections (Markdown code blocks,
+  `<script>` / `<style>`), viewport-limited queries, syntax-based folding.
+- **Commands:** the VS Code editor command list (`EditorCommand`, ids + default chords incl.
+  multi-stroke `Ctrl+K …`), remappable via `Keymap`, all in the palette: line operations,
+  multi-cursor, column select, comments, case transforms, subword motion, smart Home, cursor
+  undo, fold levels / `#region` markers / fold selection (`Ctrl+K Ctrl+,`), word-wrap toggle,
+  font zoom, Go to Line, next/previous change, smart select, overtype (`Insert`), tab focus
+  mode (`Ctrl+M`), inline-suggestion cycling, Emmet expand.
+- **Find/replace:** find in selection, preserve case, regex capture groups, select all
+  matches, query seeding (the seeded query is selected), match count, replace all.
+- **Surface:** git change bars with inline peek (revert / stage) and Alt+F3 navigation,
+  overview ruler, occurrence + selection highlights, bracket-pair guides, active indent guide,
+  Unicode / control-character highlighting, clickable links, colour swatches with picker,
+  linked editing of tag pairs, cursor styles + blink modes + smooth caret, relative line
+  numbers, folded-region badge with a hover preview of the hidden lines, wrap indent,
+  long-line virtualization, Ctrl+hover underline of the Ctrl+click target.
+- **Gutter:** `.breakpoints(signal)` glyph margin; folds and breakpoints now follow edits that
+  add or remove lines.
+- **Suggestions:** word-based completion when no provider is set
+  (`.word_based_suggestions`), suggestion preview (`.suggest_preview`), inline ghost-text
+  suggestions (`.inline_suggestions`, Tab / Escape / Alt+] / Alt+[ / Alt+\), built-in and
+  user snippets (`.snippets`, `builtin_snippets`), Emmet for HTML/CSS (`.emmet`).
+- **Diff editor:** `diff_editor(original, modified)` — side-by-side (line-aligned, scroll-
+  linked) or inline (`.side_by_side(false)` / `CodeEditor::inline_diff`), word-level diff.
+- **Other:** `.format_on_paste`, `.smooth_scrolling`, `EditorTheme::high_contrast_dark()` /
+  `high_contrast_light()` (WCAG AAA).
+
+### Fixed
+- The find field re-requested focus on every rebuild; it now autofocuses only when opened.
+
 ### Fixed — editor state follows the bound document; Added — `EditorController`
 The editor built its state from `code` only on first mount, so binding a *different*
 `Signal<String>` (switching files) kept the previous document's carets/undo/scroll and stale
