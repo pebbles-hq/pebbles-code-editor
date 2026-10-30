@@ -340,6 +340,8 @@ pub struct EditorTheme {
     pub ghost_text: Color,
     /// Background of the folded-region placeholder badge (`editor.foldPlaceholderForeground`).
     pub fold_badge: Color,
+    /// Breakpoint dot in the glyph margin (`debugIcon.breakpointForeground`).
+    pub breakpoint: Color,
     /// Outline of linked-editing ranges (`editor.linkedEditingBackground`).
     pub linked_editing: Color,
     /// The syntax palette (swappable independently of the chrome above).
@@ -428,6 +430,7 @@ impl EditorTheme {
             ghost_text: a(0xFF, 0xFF, 0xFF, 0x56),
             fold_badge: a(0x76, 0xB2, 0xF0, 0x33),
             linked_editing: a(0xFF, 0x00, 0x00, 0x4D),
+            breakpoint: c(0xE5, 0x14, 0x00),
             syntax: HighlightStyle::dark(),
             ui_font_size: 12.5,
             ui_font_family: None,
@@ -477,6 +480,7 @@ impl EditorTheme {
             ghost_text: a(0x00, 0x00, 0x00, 0x77),
             fold_badge: a(0x24, 0x5F, 0xC2, 0x26),
             linked_editing: a(0xFF, 0x00, 0x00, 0x30),
+            breakpoint: c(0xE5, 0x14, 0x00),
             syntax: HighlightStyle::light(),
             ui_font_size: 12.5,
             ui_font_family: None,
@@ -527,6 +531,7 @@ impl EditorTheme {
             ghost_text: a(0xFF, 0xFF, 0xFF, 0x99),
             fold_badge: a(0x6F, 0xC3, 0xDF, 0x66),
             linked_editing: c(0xF3, 0x85, 0x18),
+            breakpoint: c(0xE5, 0x14, 0x00),
             syntax: HighlightStyle::high_contrast_dark(),
             ui_font_size: 12.5,
             ui_font_family: None,
@@ -577,6 +582,7 @@ impl EditorTheme {
             ghost_text: a(0x00, 0x00, 0x00, 0x99),
             fold_badge: a(0x0F, 0x4A, 0x85, 0x40),
             linked_editing: c(0x00, 0x6B, 0xBD),
+            breakpoint: c(0xE5, 0x14, 0x00),
             syntax: HighlightStyle::high_contrast_light(),
             ui_font_size: 12.5,
             ui_font_family: None,

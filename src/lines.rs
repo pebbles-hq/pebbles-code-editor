@@ -287,6 +287,9 @@ impl LineIndex {
 pub(crate) struct LineCache {
     text: String,
     index: Rc<LineIndex>,
+    /// Line-count-changing edits since the last [`take_shifts`](Self::take_shifts):
+    /// `(a, b, n)` = old lines `a..=b` became `n` lines.
+    shifts: Vec<(usize, usize, usize)>,
 }
 
 impl Default for LineCache {
@@ -294,6 +297,7 @@ impl Default for LineCache {
         LineCache {
             text: String::new(),
             index: Rc::new(LineIndex::build("")),
+            shifts: Vec::new(),
         }
     }
 }
@@ -322,6 +326,11 @@ impl LineCache {
             Rc::new(merged)
         });
         idx.refresh_manual();
+    }
+
+    /// Drain the recorded line shifts (for line-anchored state: folds, breakpoints).
+    pub(crate) fn take_shifts(&mut self) -> Vec<(usize, usize, usize)> {
+        std::mem::take(&mut self.shifts)
     }
 
     /// Replace the manual folding ranges (line ranges, `head < last`).
@@ -378,6 +387,9 @@ impl LineCache {
             marks.push(marker_of(l));
         }
         let seg_n = lens.len();
+        if !old.is_empty() && seg_n != b + 1 - a {
+            self.shifts.push((a, b, seg_n));
+        }
         starts.push(start);
         starts.extend(seg.match_indices('\n').map(|(i, _)| start + i + 1));
         let removed_max = idx.char_lens[a..=b].iter().copied().max().unwrap_or(0);
@@ -429,6 +441,25 @@ impl LineCache {
         idx.refresh_manual();
         self.text = new.to_string();
         self.index.clone()
+    }
+}
+
+/// Map line `x` across an edit where old lines `a..=b` became `n` lines: lines above are
+/// unchanged, lines below shift; a line inside the edit stays when it is `a` (the edit's
+/// first line) and otherwise collapses to `a` when `keep_inside`, else is dropped.
+pub(crate) fn shift_line(
+    x: usize,
+    (a, b, n): (usize, usize, usize),
+    keep_inside: bool,
+) -> Option<usize> {
+    if x <= a {
+        Some(x)
+    } else if x > b {
+        Some(x + n - (b + 1 - a))
+    } else if keep_inside {
+        Some(a)
+    } else {
+        None
     }
 }
 

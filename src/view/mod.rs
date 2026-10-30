@@ -1064,7 +1064,37 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         let mut lc = cell.borrow_mut();
         lc.sync(&src);
         lc.set_syntax_regions(syntax_regions.as_ref());
-        lc.sync(&src)
+        let li = lc.sync(&src);
+        // Line-anchored state follows edits that add/remove lines (VS Code keeps folds and
+        // breakpoints on their text): shift folded heads (dropped when their line is
+        // deleted) and breakpoints (collapsed onto the edit line).
+        let shifts = lc.take_shifts();
+        if !shifts.is_empty() {
+            let map = |set: &std::collections::BTreeSet<usize>, keep: bool| {
+                set.iter()
+                    .filter_map(|&x| {
+                        shifts
+                            .iter()
+                            .try_fold(x, |x, &sh| crate::lines::shift_line(x, sh, keep))
+                    })
+                    .collect::<std::collections::BTreeSet<usize>>()
+            };
+            let f = folds.peek();
+            if !f.is_empty() {
+                let nf = map(&f, false);
+                if nf != f {
+                    folds.set(nf);
+                }
+            }
+            if let Some(bp) = p.breakpoints {
+                let b = bp.peek();
+                let nb = map(&b, true);
+                if nb != b {
+                    bp.set(nb);
+                }
+            }
+        }
+        li
     };
     let cl = li.line_of(&src, pcc);
     let cc = li.col_of(&src, pcc);
@@ -1080,7 +1110,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // settles one frame after mount (use_bounds is a tracked signal), and is 0 until then.
     let bounds = use_bounds();
     let gutter_w_est = if p.gutter {
-        line_count.to_string().len().max(2) as f64 * advance + 22.0 + 14.0
+        line_count.to_string().len().max(2) as f64 * advance
+            + 22.0
+            + 14.0
+            + gutter::glyph_margin_w(p, line_px)
     } else {
         0.0
     };

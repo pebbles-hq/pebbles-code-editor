@@ -103,6 +103,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         initial_scroll: 0.0,
         selection_handles: false,
         folds: None,
+        breakpoints: None,
         soft_wrap: false,
         diff_base: None,
         keymap: crate::keymap::Keymap::default(),
@@ -170,6 +171,7 @@ pub struct CodeEditor {
     initial_scroll: f64,
     selection_handles: bool,
     folds: Option<Signal<std::collections::BTreeSet<usize>>>,
+    breakpoints: Option<Signal<std::collections::BTreeSet<usize>>>,
     soft_wrap: bool,
     diff_base: Option<Signal<String>>,
     keymap: crate::keymap::Keymap,
@@ -422,6 +424,13 @@ impl CodeEditor {
         self.folds = Some(folds);
         self
     }
+    /// Show the breakpoint area (VS Code glyph margin) left of the line numbers, bound to
+    /// a caller-owned set of 0-based breakpoint lines: a click toggles the line's
+    /// breakpoint, set lines draw a breakpoint dot. Lines move with edits above them.
+    pub fn breakpoints(mut self, lines: Signal<std::collections::BTreeSet<usize>>) -> Self {
+        self.breakpoints = Some(lines);
+        self
+    }
     /// Soft-wrap long lines to the viewport width instead of scrolling horizontally (needs a
     /// fixed [`height`](Self::height)). Default off. Caret, click, and selection all follow the
     /// wrapped rows.
@@ -616,6 +625,7 @@ pub(crate) struct Props {
     pub(crate) initial_scroll: f64,
     pub(crate) selection_handles: bool,
     pub(crate) folds: Option<Signal<std::collections::BTreeSet<usize>>>,
+    pub(crate) breakpoints: Option<Signal<std::collections::BTreeSet<usize>>>,
     pub(crate) soft_wrap: bool,
     pub(crate) diff_base: Option<Signal<String>>,
     pub(crate) keymap: crate::keymap::Keymap,
@@ -718,6 +728,7 @@ impl From<CodeEditor> for Props {
             initial_scroll: e.initial_scroll,
             selection_handles: e.selection_handles,
             folds: e.folds,
+            breakpoints: e.breakpoints,
             soft_wrap: e.soft_wrap,
             diff_base: e.diff_base,
             keymap: e.keymap,

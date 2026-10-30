@@ -414,3 +414,16 @@ fn fold_selection_creates_a_manual_range_and_remove_clears_it() {
     h.press("Ctrl+Shift+[");
     assert!(!h.folds.get().contains(&2), "{:?}", h.folds.get());
 }
+
+#[test]
+fn folds_follow_line_inserts_and_deletes() {
+    let mut h = harness("fn a() {\n    x\n}\nfn b() {\n    y\n}\n");
+    h.caret(4, 0);
+    h.press("Ctrl+Shift+[");
+    assert_eq!(h.folds.get(), BTreeSet::from([3]));
+    h.caret(0, 0);
+    h.key(KeyInput::Enter);
+    assert_eq!(h.folds.get(), BTreeSet::from([4]), "{:?}", h.code.get());
+    h.key(KeyInput::Backspace);
+    assert_eq!(h.folds.get(), BTreeSet::from([3]));
+}

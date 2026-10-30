@@ -252,3 +252,39 @@ fn hovering_the_fold_badge_previews_the_hidden_lines() {
     assert!(shown, "fold preview tooltip lists the hidden lines");
     assert!(h.find_text("⋯ 2 lines"));
 }
+
+#[test]
+fn breakpoint_margin_toggles_and_breakpoints_follow_edits() {
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from("a\nb\nc\n"));
+    let bps = create_root_signal(BTreeSet::from([2usize]));
+    let mut h = Harness::new().window(500.0, 300.0);
+    h.mount_widget(code_editor(code).height(280.0).breakpoints(bps).autofocus());
+    h.frames(3);
+    // Clicking down the glyph margin toggles a breakpoint on some line; a second click
+    // on the same spot toggles it off again.
+    let mut hit = None;
+    for y in (2..80).step_by(3) {
+        let at = Offset::new(8.0, y as f64);
+        h.click(at);
+        if bps.get() != BTreeSet::from([2usize]) {
+            hit = Some(at);
+            break;
+        }
+    }
+    let at = hit.expect("a click in the margin toggles a breakpoint");
+    let toggled = bps.get();
+    h.click(at);
+    assert_eq!(bps.get(), BTreeSet::from([2usize]), "{toggled:?}");
+    bps.set(BTreeSet::from([1, 2]));
+    h.frames(1);
+    // Inserting a line at the top shifts both down.
+    code.set(String::from("x\na\nb\nc\n"));
+    h.frames(2);
+    assert_eq!(bps.get(), BTreeSet::from([2, 3]));
+    // Deleting the line holding a breakpoint collapses it onto the edit line.
+    code.set(String::from("x\na\nc\n"));
+    h.frames(2);
+    assert_eq!(bps.get(), BTreeSet::from([2]));
+}

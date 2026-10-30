@@ -18,7 +18,10 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
     }
     let digits = f.line_count.to_string().len().max(2);
     let arrow_w = 14.0;
-    let gutter_w = digits as f64 * f.advance + 22.0 + arrow_w;
+    // The breakpoint area (glyph margin), when the host binds breakpoints.
+    let bp_w = glyph_margin_w(f.p, f.line_px);
+    let gutter_w = digits as f64 * f.advance + 22.0 + arrow_w + bp_w;
+    let breakpoints = f.p.breakpoints.map(|s| (s, s.get()));
 
     // The most-severe diagnostic / extension marker per line (drives the gutter dot).
     let mut marks: HashMap<usize, Color> = HashMap::new();
@@ -80,6 +83,43 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
                 .into_widget(),
             );
         }
+        if let Some((sig, set)) = &breakpoints {
+            let sig = *sig;
+            let on = set.contains(&n);
+            let d = (f.line_px * 0.6).min(14.0);
+            nums.push(
+                Positioned::new(
+                    GestureDetector::new(
+                        container()
+                            .width(bp_w)
+                            .height(f.line_px)
+                            .alignment(Alignment::CENTER)
+                            .child(
+                                container().width(d).height(d).decoration(
+                                    BoxDecoration::new()
+                                        .color(if on {
+                                            f.theme.breakpoint
+                                        } else {
+                                            Color::TRANSPARENT
+                                        })
+                                        .radius(BorderRadius::all(d / 2.0)),
+                                ),
+                            ),
+                    )
+                    .cursor(Cursor::Pointer)
+                    .on_tap(action(move || {
+                        sig.update(|s| {
+                            if !s.remove(&n) {
+                                s.insert(n);
+                            }
+                        });
+                    })),
+                )
+                .left(4.0)
+                .top(y)
+                .into_widget(),
+            );
+        }
         if let Some(&color) = marks.get(&n) {
             nums.push(
                 Positioned::new(
@@ -89,7 +129,7 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
                             .radius(BorderRadius::all(2.0)),
                     ),
                 )
-                .left(5.0)
+                .left(5.0 + bp_w)
                 .top(y + f.line_px * 0.2)
                 .into_widget(),
             );
@@ -132,7 +172,7 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
         nums.push(
             Positioned::new(
                 container()
-                    .width(gutter_w - arrow_w - 6.0)
+                    .width(gutter_w - arrow_w - 6.0 - bp_w)
                     .height(f.line_px)
                     .alignment(Alignment::CENTER_RIGHT)
                     .child(
@@ -154,7 +194,7 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
                         }),
                     ),
             )
-            .left(0.0)
+            .left(bp_w)
             .top(y)
             .into_widget(),
         );
@@ -168,4 +208,13 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
     row(children![gutter_col, expanded(content)])
         .cross_axis_alignment(CrossAxisAlignment::Start)
         .into_widget()
+}
+
+/// Width of the breakpoint area (0 when breakpoints are not bound).
+pub(crate) fn glyph_margin_w(p: &crate::config::Props, line_px: f64) -> f64 {
+    if p.breakpoints.is_some() {
+        line_px.clamp(14.0, 20.0)
+    } else {
+        0.0
+    }
 }
