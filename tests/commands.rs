@@ -427,3 +427,28 @@ fn folds_follow_line_inserts_and_deletes() {
     h.key(KeyInput::Backspace);
     assert_eq!(h.folds.get(), BTreeSet::from([3]));
 }
+
+#[test]
+fn builtin_and_user_snippets_complete_with_indentation() {
+    // Built-in Rust `for` snippet, inside an indented block.
+    let mut h = harness("fn a() {\n    \n}");
+    h.caret(1, 4);
+    h.typ("for");
+    // Pick the snippet (not a word) item labelled "for".
+    h.key(KeyInput::Enter);
+    assert_eq!(
+        h.code.get(),
+        "fn a() {\n    for item in iter {\n        \n    }\n}"
+    );
+    // A user snippet.
+    let mut h = harness_cfg("", Keymap::new(), |e| {
+        e.snippets(vec![pebbles_code_editor::Snippet::new(
+            "hdr",
+            "// Copyright ${1:me}\n$0",
+            "Header",
+        )])
+    });
+    h.typ("hdr");
+    h.key(KeyInput::Enter);
+    assert_eq!(h.code.get(), "// Copyright me\n");
+}

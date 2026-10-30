@@ -62,6 +62,7 @@ mod lines;
 mod ops;
 mod scan_text;
 mod search;
+mod snippets;
 mod theme;
 mod view;
 
@@ -83,6 +84,7 @@ pub use providers::{
     Diagnostic, Diagnostics, FormatProvider, Hover, HoverProvider, InlayHint, InlayHints,
     InlineSuggestionProvider, Severity, SignatureHelp, SignatureProvider,
 };
+pub use snippets::{Snippet, builtin_snippets};
 pub use theme::{EditorTheme, HighlightStyle, TokenStyle};
 
 /// The monospace family used for all editor text.

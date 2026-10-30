@@ -461,6 +461,19 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             .completion
             .clone()
             .or_else(|| p.word_based_suggestions.then(completion::word_provider));
+        // Snippets (built-in for the language + the host's) join the completion list.
+        let mut snips = p.snippets.clone();
+        if p.builtin_snippets
+            && let Some(l) = &p.language
+        {
+            snips.extend(crate::snippets::builtin_snippets(l.name()));
+        }
+        let unit = if p.insert_spaces {
+            " ".repeat(p.tab_size)
+        } else {
+            "\t".to_string()
+        };
+        let provider = crate::snippets::with_snippets(provider, Rc::new(snips), unit);
         let inline_provider = p.inline_suggestions.clone();
         let definition = p.definition.clone();
         let format = p.format.clone();

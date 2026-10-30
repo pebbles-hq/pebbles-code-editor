@@ -103,6 +103,8 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         initial_scroll: 0.0,
         selection_handles: false,
         folds: None,
+        snippets: Vec::new(),
+        builtin_snippets: true,
         breakpoints: None,
         soft_wrap: false,
         diff_base: None,
@@ -172,6 +174,8 @@ pub struct CodeEditor {
     selection_handles: bool,
     folds: Option<Signal<std::collections::BTreeSet<usize>>>,
     breakpoints: Option<Signal<std::collections::BTreeSet<usize>>>,
+    snippets: Vec<crate::snippets::Snippet>,
+    builtin_snippets: bool,
     soft_wrap: bool,
     diff_base: Option<Signal<String>>,
     keymap: crate::keymap::Keymap,
@@ -431,6 +435,18 @@ impl CodeEditor {
         self.breakpoints = Some(lines);
         self
     }
+    /// User-defined snippets, offered in the completion list next to the built-in ones
+    /// (VS Code user snippet files).
+    pub fn snippets(mut self, snippets: impl Into<Vec<crate::snippets::Snippet>>) -> Self {
+        self.snippets = snippets.into();
+        self
+    }
+    /// Offer the language's built-in snippets ([`builtin_snippets`](crate::builtin_snippets);
+    /// default on).
+    pub fn builtin_snippets(mut self, v: bool) -> Self {
+        self.builtin_snippets = v;
+        self
+    }
     /// Soft-wrap long lines to the viewport width instead of scrolling horizontally (needs a
     /// fixed [`height`](Self::height)). Default off. Caret, click, and selection all follow the
     /// wrapped rows.
@@ -626,6 +642,8 @@ pub(crate) struct Props {
     pub(crate) selection_handles: bool,
     pub(crate) folds: Option<Signal<std::collections::BTreeSet<usize>>>,
     pub(crate) breakpoints: Option<Signal<std::collections::BTreeSet<usize>>>,
+    pub(crate) snippets: Vec<crate::snippets::Snippet>,
+    pub(crate) builtin_snippets: bool,
     pub(crate) soft_wrap: bool,
     pub(crate) diff_base: Option<Signal<String>>,
     pub(crate) keymap: crate::keymap::Keymap,
@@ -729,6 +747,8 @@ impl From<CodeEditor> for Props {
             selection_handles: e.selection_handles,
             folds: e.folds,
             breakpoints: e.breakpoints,
+            snippets: e.snippets,
+            builtin_snippets: e.builtin_snippets,
             soft_wrap: e.soft_wrap,
             diff_base: e.diff_base,
             keymap: e.keymap,
