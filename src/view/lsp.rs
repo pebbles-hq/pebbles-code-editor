@@ -149,6 +149,8 @@ pub(crate) struct Hooks {
     pub(crate) rename: Signal<Option<RenameView>>,
     pub(crate) rename_draft: Signal<String>,
     pub(crate) rename_preview: Signal<Option<RenamePreview>>,
+    /// The open problem peek (F8): the diagnostic's start byte and message.
+    pub(crate) problem: Signal<Option<(usize, String)>>,
     pub(crate) store: Signal<Rc<Store>>,
 }
 
@@ -164,6 +166,7 @@ pub(crate) fn hooks() -> Hooks {
         rename: create_signal(None),
         rename_draft: create_signal(String::new()),
         rename_preview: create_signal(None),
+        problem: create_signal(None),
         store: create_signal(Rc::new(Store::default())),
     }
 }
@@ -367,6 +370,7 @@ impl Lsp {
             .map(|d| d.d)
             .collect();
         let word = crate::view::word_range_at(&src, byte);
+        let has_diags = !diags.is_empty();
         let me = self.clone();
         let show = move |h: Option<lsp::Hover>| {
             let src = me.state.peek().text();
@@ -402,8 +406,9 @@ impl Lsp {
             return;
         }
         let store = self.store.clone();
-        let slot = Rc::new(RefCell::new(Some(show)));
-        let s2 = slot.clone();
+        let show = Rc::new(show);
+        let answered = Rc::new(Cell::new(false));
+        let (s2, a2) = (show.clone(), answered.clone());
         let reply = self.guard(&self.store.hover_gate, move |h: Option<lsp::Hover>| {
             let mut c = store.hover_cache.borrow_mut();
             if c.len() > 256 {
@@ -411,14 +416,14 @@ impl Lsp {
             }
             c.insert(key, h.clone());
             drop(c);
-            if let Some(f) = s2.borrow_mut().take() {
-                f(h);
-            }
+            a2.set(true);
+            s2(h);
         });
         let asked =
             self.with_doc(|doc, text| svc.hover(doc, lsp::byte_to_position(text, byte), reply));
-        if !asked && let Some(f) = slot.borrow_mut().take() {
-            f(None);
+        // Declined, or still pending: show the diagnostics part now (the reply completes it).
+        if !answered.get() && (!asked || has_diags) {
+            show(None);
         }
     }
 
@@ -439,7 +444,7 @@ impl Lsp {
             if !kids.is_empty() {
                 kids.push(divider());
             }
-            kids.push(self.diag_body(d, f, fs));
+            kids.push(self.diag_body(d, t, fs));
         }
         for s in &hv.sections {
             if !kids.is_empty() {
@@ -495,8 +500,12 @@ impl Lsp {
 
     /// A diagnostic as shown in the hover / problem peek: severity, message, code / source
     /// (the code is a link when the diagnostic has one) and related information.
-    pub(crate) fn diag_body(&self, d: &lsp::LspDiagnostic, f: &Frame, fs: f64) -> AnyWidget {
-        let t = f.theme;
+    pub(crate) fn diag_body(
+        &self,
+        d: &lsp::LspDiagnostic,
+        t: &crate::theme::EditorTheme,
+        fs: f64,
+    ) -> AnyWidget {
         let color = severity_color(t, d.severity());
         let mut rows: Vec<AnyWidget> = Vec::new();
         let mut msg = vec![
@@ -1094,6 +1103,112 @@ impl Lsp {
         }
     }
 
+    // ---- diagnostics -------------------------------------------------------------------
+
+    /// F8 / Shift+F8: move to the next / previous problem (wrapping) and show it inline.
+    pub(crate) fn next_problem(&self, forward: bool) -> bool {
+        let src = self.state.peek().text();
+        let diags = self.diagnostics(&src, false);
+        if diags.is_empty() {
+            return false;
+        }
+        let head = self.state.peek().primary().head;
+        // From the open problem when there is one, else from the caret.
+        let open = self
+            .h
+            .problem
+            .peek()
+            .and_then(|(at, m)| diags.iter().position(|d| d.from == at && d.d.message == m));
+        let i = match (open, forward) {
+            (Some(i), true) => (i + 1) % diags.len(),
+            (Some(i), false) => (i + diags.len() - 1) % diags.len(),
+            (None, true) => diags.iter().position(|d| d.from > head).unwrap_or(0),
+            (None, false) => diags
+                .iter()
+                .rposition(|d| d.from < head)
+                .unwrap_or(diags.len() - 1),
+        };
+        let d = &diags[i];
+        let cur = self.state.peek();
+        self.state.set(EditorState {
+            doc: cur.doc.clone(),
+            selection: crate::edit::Selections::single(crate::edit::Selection::caret(d.from)),
+        });
+        self.goal.set(crate::geometry::col_of(&src, d.from));
+        self.history.peek().borrow_mut().break_group();
+        self.h.problem.set(Some((d.from, d.d.message.clone())));
+        true
+    }
+
+    /// Close the problem peek.
+    pub(crate) fn close_problem(&self) -> bool {
+        if self.h.problem.peek().is_some() {
+            self.h.problem.set(None);
+            return true;
+        }
+        false
+    }
+
+    /// The problem peek (VS Code's marker navigation widget) below the problem's line.
+    pub(crate) fn problem_block(
+        &self,
+        t: &crate::theme::EditorTheme,
+        fs: f64,
+        line_px: f64,
+        src: &str,
+        diags: &[Diag],
+    ) -> Option<crate::extensions::BlockWidget> {
+        let (at, msg) = self.h.problem.get()?;
+        let i = diags
+            .iter()
+            .position(|d| d.from == at && d.d.message == msg)?;
+        let d = &diags[i];
+        let color = severity_color(t, d.d.severity());
+        let (up, down, close) = (self.clone(), self.clone(), self.clone());
+        let header = row(vec![
+            expanded(self.diag_body(&d.d, t, fs * 0.92)).into_widget(),
+            t.ui_text(format!("{} of {} problems", i + 1, diags.len()), 0.0)
+                .color(t.muted)
+                .into_widget(),
+            gap_w(6.0).into_widget(),
+            icon_button(IconKind::ChevronUp)
+                .size(16.0)
+                .on_pressed(move || {
+                    up.next_problem(false);
+                })
+                .into_widget(),
+            icon_button(IconKind::ChevronDown)
+                .size(16.0)
+                .on_pressed(move || {
+                    down.next_problem(true);
+                })
+                .into_widget(),
+            icon_button(IconKind::Close)
+                .size(16.0)
+                .on_pressed(move || {
+                    close.close_problem();
+                })
+                .into_widget(),
+        ])
+        .cross_axis_alignment(CrossAxisAlignment::Start);
+        let rows = 2 + d.d.related_information.len() + usize::from(d.d.code.is_some());
+        let height = line_px * rows as f64 + 14.0;
+        let panel = container()
+            .height(height)
+            .padding(EdgeInsets::all(6.0))
+            .decoration(
+                BoxDecoration::new()
+                    .color(t.overlay_bg)
+                    .border(Border::new(color, 1.0)),
+            )
+            .child(header);
+        Some(crate::extensions::BlockWidget {
+            line: crate::geometry::line_of(src, d.to.min(src.len())),
+            height,
+            widget: panel.into_widget(),
+        })
+    }
+
     // ---- edits ---------------------------------------------------------------------------
 
     /// Apply `edits` (LSP ranges in the current text) as ONE undo step; the cursors map
@@ -1451,6 +1566,21 @@ impl Lsp {
             svc.open_location(loc);
         }
     }
+}
+
+/// Count the problems by severity (for the host's status bar).
+pub(crate) fn counts(diags: &[Diag]) -> lsp::ProblemCounts {
+    use lsp::DiagnosticSeverity as S;
+    let mut c = lsp::ProblemCounts::default();
+    for d in diags {
+        match d.d.severity() {
+            S::Error => c.errors += 1,
+            S::Warning => c.warnings += 1,
+            S::Information => c.infos += 1,
+            S::Hint => c.hints += 1,
+        }
+    }
+    c
 }
 
 /// The byte range of a parameter label inside its signature label.

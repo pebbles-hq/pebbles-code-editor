@@ -174,6 +174,8 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
         C::FindReferences => env.lsp.navigate(crate::view::lsp::Nav::References, true),
         C::ShowReferences => env.lsp.show_references(),
         C::Rename => env.lsp.start_rename(),
+        C::NextProblem => env.lsp.next_problem(true),
+        C::PreviousProblem => env.lsp.next_problem(false),
         C::TriggerParameterHints => {
             env.lsp
                 .request_signature(crate::language::SignatureHelpTriggerKind::Invoked, None);

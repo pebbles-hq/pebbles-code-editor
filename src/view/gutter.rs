@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use pebbles::prelude::*;
 
 use crate::view::Frame;
-use crate::view::overlays::severity_color;
 
 /// Wrap `content` with the line-number gutter on its left (or return it unchanged when the
 /// gutter is disabled).
@@ -25,12 +24,24 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
 
     // The most-severe diagnostic / extension marker per line (drives the gutter dot).
     let mut marks: HashMap<usize, Color> = HashMap::new();
-    if let Some(sig) = f.p.diagnostics {
-        for d in sig.get() {
-            marks.insert(
-                f.li.line_of(f.src, d.range.0),
-                severity_color(f.theme, d.severity),
-            );
+    {
+        use crate::language::DiagnosticSeverity as S;
+        let rank = |s: S| match s {
+            S::Error => 0,
+            S::Warning => 1,
+            S::Information => 2,
+            S::Hint => 3,
+        };
+        let mut best: HashMap<usize, S> = HashMap::new();
+        for d in f.diags.iter() {
+            let line = f.li.line_of(f.src, d.from.min(f.src.len()));
+            let sev = d.d.severity();
+            if best.get(&line).is_none_or(|b| rank(sev) < rank(*b)) {
+                best.insert(line, sev);
+            }
+        }
+        for (line, sev) in best {
+            marks.insert(line, crate::view::lsp::severity_color(f.theme, sev));
         }
     }
     for m in f.ext_gutter_marks {

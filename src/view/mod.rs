@@ -99,6 +99,8 @@ pub(crate) struct Frame<'a> {
     pub(crate) hclip: Option<(usize, usize)>,
     /// Gutter markers contributed by extensions (rendered as colored dots).
     pub(crate) ext_gutter_marks: &'a [GutterMark],
+    /// Every diagnostic (old and LSP), resolved to bytes and sorted.
+    pub(crate) diags: Rc<Vec<lsp::Diag>>,
     /// The fold display-map (buffer line ↔ display row).
     pub(crate) disp: &'a crate::fold::DisplayMap,
     pub(crate) folds: Signal<std::collections::BTreeSet<usize>>,
@@ -667,6 +669,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             }
             if !preedit.peek().is_empty() {
                 preedit.set(String::new());
+            }
+            // Escape closes the problem peek (F8).
+            if matches!(k, KeyInput::Escape) && lsp_k.close_problem() {
+                return true;
             }
             // The peek view takes Up/Down/Enter/Escape while open.
             if lsp_k.peek_key(&k) {
@@ -1422,6 +1428,15 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let cl = li.line_of(&src, pcc);
     let cc = li.col_of(&src, pcc);
     let line_count = li.line_count();
+    // ---- diagnostics: merged, resolved to bytes; counts published for the host ----
+    let diags = Rc::new(lsp_ctl.diagnostics(&src, true));
+    if let Some(sig) = p.problem_counts {
+        let c = lsp::counts(&diags);
+        if sig.peek() != c {
+            sig.set(c);
+        }
+    }
+
     // Inline diff against the base (added lines + removed markers), recomputed reactively.
     let line_diff = p
         .diff_base
@@ -1521,6 +1536,12 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     }
     // The language-service peek (definitions / references) is an internal block widget.
     if let Some(b) = lsp_ctl.peek_block(&p.theme, eff_fs, eff_fs * p.lh, &p.font_family)
+        && b.line < line_count
+    {
+        block_widgets.push(b);
+    }
+    // The problem peek (F8 / Shift+F8) below the problem's line.
+    if let Some(b) = lsp_ctl.problem_block(&p.theme, eff_fs, eff_fs * p.lh, &src, &diags)
         && b.line < line_count
     {
         block_widgets.push(b);
@@ -1922,6 +1943,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         change_peek,
         highlight_word_matches: find.open.get() == 0,
         doc_highlights: lsp_ctl.h.highlights.get(),
+        diags: diags.clone(),
         hclip,
         ext_gutter_marks: &ext_gutter_marks,
         disp: disp.as_ref(),

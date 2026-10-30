@@ -8,8 +8,6 @@ use pebbles::prelude::*;
 use crate::brackets::{DEFAULT_BRACKETS, find_bracket_match};
 use crate::geometry::line_end;
 use crate::highlight::{slice_tokens, to_spans};
-use crate::providers::Severity;
-use crate::theme::EditorTheme;
 use crate::view::Frame;
 use crate::view::chrome::{band, with_alpha};
 
@@ -37,16 +35,6 @@ pub(crate) fn build(f: &Frame) -> Vec<AnyWidget> {
     whitespace(f, &mut layers);
     carets(f, &mut layers);
     layers
-}
-
-/// The underline color for a diagnostic severity (mapped from the theme palette).
-pub(crate) fn severity_color(theme: &EditorTheme, sev: Severity) -> Color {
-    match sev {
-        Severity::Error => theme.diag_error,
-        Severity::Warning => theme.diag_warning,
-        Severity::Info => theme.diag_info,
-        Severity::Hint => theme.diag_hint,
-    }
 }
 
 /// Inline-diff bands: a green full-width band on each added line's rows, and a red 2px marker
@@ -367,17 +355,35 @@ fn whitespace(f: &Frame, layers: &mut Vec<AnyWidget>) {
     }
 }
 
-/// Diagnostic underlines: a thin severity-colored line under each diagnostic range, per
-/// line-segment, clipped to the visible window. Reads the reactive diagnostics list.
+/// Diagnostics: a severity-colored squiggle under each range (a short dotted mark under the
+/// start for hints), unnecessary code faded and deprecated code struck through — per
+/// line-segment, clipped to the visible window.
 fn diagnostics(f: &Frame, layers: &mut Vec<AnyWidget>) {
-    let Some(sig) = f.p.diagnostics else {
-        return;
-    };
-    for d in sig.get() {
-        let (lo, hi) = d.range;
-        let color = severity_color(f.theme, d.severity);
+    use crate::language::{DiagnosticSeverity as S, DiagnosticTag as T};
+    for d in f.diags.iter() {
+        let (lo, hi) = (d.from.min(f.src.len()), d.to.min(f.src.len()));
+        let sev = d.d.severity();
+        let color = crate::view::lsp::severity_color(f.theme, sev);
+        let unnecessary = d.has(T::Unnecessary);
+        let deprecated = d.has(T::Deprecated);
         let (la, ca) = (f.li.line_of(f.src, lo), f.li.col_of(f.src, lo));
         let (lb, cb) = (f.li.line_of(f.src, hi), f.li.col_of(f.src, hi));
+        if sev == S::Hint && !unnecessary && !deprecated {
+            // VS Code draws hints as three dots under the start.
+            if f.line_visible(la) {
+                let (x, y) = f.xy(la, ca);
+                for i in 0..3 {
+                    layers.push(rect_at(
+                        x + i as f64 * 3.0,
+                        y + f.line_px - 2.0,
+                        2.0,
+                        2.0,
+                        color,
+                    ));
+                }
+            }
+            continue;
+        }
         for line in la.max(f.first_line)..=lb.min(f.last_line) {
             if f.disp.is_hidden(line) {
                 continue;
@@ -388,29 +394,46 @@ fn diagnostics(f: &Frame, layers: &mut Vec<AnyWidget>) {
             } else {
                 f.li.line_char_len(line)
             };
-            // Underline per visual segment so it follows wrapped rows.
+            // Per visual segment so it follows wrapped rows.
             for (row, seg) in f.segments(line) {
                 let s = start_col.max(seg.start);
                 let e = end_col.min(seg.end);
-                if e <= s {
+                if e <= s && !(lo == hi && line == la) {
                     continue;
                 }
                 let x = f.pad_l + (s - seg.start + seg.indent) as f64 * f.advance;
-                let w = ((e - s) as f64 * f.advance).max(f.advance);
-                layers.push(
-                    Positioned::new(
-                        container()
-                            .width(w)
-                            .height(2.0)
-                            .decoration(BoxDecoration::new().color(color)),
-                    )
-                    .left(x)
-                    .top(f.row_y(row) + f.line_px - 2.0)
-                    .into_widget(),
-                );
+                let w = (e.saturating_sub(s) as f64 * f.advance).max(f.advance);
+                let y = f.row_y(row);
+                if unnecessary {
+                    layers.push(rect_at(
+                        x,
+                        y,
+                        w,
+                        f.line_px,
+                        with_alpha(f.theme.background, 0.5),
+                    ));
+                }
+                if deprecated {
+                    layers.push(rect_at(x, y + f.line_px / 2.0, w, 1.0, f.theme.foreground));
+                }
+                if !(unnecessary && sev == S::Hint) && !(deprecated && sev == S::Hint) {
+                    layers.push(rect_at(x, y + f.line_px - 2.0, w, 2.0, color));
+                }
             }
         }
     }
+}
+
+fn rect_at(x: f64, y: f64, w: f64, h: f64, color: Color) -> AnyWidget {
+    Positioned::new(
+        container()
+            .width(w)
+            .height(h)
+            .decoration(BoxDecoration::new().color(color)),
+    )
+    .left(x)
+    .top(y)
+    .into_widget()
 }
 
 /// Inlay hints: faded inline labels anchored at a byte offset (visible window only). On the

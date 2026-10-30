@@ -256,6 +256,10 @@ commands! {
     FindReferences => "editor.action.referenceSearch.trigger", "Peek References", ["Shift+F12"];
     /// Find all references and show them in the host's references view.
     ShowReferences => "references-view.findReferences", "Find All References", ["Shift+Alt+F12"];
+    /// Go to the next problem (error / warning / …) and show it inline.
+    NextProblem => "editor.action.marker.next", "Go to Next Problem (Error, Warning, Info)", ["F8", "Alt+F8"];
+    /// Go to the previous problem.
+    PreviousProblem => "editor.action.marker.prev", "Go to Previous Problem (Error, Warning, Info)", ["Shift+F8", "Shift+Alt+F8"];
     /// Rename the symbol at the caret (with a preview for edits across files).
     Rename => "editor.action.rename", "Rename Symbol", ["F2"];
     /// Show signature help (parameter hints) for the call at the caret.

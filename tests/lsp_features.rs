@@ -633,3 +633,116 @@ fn rename_box_applies_one_undo_step_and_previews_cross_file_edits() {
     assert_eq!(applied[0].changes.len(), 1);
     assert_eq!(applied[0].changes[0].0, "file:///w/lib.rs");
 }
+
+fn diag(line: u32, a: u32, b: u32, sev: DiagnosticSeverity, msg: &str) -> LspDiagnostic {
+    LspDiagnostic::new(
+        Range::new(Position::new(line, a), Position::new(line, b)),
+        sev,
+        msg,
+    )
+}
+
+#[test]
+fn diagnostics_render_by_severity_count_navigate_and_hover() {
+    let mut err = diag(
+        0,
+        4,
+        7,
+        DiagnosticSeverity::Error,
+        "cannot find value `foo`",
+    );
+    err.code = Some("E0425".into());
+    err.code_href = Some("https://doc.rust-lang.org/error_codes/E0425.html".into());
+    err.source = Some("rustc".into());
+    err.related_information = vec![DiagnosticRelatedInformation {
+        location: loc("file:///w/lib.rs", 2, 4),
+        message: "defined here".into(),
+    }];
+    let mut unused = diag(1, 4, 5, DiagnosticSeverity::Warning, "unused variable");
+    let mut old = diag(2, 0, 3, DiagnosticSeverity::Warning, "deprecated fn");
+    let hint = diag(3, 0, 1, DiagnosticSeverity::Hint, "consider");
+    let info = diag(3, 0, 2, DiagnosticSeverity::Information, "note");
+    let text = "let foo = 1;\nlet x = 2;\nold();\nok\n";
+    let nodes = |diags: Vec<LspDiagnostic>| {
+        let sig = create_root_signal(diags);
+        let fake = Rc::new(Fake::default());
+        let (mut h, _) = mount(text, fake, |e| e.lsp_diagnostics(sig));
+        h.frames(1);
+        h.render_node_count()
+    };
+    let plain = nodes(vec![
+        err.clone(),
+        unused.clone(),
+        old.clone(),
+        info.clone(),
+        hint.clone(),
+    ]);
+    unused.tags = vec![DiagnosticTag::Unnecessary];
+    old.tags = vec![DiagnosticTag::Deprecated];
+    let tagged = nodes(vec![
+        err.clone(),
+        unused.clone(),
+        old.clone(),
+        info.clone(),
+        hint.clone(),
+    ]);
+    assert!(
+        tagged > plain,
+        "faded + struck-through layers ({plain} -> {tagged})"
+    );
+
+    let sig = create_root_signal(vec![err, unused, old, info, hint]);
+    let counts = create_root_signal(ProblemCounts::default());
+    let opened = Rc::new(RefCell::new(Vec::<String>::new()));
+    let o2 = opened.clone();
+    let fake = Rc::new(Fake::default());
+    let (mut h, _) = mount(text, fake, |e| {
+        e.lsp_diagnostics(sig)
+            .problem_counts(counts)
+            .on_open_link(move |u| o2.borrow_mut().push(u.to_string()))
+    });
+    assert_eq!(
+        counts.get(),
+        ProblemCounts {
+            errors: 1,
+            warnings: 2,
+            infos: 1,
+            hints: 1
+        }
+    );
+    // F8 walks the problems from the caret with an inline peek; Shift+F8 goes back.
+    h.press("F8");
+    h.frames(2);
+    assert!(h.find_text("error cannot find value `foo`  rustc"));
+    assert!(h.find_text("1 of 5 problems"));
+    assert!(h.find_text("(E0425)"), "code shown");
+    assert!(
+        h.find_text("lib.rs(3, 5): defined here"),
+        "related information"
+    );
+    h.press("F8");
+    h.frames(1);
+    assert!(h.find_text("2 of 5 problems"));
+    h.press("Shift+F8");
+    h.frames(1);
+    assert!(h.find_text("1 of 5 problems"));
+    h.key(KeyInput::Escape);
+    h.frames(1);
+    assert!(!h.find_text("1 of 5 problems"));
+    // The caret is on the error: the keyboard hover shows its message (no service hover).
+    h.press("Ctrl+K");
+    h.press("Ctrl+I");
+    h.frames(1);
+    assert!(
+        h.find_text("error cannot find value `foo`  rustc"),
+        "hover shows the message"
+    );
+    // Counts follow the published diagnostics.
+    sig.set(Vec::new());
+    h.frames(2);
+    assert_eq!(counts.get(), ProblemCounts::default());
+    h.press("F8");
+    h.frames(1);
+    assert!(!h.find_text("1 of 5 problems"));
+    let _ = opened;
+}

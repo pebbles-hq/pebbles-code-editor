@@ -87,14 +87,12 @@ pub(crate) fn marks(f: &Frame, search: &[(usize, usize)]) -> Vec<Mark> {
     for r in f.sels.ranges().iter().filter(|r| !r.is_empty()) {
         out.push((f.li.line_of(f.src, r.min()), f.theme.selection, 1));
     }
-    if let Some(sig) = f.p.diagnostics {
-        for d in sig.get() {
-            out.push((
-                f.li.line_of(f.src, d.range.0),
-                crate::view::overlays::severity_color(f.theme, d.severity),
-                2,
-            ));
-        }
+    for d in f.diags.iter() {
+        out.push((
+            f.li.line_of(f.src, d.from.min(f.src.len())),
+            crate::view::lsp::severity_color(f.theme, d.d.severity()),
+            2,
+        ));
     }
     out.push((f.cl, f.theme.overview_cursor, 3));
     out
