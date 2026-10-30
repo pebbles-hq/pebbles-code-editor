@@ -1938,7 +1938,11 @@ fn clicks_on_hover_signature_help_and_rename_popups_stay_with_the_popup() {
     h.frames(1);
     h.key(KeyInput::Insert("1".into()));
     h.frames(1);
-    assert_eq!(code.get(), "f(1)\nlet foo = 1;\n", "caret kept, editor focused");
+    assert_eq!(
+        code.get(),
+        "f(1)\nlet foo = 1;\n",
+        "caret kept, editor focused"
+    );
     h.key(KeyInput::Escape);
     // Hover (Ctrl+K Ctrl+I): click inside it; the caret stays.
     h.press("Ctrl+K");
@@ -1954,7 +1958,11 @@ fn clicks_on_hover_signature_help_and_rename_popups_stay_with_the_popup() {
     h.frames(1);
     h.key(KeyInput::Insert("2".into()));
     h.frames(1);
-    assert_eq!(code.get(), "f(12)\nlet foo = 1;\n", "caret kept, editor focused");
+    assert_eq!(
+        code.get(),
+        "f(12)\nlet foo = 1;\n",
+        "caret kept, editor focused"
+    );
     // Rename box: click its field and type into it (not the document).
     h.key(KeyInput::Move {
         motion: Motion::Down,
@@ -1984,9 +1992,11 @@ fn clicks_on_hover_signature_help_and_rename_popups_stay_with_the_popup() {
     h.key(KeyInput::Insert("z".into()));
     h.frames(1);
     assert!(
-        h.semantics_tree()
-            .into_iter()
-            .any(|n| n.props.value.as_deref().is_some_and(|v| v.contains('z') && v.len() <= 4)),
+        h.semantics_tree().into_iter().any(|n| n
+            .props
+            .value
+            .as_deref()
+            .is_some_and(|v| v.contains('z') && v.len() <= 4)),
         "the click focused the rename field"
     );
     assert_eq!(code.get(), "f(12)\nlet foo = 1;\n");
