@@ -305,7 +305,6 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         crate::language::RequestGate::new(),
     ));
     let hover_pos = create_signal::<Option<Offset>>(None); // pointer pos for hover tooltip
-    let sig_help = create_signal::<Option<crate::providers::SignatureHelp>>(None); // signature help
     let preedit = create_signal(String::new()); // IME composition (preedit) text, shown at caret
     // Fold state: use the caller-bound signal (persists across mounts / tabs) if given, else a
     // private one. `create_signal` runs unconditionally so the hook order never churns.
@@ -540,6 +539,16 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             let Some(stroke) = crate::actions::stroke_of(ev) else {
                 return KeyEventResult::Ignored;
             };
+            // Signature help with overloads: Alt+Up / Alt+Down cycle them (over Move Line).
+            if env.lsp.h.sig.peek().is_some() {
+                for (chord, d) in [("Alt+Up", -1), ("Alt+Down", 1)] {
+                    if crate::actions::parse_chord(chord).is_some_and(|c| c[0] == stroke)
+                        && env.lsp.cycle_signature(d)
+                    {
+                        return KeyEventResult::Handled;
+                    }
+                }
+            }
             // A bare modifier press never resolves or cancels a pending chord.
             let pending = pending_keys.peek();
             match crate::actions::resolve(&table, &pending, &stroke) {
@@ -613,7 +622,6 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         let format_on_paste = p.format_on_paste;
         let emmet_tab = p.emmet;
         let emmet_env = cmd_env.clone();
-        let sig_provider = p.signature.clone();
         let ro_exts = p.extensions.clone(); // for read-only-range veto
         let lsp_k = lsp_ctl.clone();
         // Register as a *code* editor so the shell routes Tab/Shift+Tab here (indent/outdent)
@@ -941,14 +949,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 KeyInput::Insert(s) => Some(s.clone()),
                 _ => None,
             };
-            // Signature help follows the same "before consume" rule: `(`/`,` opens it, `)`/Esc
-            // closes it. Evaluated before `k` is moved into the command engine.
-            let sig_action = match &k {
-                KeyInput::Insert(s) if s == "(" || s == "," => 1,
-                KeyInput::Insert(s) if s == ")" => 2,
-                KeyInput::Escape => 2,
-                _ => 0,
-            };
+            let is_escape = matches!(k, KeyInput::Escape);
             // Read-only veto: if an editing key would touch a range an extension marked
             // read-only, drop it (checked against the primary selection/caret).
             let editing = matches!(
@@ -1152,7 +1153,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                         true,
                         Cx {
                             trigger_kind: Tk::TriggerCharacter,
-                            trigger_character: typed_char,
+                            trigger_character: typed_char.clone(),
                         },
                     ),
                     _ => {
@@ -1173,13 +1174,11 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     .collect();
                 inline.set((!items.is_empty()).then_some(InlineGhost { at, items, idx: 0 }));
             }
-            match (sig_action, &sig_provider) {
-                (1, Some(sp)) => {
-                    let cur = state.peek();
-                    sig_help.set(sp(&cur.text(), cur.primary().head));
-                }
-                (2, _) => sig_help.set(None),
-                _ => {}
+            // Signature help: trigger characters open it; while open, edits/moves retrigger.
+            if is_escape {
+                lsp_k.close_signature();
+            } else {
+                lsp_k.signature_after_key(typed_char.as_deref());
             }
             true
         };
@@ -1996,22 +1995,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         layers.push(l);
     }
     // Signature help: a panel just above the caret line while typing a call.
-    if let Some(sig) = sig_help.get() {
-        let tip = chrome::tooltip(
-            text(sig.label.clone())
-                .size((fs * 0.92) as f32)
-                .font_family(&p.font_family)
-                .color(theme.foreground)
-                .into_widget(),
-            theme,
-        );
-        let y = (frame.y_of(cl) - line_px - 4.0).max(0.0);
-        layers.push(
-            Positioned::new(tip)
-                .left(pad_l + cc as f64 * advance)
-                .top(y)
-                .into_widget(),
-        );
+    if let Some(l) = lsp_ctl.sig_layer(&frame) {
+        layers.push(l);
     }
     // IME composition: the in-progress preedit text, tinted + underlined at the caret.
     let pre = preedit.get();

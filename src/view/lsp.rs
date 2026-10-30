@@ -48,10 +48,18 @@ pub(crate) struct HoverView {
     pub(crate) sections: Vec<lsp::MarkupContent>,
 }
 
+/// The shown signature help and the overload being viewed.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SigView {
+    pub(crate) help: lsp::SignatureHelp,
+    pub(crate) active: usize,
+}
+
 /// Non-reactive per-editor state (gates, caches, the document version counter).
 #[derive(Default)]
 pub(crate) struct Store {
     pub(crate) hover_gate: RequestGate,
+    pub(crate) sig_gate: RequestGate,
     /// Hover replies per (byte, document version).
     pub(crate) hover_cache: RefCell<HashMap<(usize, u64), Option<lsp::Hover>>>,
     ver: Cell<u64>,
@@ -64,6 +72,7 @@ pub(crate) struct Hooks {
     pub(crate) hover: Signal<Option<HoverView>>,
     /// The pointer is over the hover widget (it stays while it is).
     pub(crate) hover_sticky: Signal<bool>,
+    pub(crate) sig: Signal<Option<SigView>>,
     pub(crate) store: Signal<Rc<Store>>,
 }
 
@@ -72,6 +81,7 @@ pub(crate) fn hooks() -> Hooks {
     Hooks {
         hover: create_signal(None),
         hover_sticky: create_signal(false),
+        sig: create_signal(None),
         store: create_signal(Rc::new(Store::default())),
     }
 }
@@ -461,6 +471,186 @@ impl Lsp {
             .into_widget()
     }
 
+    // ---- signature help ---------------------------------------------------------------
+
+    /// Whether typing `s` opens signature help (the service's trigger characters).
+    pub(crate) fn is_sig_trigger(&self, s: &str) -> bool {
+        self.svc
+            .as_ref()
+            .is_some_and(|v| v.signature_trigger_characters().iter().any(|t| t == s))
+    }
+
+    /// Request signature help at the caret. While help is showing, the request is a
+    /// retrigger carrying the active help; an empty reply closes it.
+    pub(crate) fn request_signature(
+        &self,
+        kind: lsp::SignatureHelpTriggerKind,
+        ch: Option<String>,
+    ) {
+        let Some(svc) = self.svc.clone() else { return };
+        let open = self.h.sig.peek();
+        let cx = lsp::SignatureHelpContext {
+            trigger_kind: kind,
+            trigger_character: ch,
+            is_retrigger: open.is_some(),
+            active: open.as_ref().map(|o| {
+                let mut h = o.help.clone();
+                h.active_signature = Some(o.active as u32);
+                h
+            }),
+        };
+        let sig = self.h.sig;
+        let reply = self.guard(
+            &self.store.sig_gate,
+            move |h: Option<lsp::SignatureHelp>| {
+                match h.filter(|h| !h.signatures.is_empty()) {
+                    Some(help) => {
+                        let n = help.signatures.len();
+                        // Keep the overload the user picked across retriggers (same overload set).
+                        let active = match sig.peek() {
+                            Some(o)
+                                if o.help.signatures.len() == n
+                                    && help.active_signature.is_none() =>
+                            {
+                                o.active
+                            }
+                            _ => help.active_signature.unwrap_or(0) as usize,
+                        };
+                        sig.set(Some(SigView {
+                            active: active.min(n - 1),
+                            help,
+                        }));
+                    }
+                    None => sig.set(None),
+                }
+            },
+        );
+        let head = self.state.peek().primary().head;
+        let asked = self.with_doc(|doc, text| {
+            svc.signature_help(doc, lsp::byte_to_position(text, head), cx, reply)
+        });
+        if !asked {
+            self.h.sig.set(None);
+        }
+    }
+
+    /// After a key: a trigger character opens help; while open, any edit or caret move
+    /// retriggers it (the server closes it by replying with nothing).
+    pub(crate) fn signature_after_key(&self, typed: Option<&str>) {
+        use lsp::SignatureHelpTriggerKind as K;
+        match typed {
+            Some(t) if self.is_sig_trigger(t) => {
+                self.request_signature(K::TriggerCharacter, Some(t.to_string()));
+            }
+            _ if self.h.sig.peek().is_some() => self.request_signature(K::ContentChange, None),
+            _ => {}
+        }
+    }
+
+    /// Close signature help.
+    pub(crate) fn close_signature(&self) {
+        self.store.sig_gate.cancel();
+        if self.h.sig.peek().is_some() {
+            self.h.sig.set(None);
+        }
+    }
+
+    /// Cycle the shown overload by `delta` (Alt+Up / Alt+Down). `false` when not applicable.
+    pub(crate) fn cycle_signature(&self, delta: isize) -> bool {
+        let Some(mut v) = self.h.sig.peek() else {
+            return false;
+        };
+        let n = v.help.signatures.len();
+        if n < 2 {
+            return false;
+        }
+        v.active = (v.active as isize + delta).rem_euclid(n as isize) as usize;
+        self.h.sig.set(Some(v));
+        true
+    }
+
+    /// The signature-help panel, just above the caret line.
+    pub(crate) fn sig_layer(&self, f: &Frame) -> Option<AnyWidget> {
+        let v = self.h.sig.get()?;
+        let sig = v.help.signatures.get(v.active)?;
+        let t = f.theme;
+        let fs = (f.fs * 0.92) as f32;
+        let active_param = sig.active_parameter.or(v.help.active_parameter);
+        let hl = active_param
+            .and_then(|i| sig.parameters.get(i as usize))
+            .and_then(|p| param_range(&sig.label, &p.label));
+        let mut spans: Vec<TextSpan> = Vec::new();
+        if v.help.signatures.len() > 1 {
+            spans.push(
+                span(format!(
+                    "\u{2039} {}/{} \u{203a}  ",
+                    v.active + 1,
+                    v.help.signatures.len()
+                ))
+                .size(fs)
+                .color(t.muted),
+            );
+        }
+        let base = |s: &str| {
+            span(s.to_string())
+                .size(fs)
+                .font_family(f.font_family)
+                .color(t.foreground)
+        };
+        match hl {
+            Some((a, b)) => {
+                spans.push(base(&sig.label[..a]));
+                spans.push(base(&sig.label[a..b]).bold().underline().color(t.accent));
+                spans.push(base(&sig.label[b..]));
+            }
+            None => spans.push(base(&sig.label)),
+        }
+        let mut kids: Vec<AnyWidget> = vec![text_rich(spans).into_widget()];
+        let docs = |m: &lsp::MarkupContent| match m.kind {
+            lsp::MarkupKind::Markdown => {
+                crate::view::markdown::render(&m.value, t, f.fs * 0.88, f.font_family)
+            }
+            lsp::MarkupKind::PlainText => text(m.value.clone())
+                .size((f.fs * 0.88) as f32)
+                .color(t.foreground)
+                .into_widget(),
+        };
+        if let Some(d) = active_param
+            .and_then(|i| sig.parameters.get(i as usize))
+            .and_then(|p| p.documentation.as_ref())
+        {
+            kids.push(gap_h(4.0).into_widget());
+            kids.push(docs(d));
+        }
+        if let Some(d) = &sig.documentation {
+            kids.push(gap_h(4.0).into_widget());
+            kids.push(docs(d));
+        }
+        let panel = container()
+            .width(460.0)
+            .decoration(
+                BoxDecoration::new()
+                    .color(t.overlay_bg)
+                    .radius(BorderRadius::all(t.overlay_radius))
+                    .border(Border::new(t.border, 1.0)),
+            )
+            .padding(EdgeInsets::symmetric(10.0, 6.0))
+            .clip()
+            .child(
+                column(kids)
+                    .cross_axis_alignment(CrossAxisAlignment::Start)
+                    .main_axis_size(MainAxisSize::Min),
+            );
+        let (x, y) = f.xy(f.cl, f.li.col_of(f.src, f.pcc));
+        let extra = if sig.documentation.is_some() {
+            3.0
+        } else {
+            1.0
+        };
+        let top = (y - f.line_px * (1.0 + extra) - 6.0).max(0.0);
+        Some(Positioned::new(panel).left(x).top(top).into_widget())
+    }
+
     /// Reveal `loc`: in this document move the caret to its start; elsewhere ask the host.
     pub(crate) fn go_to(&self, loc: &lsp::Location) {
         if *loc.uri == *self.uri {
@@ -475,6 +665,35 @@ impl Lsp {
             self.history.peek().borrow_mut().break_group();
         } else if let Some(svc) = &self.svc {
             svc.open_location(loc);
+        }
+    }
+}
+
+/// The byte range of a parameter label inside its signature label.
+pub(crate) fn param_range(label: &str, p: &lsp::ParameterLabel) -> Option<(usize, usize)> {
+    match p {
+        lsp::ParameterLabel::Simple(s) if !s.is_empty() => {
+            // Search after the opening paren so a parameter named like the function matches
+            // the parameter, not the name.
+            let from = label.find('(').map_or(0, |i| i + 1);
+            label[from..]
+                .find(s.as_str())
+                .map(|i| (from + i, from + i + s.len()))
+        }
+        lsp::ParameterLabel::Simple(_) => None,
+        lsp::ParameterLabel::Offsets(a, b) => {
+            let at = |u: u32| -> usize {
+                let mut units = 0u32;
+                for (i, c) in label.char_indices() {
+                    if units >= u {
+                        return i;
+                    }
+                    units += c.len_utf16() as u32;
+                }
+                label.len()
+            };
+            let (x, y) = (at(*a), at(*b));
+            (x < y).then_some((x, y))
         }
     }
 }
@@ -605,6 +824,24 @@ pub(crate) fn effective_service(p: &crate::config::Props) -> Option<Rc<dyn Langu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parameter_labels_resolve_by_text_and_utf16_offsets() {
+        let l = "f(f: i32, é: u8)";
+        assert_eq!(
+            param_range(l, &lsp::ParameterLabel::Simple("f: i32".into())),
+            Some((2, 8))
+        );
+        // UTF-16 offsets: 'é' is one unit but two bytes.
+        assert_eq!(
+            param_range(l, &lsp::ParameterLabel::Offsets(10, 15)),
+            Some((10, 16))
+        );
+        assert_eq!(
+            param_range(l, &lsp::ParameterLabel::Simple("zz".into())),
+            None
+        );
+    }
 
     #[test]
     fn markdown_hover_splits_into_sections_at_rules_outside_fences() {

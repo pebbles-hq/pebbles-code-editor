@@ -159,6 +159,11 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
             env.lsp.show_hover_at_caret();
             true
         }
+        C::TriggerParameterHints => {
+            env.lsp
+                .request_signature(crate::language::SignatureHelpTriggerKind::Invoked, None);
+            true
+        }
         C::AddCursorAbove => edit(ops::add_cursor_vertical(&src, &sels, false)),
         C::AddCursorBelow => edit(ops::add_cursor_vertical(&src, &sels, true)),
         C::SelectAllOccurrences => edit(ops::select_all_occurrences(&src, &sels)),

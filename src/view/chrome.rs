@@ -53,17 +53,3 @@ pub(crate) fn with_alpha(c: Color, a: f32) -> Color {
     let [r, g, b, _] = c.components;
     Color::new([r, g, b, a])
 }
-
-/// A floating tooltip panel (hover info / signature help), positioned by the caller.
-pub(crate) fn tooltip(body: AnyWidget, theme: &EditorTheme) -> impl IntoWidget {
-    container()
-        .decoration(
-            BoxDecoration::new()
-                .color(theme.overlay_bg)
-                .radius(BorderRadius::all(theme.overlay_radius))
-                .border(Border::new(theme.border, 1.0)),
-        )
-        .padding(EdgeInsets::symmetric(10.0, 7.0))
-        .clip()
-        .child(body)
-}

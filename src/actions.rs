@@ -240,6 +240,8 @@ commands! {
     ShrinkSelection => "editor.action.smartSelect.shrink", "Shrink Selection", ["Shift+Alt+Left"];
     /// Show the hover for the symbol at the caret.
     ShowHover => "editor.action.showHover", "Show or Focus Hover", ["Ctrl+K Ctrl+I"];
+    /// Show signature help (parameter hints) for the call at the caret.
+    TriggerParameterHints => "editor.action.triggerParameterHints", "Trigger Parameter Hints", ["Ctrl+Shift+Space"];
 }
 
 /// One parsed keystroke.

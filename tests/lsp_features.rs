@@ -17,11 +17,24 @@ type Pending<T> = RefCell<Vec<(Position, Reply<T>)>>;
 #[derive(Default)]
 struct Fake {
     hovers: Pending<Option<Hover>>,
+    sigs: Pending<Option<SignatureHelp>>,
+    sig_cx: RefCell<Vec<SignatureHelpContext>>,
 }
 
 impl LanguageService for Fake {
     fn hover(&self, _doc: &DocRef, pos: Position, reply: Reply<Option<Hover>>) -> bool {
         self.hovers.borrow_mut().push((pos, reply));
+        true
+    }
+    fn signature_help(
+        &self,
+        _doc: &DocRef,
+        pos: Position,
+        cx: SignatureHelpContext,
+        reply: Reply<Option<SignatureHelp>>,
+    ) -> bool {
+        self.sig_cx.borrow_mut().push(cx);
+        self.sigs.borrow_mut().push((pos, reply));
         true
     }
 }
@@ -119,4 +132,118 @@ fn hover_dwells_caches_renders_markdown_sections_and_shows_by_keyboard() {
     h.frames(2);
     assert!(!h.find_text("stale hover"));
     assert!(code.get().starts_with("fxn"));
+}
+
+fn overloads(active_signature: Option<u32>, active_parameter: u32) -> SignatureHelp {
+    let p = |l: &str, d: Option<&str>| ParameterInformation {
+        label: ParameterLabel::Simple(l.into()),
+        documentation: d.map(MarkupContent::markdown),
+    };
+    SignatureHelp {
+        signatures: vec![
+            SignatureInformation {
+                label: "f(a: i32, b: i32)".into(),
+                documentation: Some(MarkupContent::markdown("Adds **two** numbers.")),
+                parameters: vec![p("a: i32", Some("The *first* operand.")), p("b: i32", None)],
+                active_parameter: None,
+            },
+            SignatureInformation {
+                label: "f(s: &str)".into(),
+                documentation: None,
+                parameters: vec![p("s: &str", None)],
+                active_parameter: None,
+            },
+        ],
+        active_signature,
+        active_parameter: Some(active_parameter),
+    }
+}
+
+#[test]
+fn signature_help_triggers_retriggers_cycles_overloads_and_closes() {
+    let fake = Rc::new(Fake::default());
+    let (mut h, code) = mount("f\n", fake.clone(), |e| e);
+    h.key(KeyInput::Move {
+        motion: Motion::Right,
+        extend: false,
+    });
+    h.key(KeyInput::Insert("(".into()));
+    {
+        let cx = fake.sig_cx.borrow();
+        assert_eq!(cx.len(), 1);
+        assert_eq!(
+            cx[0].trigger_kind,
+            SignatureHelpTriggerKind::TriggerCharacter
+        );
+        assert_eq!(cx[0].trigger_character.as_deref(), Some("("));
+        assert!(!cx[0].is_retrigger);
+    }
+    let (pos, r) = take(&fake.sigs);
+    assert_eq!(pos, Position::new(0, 2));
+    r(Some(overloads(None, 0)));
+    h.frames(2);
+    assert!(
+        h.find_text("\u{2039} 1/2 \u{203a}  f(a: i32, b: i32)"),
+        "overload counter + label"
+    );
+    assert!(h.find_text("The first operand."), "active parameter docs");
+    assert!(h.find_text("Adds two numbers."), "signature docs");
+    // Alt+Down shows the next overload (instead of moving the line).
+    let before = code.get();
+    h.press("Alt+Down");
+    assert!(h.find_text("\u{2039} 2/2 \u{203a}  f(s: &str)"));
+    assert_eq!(code.get(), before, "the line did not move");
+    h.press("Alt+Down");
+    assert!(
+        h.find_text("\u{2039} 1/2 \u{203a}  f(a: i32, b: i32)"),
+        "wraps around"
+    );
+    h.press("Alt+Up");
+    // Typing while open retriggers with the active help (the picked overload).
+    h.key(KeyInput::Insert("x".into()));
+    {
+        let cx = fake.sig_cx.borrow();
+        let last = cx.last().unwrap();
+        assert_eq!(last.trigger_kind, SignatureHelpTriggerKind::ContentChange);
+        assert!(last.is_retrigger);
+        assert_eq!(
+            last.active.as_ref().and_then(|a| a.active_signature),
+            Some(1)
+        );
+    }
+    let (_, r) = take(&fake.sigs);
+    r(Some(overloads(None, 0)));
+    h.frames(1);
+    assert!(
+        h.find_text("\u{2039} 2/2 \u{203a}  f(s: &str)"),
+        "picked overload kept"
+    );
+    // `,` is a trigger character; an empty reply closes the help.
+    h.key(KeyInput::Insert(",".into()));
+    assert_eq!(
+        fake.sig_cx
+            .borrow()
+            .last()
+            .unwrap()
+            .trigger_character
+            .as_deref(),
+        Some(",")
+    );
+    let (_, r) = take(&fake.sigs);
+    r(None);
+    h.frames(1);
+    assert!(!h.find_text("\u{2039} 2/2 \u{203a}  f(s: &str)"));
+    // Ctrl+Shift+Space invokes it; Escape closes it.
+    h.press("Ctrl+Shift+Space");
+    assert_eq!(
+        fake.sig_cx.borrow().last().unwrap().trigger_kind,
+        SignatureHelpTriggerKind::Invoked
+    );
+    let (_, r) = take(&fake.sigs);
+    r(Some(overloads(Some(0), 1)));
+    h.frames(1);
+    assert!(h.find_text("\u{2039} 1/2 \u{203a}  f(a: i32, b: i32)"));
+    h.key(KeyInput::Escape);
+    assert!(!h.find_text("\u{2039} 1/2 \u{203a}  f(a: i32, b: i32)"));
+    assert!(fake.sigs.borrow().is_empty());
 }
