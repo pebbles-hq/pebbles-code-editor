@@ -1212,26 +1212,33 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // only when the parse changed, and only up to SYNTAX_FOLD_MAX_BYTES (~20k lines;
     // indentation folding beyond that keeps huge files cheap).
     const SYNTAX_FOLD_MAX_BYTES: usize = 800_000;
-    let syntax_regions: Option<Rc<Vec<(usize, usize)>>> = p.language.as_ref().and_then(|l| {
-        let cell = syntax.peek();
-        let mut slot = cell.borrow_mut();
-        let name = l.name().to_string();
-        if slot.as_ref().is_none_or(|(n, _)| *n != name) {
-            *slot = l.session().map(|s| (name, s));
-        }
-        let (_, sess) = slot.as_mut()?;
-        sess.update(&src);
-        if src.len() > SYNTAX_FOLD_MAX_BYTES {
-            return None;
-        }
-        let fc = syntax_folds.peek();
-        let mut fc = fc.borrow_mut();
-        if fc.0 != sess.version() || fc.1.is_none() {
-            let r = sess.fold_ranges();
-            *fc = (sess.version(), Some(Rc::new(r)));
-        }
-        fc.1.clone().filter(|r| !r.is_empty())
-    });
+    // VS Code `editor.maxTokenizationLineLength`: a document with a line longer than this
+    // (minified code, data dumps) is not parsed; visible lines are tokenized one by one and
+    // the over-long lines render as plain text — so typing on them stays cheap.
+    const MAX_TOKENIZATION_LINE_LENGTH: usize = 20_000;
+    let too_long =
+        line_cache.peek().borrow_mut().sync(&src).max_cols() > MAX_TOKENIZATION_LINE_LENGTH;
+    let syntax_regions: Option<Rc<Vec<(usize, usize)>>> =
+        p.language.as_ref().filter(|_| !too_long).and_then(|l| {
+            let cell = syntax.peek();
+            let mut slot = cell.borrow_mut();
+            let name = l.name().to_string();
+            if slot.as_ref().is_none_or(|(n, _)| *n != name) {
+                *slot = l.session().map(|s| (name, s));
+            }
+            let (_, sess) = slot.as_mut()?;
+            sess.update(&src);
+            if src.len() > SYNTAX_FOLD_MAX_BYTES {
+                return None;
+            }
+            let fc = syntax_folds.peek();
+            let mut fc = fc.borrow_mut();
+            if fc.0 != sess.version() || fc.1.is_none() {
+                let r = sess.fold_ranges();
+                *fc = (sess.version(), Some(Rc::new(r)));
+            }
+            fc.1.clone().filter(|r| !r.is_empty())
+        });
     let li = {
         let cell = line_cache.peek();
         let mut lc = cell.borrow_mut();
@@ -1563,31 +1570,49 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     const LARGE_FILE_LINES: usize = 5000;
     // Incremental parser path (tree-sitter): one session per editor, re-parsed incrementally
     // on change and queried for the visible window (plus a margin) only.
-    let session_tokens: Option<Rc<Vec<Token>>> = p.language.as_ref().and_then(|l| {
-        let cell = syntax.peek();
-        let mut slot = cell.borrow_mut();
-        let name = l.name().to_string();
-        if slot.as_ref().is_none_or(|(n, _)| *n != name) {
-            *slot = l.session().map(|s| (name, s));
-        }
-        let (_, sess) = slot.as_mut()?;
-        if hclip.is_some() {
-            let mut v = Vec::new();
-            for &(a, b) in &vis_ranges {
-                if b > a {
-                    v.extend(sess.highlight_range(&src, a..b));
-                }
+    let session_tokens: Option<Rc<Vec<Token>>> =
+        p.language.as_ref().filter(|_| !too_long).and_then(|l| {
+            let cell = syntax.peek();
+            let mut slot = cell.borrow_mut();
+            let name = l.name().to_string();
+            if slot.as_ref().is_none_or(|(n, _)| *n != name) {
+                *slot = l.session().map(|s| (name, s));
             }
-            return Some(Rc::new(v));
-        }
-        const MARGIN: usize = 50;
-        let lo = li.line_start_of(first_line.saturating_sub(MARGIN));
-        let hi_line = (last_line + MARGIN).min(line_count.saturating_sub(1));
-        let hi = line_end(&src, li.line_start_of(hi_line));
-        Some(Rc::new(sess.highlight_range(&src, lo..hi)))
-    });
+            let (_, sess) = slot.as_mut()?;
+            if hclip.is_some() {
+                let mut v = Vec::new();
+                for &(a, b) in &vis_ranges {
+                    if b > a {
+                        v.extend(sess.highlight_range(&src, a..b));
+                    }
+                }
+                return Some(Rc::new(v));
+            }
+            const MARGIN: usize = 50;
+            let lo = li.line_start_of(first_line.saturating_sub(MARGIN));
+            let hi_line = (last_line + MARGIN).min(line_count.saturating_sub(1));
+            let hi = line_end(&src, li.line_start_of(hi_line));
+            Some(Rc::new(sess.highlight_range(&src, lo..hi)))
+        });
     let tokens: Rc<Vec<Token>> = if let Some(t) = session_tokens {
         t
+    } else if too_long {
+        // Line-by-line over the visible window, skipping the over-long lines.
+        let mut toks = Vec::new();
+        if let Some(l) = p.language.as_ref() {
+            for line in first_line..=last_line.min(line_count.saturating_sub(1)) {
+                if li.line_char_len(line) > MAX_TOKENIZATION_LINE_LENGTH {
+                    continue;
+                }
+                let ls = li.line_start_of(line);
+                let le = line_end(&src, ls);
+                toks.extend(l.highlight(&src[ls..le]).into_iter().map(|t| Token {
+                    start: t.start + ls,
+                    ..t
+                }));
+            }
+        }
+        Rc::new(toks)
     } else if line_count > LARGE_FILE_LINES {
         let ls = li.line_start_of(first_line);
         let le = line_end(&src, li.line_start_of(last_line));
