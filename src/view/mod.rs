@@ -391,6 +391,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         hover: create_signal(false),
         grab: create_signal(None),
     };
+    let mmap = minimap::MinimapState {
+        hover: create_signal(false),
+        grab: create_signal(None),
+    };
     let completion = create_signal::<Option<completion::Session>>(None); // autocomplete popup
     // Stale-reply gates for completion / resolve requests (persist across re-renders).
     // The live snippet session (tab stops), if any.
@@ -2828,7 +2832,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             // VS Code: text | minimap | ONE vertical bar at the right edge, the overview
             // ruler drawn in its track.
             let mut parts: Vec<AnyWidget> = vec![expanded(scroller).into_widget()];
-            if let Some(mm) = minimap::panel(&frame, scroll.clone(), scroll_top, extent) {
+            if let Some(mm) = minimap::panel(&frame, scroll.clone(), scroll_top, extent, mmap) {
                 parts.push(mm);
             }
             parts.push(scrollbar::vertical(
