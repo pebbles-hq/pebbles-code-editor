@@ -1748,7 +1748,7 @@ fn ctrl_wheel_zooms_the_font() {
 }
 
 #[test]
-fn ctrl_hover_underlines_the_definition_target() {
+fn ctrl_hover_underlines_and_ctrl_click_goes_to_definition() {
     use std::rc::Rc;
     pebbles::widgets::overlay::init();
     pebbles::core::focus::init();
@@ -1775,8 +1775,12 @@ fn ctrl_hover_underlines_the_definition_target() {
     ui.dispatch_hover(at(0, 6));
     frame(&mut ui, &mut env);
     let underlined = ui.render_node_count();
-    pebbles::core::keyboard::set_modifiers(false, false, false, false);
     assert!(underlined > plain, "{plain} -> {underlined}");
+    // Ctrl+click jumps to the definition (byte 0): typing lands there.
+    click(&mut ui, &mut env, at(0, 6));
+    pebbles::core::keyboard::set_modifiers(false, false, false, false);
+    key(&mut ui, &mut env, KeyInput::Insert("X".to_string()));
+    assert_eq!(code.get(), "Xfoo bar");
 }
 
 #[test]
