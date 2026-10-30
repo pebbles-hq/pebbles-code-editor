@@ -401,3 +401,31 @@ fn find_replace_shows_match_count_and_replaces_all() {
     h.frames(2);
     assert_eq!(code.get(), " bar  baz ");
 }
+
+#[test]
+fn overview_ruler_and_current_line_highlight_render() {
+    let count = |ruler: bool, current: bool| {
+        pebbles::widgets::overlay::init();
+        pebbles::core::focus::init();
+        let src: String = (0..300).map(|i| format!("line {i} foo\n")).collect();
+        let code = create_root_signal(src.clone());
+        let base = create_root_signal(src.replace("line 7 foo", "line seven"));
+        let mut h = Harness::new().window(500.0, 300.0);
+        h.mount_widget(
+            code_editor(code)
+                .height(280.0)
+                .diff_base(base)
+                .overview_ruler(ruler)
+                .current_line(current)
+                .autofocus(),
+        );
+        h.frames(3);
+        h.render_node_count()
+    };
+    // Cursor + change marks in the scrollbar ruler.
+    assert!(
+        count(true, true) > count(false, true) + 1,
+        "overview ruler marks"
+    );
+    assert!(count(true, true) > count(true, false), "current-line band");
+}
