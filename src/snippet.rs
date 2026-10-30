@@ -616,6 +616,73 @@ fn civil(days: i64) -> (i64, u32, u32) {
     (yoe + era * 400 + i64::from(m <= 2), m, d)
 }
 
+/// The local time zone's UTC offset (seconds) at `unix`, from the TZif database
+/// (`$TZ`, else `/etc/localtime`); 0 (UTC) when unavailable.
+fn local_offset(unix: i64) -> i64 {
+    thread_local!(static ZONE: Option<Vec<u8>> = {
+        let tz = std::env::var("TZ").ok().map(|t| t.trim_start_matches(':').to_string());
+        let path = match tz.as_deref() {
+            Some(t) if t.starts_with('/') => t.to_string(),
+            Some(t) if !t.is_empty() => format!("/usr/share/zoneinfo/{t}"),
+            _ => "/etc/localtime".to_string(),
+        };
+        std::fs::read(path).ok()
+    });
+    ZONE.with(|z| z.as_deref().and_then(|b| tzif_offset(b, unix)).unwrap_or(0))
+}
+
+/// The UTC offset at `unix` in a TZif file (RFC 8536): the version-1 (32-bit) block, or
+/// the 64-bit block of version 2+ files.
+fn tzif_offset(b: &[u8], unix: i64) -> Option<i64> {
+    let be32 = |i: usize| -> Option<i64> {
+        Some(i64::from(i32::from_be_bytes(
+            b.get(i..i + 4)?.try_into().ok()?,
+        )))
+    };
+    let be64 =
+        |i: usize| -> Option<i64> { Some(i64::from_be_bytes(b.get(i..i + 8)?.try_into().ok()?)) };
+    let header = |at: usize| -> Option<[usize; 6]> {
+        if b.get(at..at + 4)? != b"TZif" {
+            return None;
+        }
+        let mut c = [0usize; 6];
+        for (k, v) in c.iter_mut().enumerate() {
+            *v = be32(at + 20 + 4 * k)? as usize;
+        }
+        Some(c) // isut, isstd, leap, time, type, char
+    };
+    let c1 = header(0)?;
+    let v1_len = c1[3] * 5 + c1[4] * 6 + c1[5] + c1[2] * 8 + c1[1] + c1[0];
+    // Version 2+: skip the v1 block, use the 64-bit one.
+    let (at, c, tsz) = match b.get(4) {
+        Some(b'2'..=b'9') => {
+            let at = 44 + v1_len;
+            (at, header(at)?, 8)
+        }
+        _ => (0, c1, 4),
+    };
+    let times = at + 44;
+    let idxs = times + c[3] * tsz;
+    let types = idxs + c[3];
+    let off_of = |t: usize| be32(types + t * 6);
+    if c[4] == 0 {
+        return None;
+    }
+    let mut ty = None;
+    for i in 0..c[3] {
+        let t = if tsz == 8 {
+            be64(times + i * 8)?
+        } else {
+            be32(times + i * 4)?
+        };
+        if t > unix {
+            break;
+        }
+        ty = Some(*b.get(idxs + i)? as usize);
+    }
+    off_of(ty.unwrap_or(0).min(c[4] - 1))
+}
+
 fn rand64() -> u64 {
     use std::cell::Cell;
     thread_local!(static S: Cell<u64> = const { Cell::new(0) });
@@ -666,9 +733,11 @@ pub(crate) fn variable(name: &str, cx: &VarCtx) -> Option<String> {
         .unwrap_or(cx.uri)
         .replace("%20", " ");
     let file = path.rsplit('/').next().unwrap_or(&path).to_string();
-    let secs = std::time::SystemTime::now()
+    let unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs()) as i64;
+    // Date/time variables are local time (VS Code); CURRENT_SECONDS_UNIX stays UTC.
+    let secs = unix + local_offset(unix);
     let (y, mo, d) = civil(secs.div_euclid(86_400));
     let tod = secs.rem_euclid(86_400);
     let wd = (secs.div_euclid(86_400) + 4).rem_euclid(7) as usize;
@@ -705,7 +774,7 @@ pub(crate) fn variable(name: &str, cx: &VarCtx) -> Option<String> {
         "CURRENT_HOUR" => format!("{:02}", tod / 3600),
         "CURRENT_MINUTE" => format!("{:02}", tod / 60 % 60),
         "CURRENT_SECOND" => format!("{:02}", tod % 60),
-        "CURRENT_SECONDS_UNIX" => secs.to_string(),
+        "CURRENT_SECONDS_UNIX" => unix.to_string(),
         "CURRENT_TIMEZONE_OFFSET" => "Z".into(),
         "RANDOM" => format!("{:06}", rand64() % 1_000_000),
         "RANDOM_HEX" => format!("{:06x}", rand64() & 0xFF_FFFF),
@@ -951,6 +1020,36 @@ pub(crate) fn jump(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tzif_offsets_follow_the_transitions() {
+        // A v1 TZif: types UTC+1 (0) and UTC+2 (1); one transition to +2 at t=1000.
+        let mut b = b"TZif".to_vec();
+        b.extend([0u8; 16]);
+        for n in [0u32, 0, 0, 1, 2, 4] {
+            b.extend(n.to_be_bytes());
+        }
+        b.extend(1000i32.to_be_bytes());
+        b.push(1);
+        b.extend(3600i32.to_be_bytes());
+        b.extend([0, 0]);
+        b.extend(7200i32.to_be_bytes());
+        b.extend([1, 0]);
+        b.extend(*b"CET\0");
+        assert_eq!(super::tzif_offset(&b, 10), Some(3600));
+        assert_eq!(super::tzif_offset(&b, 1000), Some(7200));
+        assert_eq!(super::tzif_offset(&b, 99_999), Some(7200));
+        assert_eq!(super::tzif_offset(b"nope", 0), None);
+        // Real zone files (version 2+, 64-bit block) when the system has them.
+        let now = 1_790_000_000; // 2026
+        if let Ok(z) = std::fs::read("/usr/share/zoneinfo/Asia/Tokyo") {
+            assert_eq!(super::tzif_offset(&z, now), Some(9 * 3600));
+        }
+        if let Ok(z) = std::fs::read("/usr/share/zoneinfo/Europe/Berlin") {
+            assert_eq!(super::tzif_offset(&z, 1_784_000_000), Some(2 * 3600)); // July: CEST
+            assert_eq!(super::tzif_offset(&z, 1_798_000_000), Some(3600)); // December: CET
+        }
+    }
+
     use super::*;
 
     fn ex(body: &str) -> Expanded {
