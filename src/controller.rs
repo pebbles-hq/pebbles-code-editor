@@ -19,6 +19,8 @@ pub(crate) enum Request {
     ScrollTo(usize),
     /// Give the editor keyboard focus.
     Focus,
+    /// Run a built-in editor command.
+    Run(crate::actions::EditorCommand),
 }
 
 /// A handle for driving an editor programmatically. `Copy`; create it with
@@ -68,6 +70,13 @@ impl EditorController {
     /// Give the editor keyboard focus.
     pub fn focus(&self) {
         self.requests.update(|r| r.push(Request::Focus));
+    }
+
+    /// Run a built-in [`EditorCommand`](crate::EditorCommand) — e.g. on save:
+    /// `TrimTrailingWhitespace` + `InsertFinalNewline` (VS Code `files.*` save actions), or
+    /// any command from a host menu.
+    pub fn run_command(&self, cmd: crate::actions::EditorCommand) {
+        self.requests.update(|r| r.push(Request::Run(cmd)));
     }
 
     /// The primary caret's `(line, col)` (0-based, char columns) — reactive: reading it with

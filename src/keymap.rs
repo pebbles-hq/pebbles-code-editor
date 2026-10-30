@@ -78,6 +78,10 @@ impl BuiltinCommand {
 pub struct Keymap {
     pub(crate) disabled: Vec<BuiltinCommand>,
     pub(crate) bindings: Vec<(String, BuiltinCommand)>,
+    /// Editor commands whose default chords are removed.
+    pub(crate) unbound: Vec<crate::actions::EditorCommand>,
+    /// Extra / replacement chords for editor commands.
+    pub(crate) command_bindings: Vec<(String, crate::actions::EditorCommand)>,
 }
 
 impl Keymap {
@@ -100,6 +104,46 @@ impl Keymap {
     pub fn bind(mut self, chord: impl Into<String>, cmd: BuiltinCommand) -> Self {
         self.bindings.push((chord.into(), cmd));
         self
+    }
+
+    /// Remove every default chord of editor command `cmd` (see
+    /// [`EditorCommand::default_keys`](crate::EditorCommand::default_keys)); it stays runnable
+    /// from the palette and from chords added with [`bind_command`](Self::bind_command).
+    pub fn unbind_command(mut self, cmd: crate::actions::EditorCommand) -> Self {
+        if !self.unbound.contains(&cmd) {
+            self.unbound.push(cmd);
+        }
+        self
+    }
+
+    /// Run editor command `cmd` on `chord` (pebbles shortcut syntax; a space separates the
+    /// strokes of a multi-stroke chord, e.g. `"Ctrl+K Ctrl+0"`). A host chord replaces any
+    /// default bound to the same chord. Pair with [`unbind_command`](Self::unbind_command) to
+    /// move a command to a new chord.
+    pub fn bind_command(
+        mut self,
+        chord: impl Into<String>,
+        cmd: crate::actions::EditorCommand,
+    ) -> Self {
+        self.command_bindings.push((chord.into(), cmd));
+        self
+    }
+
+    /// The effective chords for `cmd` after overrides (defaults unless unbound, plus host
+    /// bindings) — for showing keybindings in menus / the palette.
+    pub fn chords_for(&self, cmd: crate::actions::EditorCommand) -> Vec<String> {
+        let mut v: Vec<String> = if self.unbound.contains(&cmd) {
+            Vec::new()
+        } else {
+            cmd.default_keys().iter().map(|s| s.to_string()).collect()
+        };
+        v.extend(
+            self.command_bindings
+                .iter()
+                .filter(|(_, c)| *c == cmd)
+                .map(|(k, _)| k.clone()),
+        );
+        v
     }
 
     /// Whether `cmd`'s default chord is disabled.

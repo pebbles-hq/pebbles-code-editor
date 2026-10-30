@@ -9,7 +9,7 @@
 //! compiler front end — good enough is exactly what a highlighter needs.
 
 /// The semantic class of a token. Themes map each of these to a color.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum TokenKind {
     /// Language keyword (`fn`, `let`, `if`, `return`, …).
     Keyword,
@@ -45,6 +45,11 @@ pub enum TokenKind {
     Link,
     /// Emphasised markup (bold / italic / strikethrough).
     Emphasis,
+    /// A bracket at nesting depth `n` (bracket-pair colorization; the theme cycles its
+    /// bracket palette).
+    Bracket(u8),
+    /// A closing bracket with no opener.
+    BracketUnmatched,
     /// Anything else (plain identifiers, whitespace).
     Plain,
 }
@@ -137,6 +142,11 @@ pub trait SyntaxSession {
     fn highlight_range(&mut self, src: &str, range: std::ops::Range<usize>) -> Vec<Token>;
     /// Syntax-derived foldable regions as `(head_line, last_line)`, one per head line.
     fn fold_ranges(&mut self) -> Vec<(usize, usize)> {
+        Vec::new()
+    }
+    /// The syntax nodes enclosing `[from, to)`, innermost first, as byte ranges — the
+    /// smart-select (expand/shrink selection) ladder. Empty when unsupported.
+    fn enclosing_nodes(&mut self, _from: usize, _to: usize) -> Vec<(usize, usize)> {
         Vec::new()
     }
     /// A counter bumped on every reparse (for caching derived data).

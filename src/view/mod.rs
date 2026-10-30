@@ -8,6 +8,7 @@
 //! reactive setup, the read-model, the mouse gestures, and the final assembly.
 
 mod chrome;
+mod commands;
 mod completion;
 mod extensions;
 mod gutter;
@@ -144,6 +145,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     #[allow(clippy::type_complexity)]
     let token_cache: Signal<Rc<RefCell<(String, Rc<Vec<Token>>)>>> =
         create_signal(Rc::new(RefCell::new((String::new(), Rc::new(Vec::new())))));
+    // Bracket-colorization prefix cache: (text before the window, bracket depth there).
+    let bracket_cache = create_signal(Rc::new(RefCell::new((String::new(), 0_i64))));
     // Incremental syntax session (tree-sitter languages), keyed by language name so a
     // language switch starts a fresh parse. Survives re-renders.
     #[allow(clippy::type_complexity)]
@@ -165,6 +168,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // The live wrap-column width, shared with the (once-created) autoscroll effect via interior
     // mutability so it can map the caret to its display row without a stale capture.
     let wrap_hold = create_signal(Rc::new(std::cell::Cell::new(0usize)));
+    // Live (line_px, advance, content_h) for the once-created autoscroll effect.
+    let metrics_hold = create_signal(Rc::new(std::cell::Cell::new((0.0_f64, 0.0_f64, 0.0_f64))));
     // The line index, updated by each edit's delta (see `crate::lines`), so a rebuild costs
     // the edited lines rather than the whole document. Shared with the autoscroll effect.
     let line_cache = create_signal(Rc::new(RefCell::new(crate::lines::LineCache::default())));
@@ -184,6 +189,18 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         sel: create_signal(0usize),
     };
     let focus = create_focus();
+    // View-state toggles driven by editor commands: soft-wrap override (Alt+Z), font zoom
+    // (Ctrl+= / Ctrl+-), soft-undo cursor history (Ctrl+U), smart-select stack, and the
+    // pending strokes of a multi-stroke chord (Ctrl+K …).
+    let wrap_override = create_signal::<Option<bool>>(None);
+    let zoom = create_signal(0.0_f64);
+    let cursor_hist = create_signal(Rc::new(RefCell::new(commands::CursorHistory::default())));
+    let smart_stack = create_signal::<Vec<Selections>>(Vec::new());
+    let pending_keys = create_signal::<Vec<crate::actions::Stroke>>(Vec::new());
+    create_effect(move || {
+        let st = state.get();
+        cursor_hist.peek().borrow_mut().observe(&st);
+    });
 
     // Two-way binding + collaboration stream. On any `code` change: if it came from OUTSIDE
     // (a remote/loader edit — `code != state.text()`), rebuild the doc and REMAP the carets
@@ -259,8 +276,17 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
 
     // Register the key handler (semantic edit commands from the framework).
     let read_only = p.read_only;
-    let indent_unit: String = if p.insert_spaces {
-        " ".repeat(p.tab_size)
+    // Indentation detection (once per mounted document, VS Code `detectIndentation`).
+    let detected =
+        create_signal(Rc::new(std::cell::OnceCell::<Option<(bool, usize)>>::new())).peek();
+    let (insert_spaces, tab_size) = match p.detect_indentation {
+        true => detected
+            .get_or_init(|| crate::ops::detect_indentation(&code.peek()))
+            .unwrap_or((p.insert_spaces, p.tab_size)),
+        false => (p.insert_spaces, p.tab_size),
+    };
+    let indent_unit: String = if insert_spaces {
+        " ".repeat(tab_size)
     } else {
         "\t".to_string()
     };
@@ -278,6 +304,85 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             .unwrap_or_else(|| DEFAULT_BRACKETS.to_vec()),
         auto_close: p.auto_close,
     });
+    // Editor command environment (shared by the raw-key resolver and the palette).
+    let eff_fs = (p.fs + zoom.get()).max(6.0);
+    let ops_cfg = Rc::new(crate::ops::OpCfg {
+        tab: indent_unit.clone(),
+        tab_size: tab_size.max(1),
+        line_comment: cfg.line_comment.clone(),
+        block_comment: p.language.as_ref().and_then(|l| {
+            l.block_comment()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+        }),
+        brackets: cfg.brackets.clone(),
+    });
+    let cmd_env = commands::Env {
+        state,
+        history,
+        code,
+        goal,
+        folds,
+        wrap: wrap_override,
+        soft_wrap_default: p.soft_wrap,
+        zoom,
+        cursor_hist,
+        smart_stack,
+        syntax,
+        find,
+        palette,
+        scroll: scroll.clone(),
+        scroll_top,
+        height: p.height,
+        line_px: eff_fs * p.lh,
+        read_only,
+        diff_base: p.diff_base,
+        ops: ops_cfg,
+    };
+    // Raw-key command resolver: runs BEFORE the framework maps the key to an editing intent,
+    // so editor chords (Alt+Up, Ctrl+Shift+K, Ctrl+K Ctrl+0, …) win over caret motion.
+    {
+        let table = Rc::new(crate::actions::key_table(&p.keymap));
+        let env = cmd_env.clone();
+        focus.on_key_event(Rc::new(move |ev: &pebbles::core::KeyEvent| {
+            use pebbles::core::{KeyEventKind, KeyEventResult};
+            if ev.kind == KeyEventKind::Up {
+                return KeyEventResult::Ignored;
+            }
+            if completion.peek().is_some() || palette.open.peek() {
+                return KeyEventResult::Ignored;
+            }
+            let Some(stroke) = crate::actions::stroke_of(ev) else {
+                return KeyEventResult::Ignored;
+            };
+            // A bare modifier press never resolves or cancels a pending chord.
+            let pending = pending_keys.peek();
+            match crate::actions::resolve(&table, &pending, &stroke) {
+                crate::actions::Resolved::Run(cmd) => {
+                    pending_keys.set(Vec::new());
+                    if commands::run(cmd, &env) {
+                        KeyEventResult::Handled
+                    } else {
+                        KeyEventResult::Ignored
+                    }
+                }
+                crate::actions::Resolved::Pending => {
+                    let mut p = pending;
+                    p.push(stroke);
+                    pending_keys.set(p);
+                    KeyEventResult::Handled
+                }
+                crate::actions::Resolved::None => {
+                    if pending.is_empty() {
+                        KeyEventResult::Ignored
+                    } else {
+                        // An unbound second stroke cancels the chord (and is swallowed).
+                        pending_keys.set(Vec::new());
+                        KeyEventResult::Handled
+                    }
+                }
+            }
+        }));
+    }
     {
         let cfg = cfg.clone();
         let provider = p.completion.clone();
@@ -633,7 +738,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         let reqs = c.requests.get();
         if !reqs.is_empty() {
             c.requests.set(Vec::new());
-            let line_px = p.fs * p.lh;
+            let line_px = (p.fs + zoom.peek()).max(6.0) * p.lh;
             for r in reqs {
                 let cur = state.peek();
                 let text = cur.text();
@@ -665,6 +770,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                         focus.request_focus();
                         None
                     }
+                    crate::controller::Request::Run(cmd) => {
+                        commands::run(cmd, &cmd_env);
+                        None
+                    }
                 };
                 if let Some(sel) = sel {
                     state.set(EditorState {
@@ -681,7 +790,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // ---- read model ----
     let st = state.get();
     let src = st.text();
-    let fs = p.fs;
+    let fs = eff_fs;
     let lh = p.lh;
     let line_px = fs * lh;
     // Letter spacing widens every cell; fold it into the advance so caret/click/selection math
@@ -714,7 +823,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     } else {
         0.0
     };
-    let wrap_cols = if p.soft_wrap && p.height.is_some() && bounds.width() > 1.0 {
+    let wrap_cols = if wrap_override.get().unwrap_or(p.soft_wrap)
+        && p.height.is_some()
+        && bounds.width() > 1.0
+    {
         (((bounds.width() - gutter_w_est - pad_l * 2.0) / advance).floor() as isize).max(8) as usize
     } else {
         0
@@ -749,6 +861,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let display_rows = disp.rows();
     let content_h = display_rows as f64 * line_px + pad_t * 2.0;
     wrap_hold.peek().set(wrap_cols); // publish to the autoscroll effect
+    metrics_hold.peek().set((line_px, advance, content_h));
     let focused = focus.is_focused();
 
     // ---- viewport virtualization (in display-row space) ----
@@ -806,6 +919,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     if let Some(vh) = p.height {
         create_effect(move || {
             let st = state.get();
+            // Live metrics (font zoom changes them after this effect was created).
+            let (line_px, advance, content_h) = metrics_hold.peek().get();
             let text = st.text();
             let head = st.primary().head;
             let li = line_cache.peek().borrow_mut().sync(&text);
@@ -905,6 +1020,24 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             }
         }
         None => tokens,
+    };
+    // Bracket-pair colorization over the rendered window: depth at the window start comes
+    // from a cached prefix scan (re-scanned only when the text above the window changes).
+    let tokens: Rc<Vec<Token>> = if p.bracket_pair_colorization {
+        let lo = li.line_start_of(first_line);
+        let hi = line_end(&src, li.line_start_of(last_line));
+        let cell = bracket_cache.peek();
+        let mut c = cell.borrow_mut();
+        let prefix = &src[..lo];
+        if c.0 != prefix {
+            c.1 = crate::highlight::bracket_depth(prefix, &cfg.brackets);
+            c.0.clear();
+            c.0.push_str(prefix);
+        }
+        let br = crate::highlight::bracket_tokens(&src, lo, hi, c.1, &cfg.brackets, &tokens);
+        Rc::new(crate::highlight::overlay_split(&tokens, &br))
+    } else {
+        tokens
     };
 
     // ---- extension contributions for this frame ----
@@ -1474,11 +1607,22 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
 
     // Overlay the command palette (all extension commands) when open.
     let code_area: AnyWidget = if palette.open.get() {
-        let commands: Vec<crate::extensions::Command> = p
-            .extensions
+        // Built-in editor commands first (each runnable from the palette), then extensions'.
+        let mut commands: Vec<crate::extensions::Command> = crate::actions::EditorCommand::ALL
             .iter()
-            .flat_map(|e| e.commands.iter().cloned())
+            .map(|&c| {
+                let env = cmd_env.clone();
+                let chords = p.keymap.chords_for(c);
+                let title = match chords.first() {
+                    Some(k) => format!("{}  ({k})", c.title()),
+                    None => c.title().to_string(),
+                };
+                crate::extensions::Command::new(c.id(), title, move |_| {
+                    commands::run(c, &env);
+                })
+            })
             .collect();
+        commands.extend(p.extensions.iter().flat_map(|e| e.commands.iter().cloned()));
         let ctx = crate::extensions::EditContext {
             state,
             history,

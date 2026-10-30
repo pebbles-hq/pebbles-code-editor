@@ -167,8 +167,9 @@ fn shift_tab_outdents_touched_lines() {
     let (mut ui, mut env, code) = harness("    a\n  b\nc");
     key(&mut ui, &mut env, KeyInput::SelectAll);
     key(&mut ui, &mut env, KeyInput::Outdent);
-    // 4 spaces removed, 2 spaces removed, none to remove.
-    assert_eq!(code.get(), "a\nb\nc");
+    // Indentation detection reads this file as 2-space indented (VS Code
+    // `detectIndentation`), so one level = 2 spaces: 2 removed from each indented line.
+    assert_eq!(code.get(), "  a\nb\nc");
 }
 
 #[test]

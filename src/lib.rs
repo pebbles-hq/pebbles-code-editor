@@ -42,6 +42,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod actions;
 pub mod edit;
 pub mod extensions;
 pub mod keymap;
@@ -58,10 +59,12 @@ mod fold;
 mod geometry;
 mod highlight;
 mod lines;
+mod ops;
 mod search;
 mod theme;
 mod view;
 
+pub use actions::EditorCommand;
 pub use collab::Edit;
 pub use config::{CodeEditor, code_editor};
 pub use controller::{EditorController, editor_controller};
@@ -72,6 +75,7 @@ pub use extensions::{
 };
 pub use keymap::{BuiltinCommand, Keymap};
 pub use lang::{Language, SyntaxNode, SyntaxSession, Token, TokenKind, bracket_tree};
+pub use ops::{LineEnding, detect_indentation, detect_line_ending};
 pub use providers::{
     CompletionContext, CompletionItem, CompletionKind, CompletionProvider, DefinitionProvider,
     Diagnostic, Diagnostics, FormatProvider, Hover, HoverProvider, InlayHint, InlayHints, Severity,

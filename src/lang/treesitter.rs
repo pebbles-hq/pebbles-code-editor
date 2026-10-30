@@ -584,6 +584,22 @@ impl SyntaxSession for Session {
     fn version(&self) -> u64 {
         self.version
     }
+
+    fn enclosing_nodes(&mut self, from: usize, to: usize) -> Vec<(usize, usize)> {
+        let Some(tree) = self.tree.as_ref() else {
+            return Vec::new();
+        };
+        let mut out: Vec<(usize, usize)> = Vec::new();
+        let mut node = tree.root_node().descendant_for_byte_range(from, to);
+        while let Some(n) = node {
+            let r = (n.start_byte(), n.end_byte());
+            if r.0 <= from && to <= r.1 && out.last() != Some(&r) {
+                out.push(r);
+            }
+            node = n.parent();
+        }
+        out
+    }
 }
 
 /// Run `g`'s highlight query over `range` of `tree`, painting kinds into `paint` (indexed
@@ -885,6 +901,18 @@ mod tests {
         s.update(src);
         let f = s.fold_ranges();
         assert!(f.iter().any(|&(h, l)| h == 0 && l >= 2), "{f:?}");
+    }
+
+    #[test]
+    fn enclosing_nodes_ladder() {
+        let src = "fn f() { let x = a + b; }";
+        let mut s = Session::new("rust").unwrap();
+        s.update(src);
+        let at = src.find('a').unwrap();
+        let l = s.enclosing_nodes(at, at);
+        assert_eq!(l.first(), Some(&(at, at + 1)));
+        assert!(l.iter().any(|&(a, b)| &src[a..b] == "a + b"));
+        assert_eq!(l.last(), Some(&(0, src.len())));
     }
 
     #[test]

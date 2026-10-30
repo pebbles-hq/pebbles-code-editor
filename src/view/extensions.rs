@@ -113,6 +113,15 @@ fn filtered(commands: &[Command], query: &str) -> Vec<Command> {
         .collect()
 }
 
+/// Parse a Go-to-Line query (`:12`, `:12:5`, 1-based) into a 0-based `(line, col)`.
+pub(crate) fn parse_goto(q: &str) -> Option<(usize, usize)> {
+    let rest = q.strip_prefix(':')?;
+    let mut it = rest.split([':', ',']);
+    let line: usize = it.next()?.trim().parse().ok()?;
+    let col: usize = it.next().and_then(|c| c.trim().parse().ok()).unwrap_or(1);
+    Some((line.saturating_sub(1), col.saturating_sub(1)))
+}
+
 /// Run the selected command (if any) and close the palette.
 pub(crate) fn run_selected(
     pal: Palette,
@@ -120,6 +129,18 @@ pub(crate) fn run_selected(
     ctx: EditContext,
     focus: pebbles::core::focus::FocusNode,
 ) {
+    let q = pal.query.peek();
+    if q.starts_with(':') {
+        if let Some((line, col)) = parse_goto(&q) {
+            let text = ctx.text();
+            let n = text.split('\n').count();
+            let b = crate::geometry::byte_at(&text, line.min(n.saturating_sub(1)), col);
+            ctx.select(b, b);
+        }
+        pal.open.set(false);
+        focus.request_focus();
+        return;
+    }
     let matches = filtered(commands, &pal.query.peek());
     if let Some(cmd) = matches.get(pal.sel.peek().min(matches.len().saturating_sub(1))) {
         (cmd.run)(&ctx);
@@ -136,7 +157,12 @@ pub(crate) fn palette(
     focus: pebbles::core::focus::FocusNode,
     theme: &crate::theme::EditorTheme,
 ) -> AnyWidget {
-    let matches = filtered(&commands, &pal.query.peek());
+    let goto = pal.query.peek().starts_with(':');
+    let matches = if goto {
+        Vec::new()
+    } else {
+        filtered(&commands, &pal.query.peek())
+    };
     let sel = if matches.is_empty() {
         0
     } else {
@@ -144,10 +170,10 @@ pub(crate) fn palette(
     };
 
     let field = text_field()
-        .placeholder("Run a command…")
+        .placeholder("Run a command…  (type : to go to a line)")
+        .bind(pal.query)
         .autofocus()
-        .on_changed(move |s| {
-            pal.query.set(s.to_string());
+        .on_changed(move |_| {
             pal.sel.set(0);
         })
         .on_submit(move |_| run_selected(pal, &commands, ctx, focus));
@@ -183,7 +209,19 @@ pub(crate) fn palette(
                 .into_widget(),
         );
     }
-    if matches.is_empty() {
+    if goto {
+        let q = pal.query.peek();
+        let label = match parse_goto(&q) {
+            Some((l, c)) => format!("Go to line {}, column {}", l + 1, c + 1),
+            None => "Type a line number (and :column) to go to".to_string(),
+        };
+        rows.push(
+            theme
+                .ui_text(label, 0.0)
+                .color(theme.foreground)
+                .into_widget(),
+        );
+    } else if matches.is_empty() {
         rows.push(
             theme
                 .ui_text("no matching commands", 0.0)

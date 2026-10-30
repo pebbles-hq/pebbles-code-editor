@@ -90,6 +90,11 @@ pub struct HighlightStyle {
     pub link: TokenStyle,
     /// Emphasised markup (bold / italic).
     pub emphasis: TokenStyle,
+    /// Bracket-pair colorization palette, cycled by nesting depth (VS Code
+    /// `editorBracketHighlight.foreground1..6`).
+    pub brackets: Vec<TokenStyle>,
+    /// An unmatched closing bracket (`editorBracketHighlight.unexpectedBracket.foreground`).
+    pub bracket_unmatched: TokenStyle,
     /// Identifiers / whitespace / unclassified tokens.
     pub plain: TokenStyle,
 }
@@ -115,6 +120,11 @@ impl HighlightStyle {
             TokenKind::Heading => self.heading,
             TokenKind::Link => self.link,
             TokenKind::Emphasis => self.emphasis,
+            TokenKind::Bracket(d) => match self.brackets.len() {
+                0 => self.punctuation,
+                n => self.brackets[d as usize % n],
+            },
+            TokenKind::BracketUnmatched => self.bracket_unmatched,
             TokenKind::Plain => self.plain,
         }
     }
@@ -145,6 +155,13 @@ impl HighlightStyle {
             heading: s(c(0x76, 0xB2, 0xF0)).bold(),
             link: s(c(0x6C, 0xD1, 0xC0)).underline(),
             emphasis: s(c(0xD7, 0xDC, 0xE6)).italic(),
+            // VS Code Dark Modern bracket colours: gold, orchid, sky.
+            brackets: vec![
+                s(c(0xFF, 0xD7, 0x00)),
+                s(c(0xDA, 0x70, 0xD6)),
+                s(c(0x17, 0x9F, 0xFF)),
+            ],
+            bracket_unmatched: s(c(0xFF, 0x12, 0x12)),
             plain: s(c(0xD7, 0xDC, 0xE6)),
         }
     }
@@ -171,6 +188,13 @@ impl HighlightStyle {
             heading: s(c(0x24, 0x5F, 0xC2)).bold(),
             link: s(c(0x0F, 0x86, 0x8E)).underline(),
             emphasis: s(c(0x24, 0x29, 0x33)).italic(),
+            // VS Code Light Modern bracket colours.
+            brackets: vec![
+                s(c(0x04, 0x31, 0xFA)),
+                s(c(0x31, 0x93, 0x31)),
+                s(c(0x7B, 0x38, 0x14)),
+            ],
+            bracket_unmatched: s(c(0xCD, 0x31, 0x31)),
             plain: s(c(0x24, 0x29, 0x33)),
         }
     }

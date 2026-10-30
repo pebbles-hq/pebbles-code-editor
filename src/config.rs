@@ -62,6 +62,8 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         keymap: crate::keymap::Keymap::default(),
         document_id: None,
         controller: None,
+        bracket_pair_colorization: true,
+        detect_indentation: true,
     }
 }
 
@@ -111,6 +113,8 @@ pub struct CodeEditor {
     keymap: crate::keymap::Keymap,
     document_id: Option<u64>,
     controller: Option<crate::controller::EditorController>,
+    detect_indentation: bool,
+    bracket_pair_colorization: bool,
 }
 
 /// Fired after each change with the minimal [`Edit`] delta; `remote` is true when the change
@@ -376,6 +380,16 @@ impl CodeEditor {
         self.controller = Some(controller);
         self
     }
+    /// Detect the file's indentation (spaces vs tabs and the unit) on open, overriding `tab_size`/`insert_spaces` when the file is indented (VS Code `editor.detectIndentation`, default on).
+    pub fn detect_indentation(mut self, v: bool) -> Self {
+        self.detect_indentation = v;
+        self
+    }
+    /// Colour brackets by nesting depth from the theme's `syntax.brackets` palette (VS Code `editor.bracketPairColorization.enabled`, default on).
+    pub fn bracket_pair_colorization(mut self, v: bool) -> Self {
+        self.bracket_pair_colorization = v;
+        self
+    }
 }
 
 impl IntoWidget for CodeEditor {
@@ -440,6 +454,8 @@ pub(crate) struct Props {
     pub(crate) diff_base: Option<Signal<String>>,
     pub(crate) keymap: crate::keymap::Keymap,
     pub(crate) controller: Option<crate::controller::EditorController>,
+    pub(crate) detect_indentation: bool,
+    pub(crate) bracket_pair_colorization: bool,
 }
 
 impl From<CodeEditor> for Props {
@@ -524,6 +540,8 @@ impl From<CodeEditor> for Props {
             diff_base: e.diff_base,
             keymap: e.keymap,
             controller: e.controller,
+            bracket_pair_colorization: e.bracket_pair_colorization,
+            detect_indentation: e.detect_indentation,
         }
     }
 }
