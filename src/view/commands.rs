@@ -505,6 +505,7 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
                 .set((!items.is_empty()).then_some(crate::view::InlineGhost { at, items, idx: 0 }));
             true
         }
+        C::ExpandSelection if env.lsp.expand_selection(env.smart_stack) => true,
         C::ExpandSelection => {
             let ranges: Vec<Selection> = sels
                 .ranges()

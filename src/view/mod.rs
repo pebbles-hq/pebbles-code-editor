@@ -24,6 +24,7 @@ mod overlays;
 mod peek;
 mod ruler;
 mod search;
+mod smart_select;
 mod sticky;
 mod symbols;
 

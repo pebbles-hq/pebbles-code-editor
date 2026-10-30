@@ -148,6 +148,7 @@ pub(crate) struct Store {
     pub(crate) inlay_key: Cell<Option<(u64, usize, usize)>>,
     pub(crate) lens_gate: RequestGate,
     pub(crate) lens_ver: Cell<Option<u64>>,
+    pub(crate) select_gate: RequestGate,
     last_doc: RefCell<Option<Rope>>,
 }
 
@@ -2029,6 +2030,7 @@ impl LanguageService for Chained {
     fn prepare_rename(&self, d: &lsp::DocRef, p: lsp::Position, r: lsp::Reply<Option<lsp::Range>>) -> bool { self.main.prepare_rename(d, p, r) }
     fn rename(&self, d: &lsp::DocRef, p: lsp::Position, n: &str, r: lsp::Reply<Option<lsp::WorkspaceEdit>>) -> bool { self.main.rename(d, p, n, r) }
     fn inlay_hints(&self, d: &lsp::DocRef, g: lsp::Range, r: lsp::Reply<Vec<lsp::InlayHint>>) -> bool { self.main.inlay_hints(d, g, r) }
+    fn selection_range(&self, d: &lsp::DocRef, p: &[lsp::Position], r: lsp::Reply<Vec<lsp::SelectionRange>>) -> bool { self.main.selection_range(d, p, r) }
     fn resolve_inlay_hint(&self, h: lsp::InlayHint, r: lsp::Reply<lsp::InlayHint>) -> bool { self.main.resolve_inlay_hint(h, r) }
     fn prepare_call_hierarchy(&self, d: &lsp::DocRef, p: lsp::Position, r: lsp::Reply<Vec<lsp::CallHierarchyItem>>) -> bool { self.main.prepare_call_hierarchy(d, p, r) }
     fn incoming_calls(&self, i: &lsp::CallHierarchyItem, r: lsp::Reply<Vec<lsp::CallHierarchyIncomingCall>>) -> bool { self.main.incoming_calls(i, r) }

@@ -56,9 +56,30 @@ struct Fake {
     inlays: RefCell<Vec<InlayHint>>,
     inlay_ranges: RefCell<Vec<Range>>,
     lenses: RefCell<Vec<CodeLens>>,
+    /// Selection-range chains (innermost first, the same for every position); `None` declines.
+    sel_ranges: RefCell<Option<Vec<Range>>>,
+    sel_positions: RefCell<Vec<Vec<Position>>>,
 }
 
 impl LanguageService for Fake {
+    fn selection_range(
+        &self,
+        _doc: &DocRef,
+        positions: &[Position],
+        reply: Reply<Vec<SelectionRange>>,
+    ) -> bool {
+        let Some(chain) = self.sel_ranges.borrow().clone() else {
+            return false;
+        };
+        self.sel_positions.borrow_mut().push(positions.to_vec());
+        reply(
+            positions
+                .iter()
+                .filter_map(|_| SelectionRange::chain(&chain))
+                .collect(),
+        );
+        true
+    }
     fn inlay_hints(&self, _doc: &DocRef, range: Range, reply: Reply<Vec<InlayHint>>) -> bool {
         self.inlay_ranges.borrow_mut().push(range);
         reply(self.inlays.borrow().clone());
@@ -1414,4 +1435,51 @@ fn inlay_hints_and_code_lenses_render_click_resolve_refresh_and_toggle() {
     assert!(!h.find_text("Code lens Run"));
     run_palette(&mut h, "Toggle Inlay Hints");
     assert!(h.find_text("Inlay hint i32"));
+}
+
+#[test]
+fn expand_selection_uses_selection_ranges_with_syntax_fallback() {
+    let fake = Rc::new(Fake::default());
+    *fake.sel_ranges.borrow_mut() = Some(vec![rng(0, 4, 0, 7), rng(0, 4, 0, 12), rng(0, 0, 0, 13)]);
+    let (mut h, code) = mount("foo(bar, baz)\n", fake.clone(), |e| e);
+    for _ in 0..5 {
+        h.key(KeyInput::Move {
+            motion: Motion::Right,
+            extend: false,
+        });
+    }
+    h.press("Shift+Alt+Right");
+    h.press("Shift+Alt+Right");
+    assert_eq!(fake.sel_positions.borrow()[0], vec![Position::new(0, 5)]);
+    h.key(KeyInput::Insert("Q".into()));
+    assert_eq!(code.get(), "foo(Q)\n", "grew to the argument list");
+    h.key(KeyInput::Undo);
+    caret_at(&mut h, 5);
+    // Expand twice then shrink once: back to the word.
+    h.press("Shift+Alt+Right");
+    h.press("Shift+Alt+Right");
+    h.press("Shift+Alt+Left");
+    h.key(KeyInput::Insert("Q".into()));
+    assert_eq!(code.get(), "foo(Q, baz)\n");
+    h.key(KeyInput::Undo);
+    // Declined: the syntax / bracket ladder still expands.
+    *fake.sel_ranges.borrow_mut() = None;
+    caret_at(&mut h, 5);
+    h.press("Shift+Alt+Right");
+    h.key(KeyInput::Insert("Q".into()));
+    assert_eq!(code.get(), "foo(Q, baz)\n");
+}
+
+/// Put the caret at column `col` of line 0.
+fn caret_at(h: &mut Harness, col: usize) {
+    h.key(KeyInput::Move {
+        motion: Motion::DocStart,
+        extend: false,
+    });
+    for _ in 0..col {
+        h.key(KeyInput::Move {
+            motion: Motion::Right,
+            extend: false,
+        });
+    }
 }

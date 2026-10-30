@@ -819,6 +819,37 @@ pub struct CallHierarchyOutgoingCall {
     pub from_ranges: Vec<Range>,
 }
 
+/// A selection range and its enclosing ranges (LSP `SelectionRange`), innermost first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SelectionRange {
+    /// The range.
+    pub range: Range,
+    /// The enclosing range.
+    pub parent: Option<Box<SelectionRange>>,
+}
+
+impl SelectionRange {
+    /// Build the chain from ranges listed innermost first.
+    pub fn chain(ranges: &[Range]) -> Option<SelectionRange> {
+        ranges.iter().rev().fold(None, |parent, r| {
+            Some(SelectionRange {
+                range: *r,
+                parent: parent.map(Box::new),
+            })
+        })
+    }
+    /// The ranges, innermost first.
+    pub fn ranges(&self) -> Vec<Range> {
+        let mut out = vec![self.range];
+        let mut p = &self.parent;
+        while let Some(s) = p {
+            out.push(s.range);
+            p = &s.parent;
+        }
+        out
+    }
+}
+
 /// Formatting options (LSP `FormattingOptions`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FormattingOptions {
@@ -1229,6 +1260,15 @@ pub trait LanguageService {
         pos: Position,
         new_name: &str,
         reply: Reply<Option<WorkspaceEdit>>,
+    ) -> bool {
+        false
+    }
+    /// `textDocument/selectionRange`: one chain per position (Expand / Shrink Selection).
+    fn selection_range(
+        &self,
+        doc: &DocRef,
+        positions: &[Position],
+        reply: Reply<Vec<SelectionRange>>,
     ) -> bool {
         false
     }
