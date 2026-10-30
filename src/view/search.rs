@@ -227,13 +227,29 @@ pub(crate) fn bar(
     // VS Code's find-widget keybindings, live while either field is focused. `in_replace`:
     // Enter replaces one there instead of moving to the next match.
     let keys = {
-        let (next, prev, close, select_all) = (next.clone(), prev.clone(), close.clone(), select_all.clone());
-        let (toggle_scope, replace_one, replace_all) =
-            (toggle_scope.clone(), replace_one.clone(), replace_all.clone());
+        let (next, prev, close, select_all) = (
+            next.clone(),
+            prev.clone(),
+            close.clone(),
+            select_all.clone(),
+        );
+        let (toggle_scope, replace_one, replace_all) = (
+            toggle_scope.clone(),
+            replace_one.clone(),
+            replace_all.clone(),
+        );
         move |in_replace: bool| {
-            let (next, prev, close, select_all) = (next.clone(), prev.clone(), close.clone(), select_all.clone());
-            let (toggle_scope, replace_one, replace_all) =
-                (toggle_scope.clone(), replace_one.clone(), replace_all.clone());
+            let (next, prev, close, select_all) = (
+                next.clone(),
+                prev.clone(),
+                close.clone(),
+                select_all.clone(),
+            );
+            let (toggle_scope, replace_one, replace_all) = (
+                toggle_scope.clone(),
+                replace_one.clone(),
+                replace_all.clone(),
+            );
             move |ev: &KeyEvent| -> KeyEventResult {
                 if !ev.is_press() {
                     return KeyEventResult::Ignored;
@@ -331,18 +347,14 @@ pub(crate) fn bar(
             )
             .color(theme.gutter_fg),
         gap_w(6.0),
-        icon_button(IconKind::ChevronUp)
-            .size(16.0)
-            .on_pressed({
-                let prev = prev.clone();
-                move || prev()
-            }),
-        icon_button(IconKind::ChevronDown)
-            .size(16.0)
-            .on_pressed({
-                let next = next.clone();
-                move || next()
-            }),
+        icon_button(IconKind::ChevronUp).size(16.0).on_pressed({
+            let prev = prev.clone();
+            move || prev()
+        }),
+        icon_button(IconKind::ChevronDown).size(16.0).on_pressed({
+            let next = next.clone();
+            move || next()
+        }),
         gap_w(6.0),
         toggle_chip(st.case.peek(), "Aa", st.case),
         gap_w(4.0),
@@ -369,7 +381,9 @@ pub(crate) fn bar(
         {
             // Select All Matches (Alt+Enter in VS Code): one cursor per match.
             let select_all = select_all.clone();
-            icon_button(IconKind::Check).size(16.0).on_pressed(move || select_all())
+            icon_button(IconKind::Check)
+                .size(16.0)
+                .on_pressed(move || select_all())
         },
         gap_w(6.0),
         icon_button(IconKind::Close).size(16.0).on_pressed({
