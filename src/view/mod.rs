@@ -10,6 +10,7 @@
 mod chrome;
 mod commands;
 mod completion;
+mod markdown;
 pub(crate) use completion::prefix_start as completion_prefix_start;
 mod decor;
 mod diffview;
@@ -295,6 +296,11 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     }
     let scroll_left = create_signal(0.0_f64); // live horizontal offset (long-line clipping)
     let completion = create_signal::<Option<completion::Session>>(None); // autocomplete popup
+    // Stale-reply gates for completion / resolve requests (persist across re-renders).
+    let completion_gates = create_signal((
+        crate::language::RequestGate::new(),
+        crate::language::RequestGate::new(),
+    ));
     let hover_pos = create_signal::<Option<Offset>>(None); // pointer pos for hover tooltip
     let sig_help = create_signal::<Option<crate::providers::SignatureHelp>>(None); // signature help
     let preedit = create_signal(String::new()); // IME composition (preedit) text, shown at caret
@@ -543,8 +549,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     }
     {
         let cfg = cfg.clone();
-        // The completion source: the host provider, else word-based suggestions.
-        let provider = p
+        // The local completion source: the host's old-style provider, else word-based
+        // suggestions (used when the language service does not do completion).
+        let local = p
             .completion
             .clone()
             .or_else(|| p.word_based_suggestions.then(completion::word_provider));
@@ -560,7 +567,20 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         } else {
             "\t".to_string()
         };
-        let provider = crate::snippets::with_snippets(provider, Rc::new(snips), unit);
+        let snips = Rc::new(snips);
+        let host = p.language_service.clone();
+        let completer = Rc::new(completion::Completer {
+            triggers: host
+                .as_ref()
+                .map(|h| h.completion_trigger_characters())
+                .unwrap_or_default(),
+            host,
+            local: crate::snippets::with_snippets(local, snips.clone(), unit.clone()),
+            snippets: crate::snippets::with_snippets(None, snips, unit),
+            gate: completion_gates.peek().0,
+            resolve_gate: completion_gates.peek().1,
+            uri: p.document_uri.clone(),
+        });
         let inline_provider = p.inline_suggestions.clone();
         let definition = p.definition.clone();
         let format = p.format.clone();
@@ -699,8 +719,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     _ => inline.set(None),
                 }
             }
-            if completion.peek().is_some() {
-                match k {
+            if let Some(open) = completion.peek() {
+                match &k {
                     KeyInput::Move {
                         motion: Motion::Down,
                         ..
@@ -710,6 +730,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                             sess.move_by(1);
                         }
                         completion.set(s);
+                        completer.resolve_selected(completion);
                         return true;
                     }
                     KeyInput::Move {
@@ -720,11 +741,21 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                             sess.move_by(-1);
                         }
                         completion.set(s);
+                        completer.resolve_selected(completion);
                         return true;
                     }
                     KeyInput::Enter | KeyInput::Indent => {
-                        completion::accept(state, history, code, goal, completion);
+                        completion::accept(state, history, code, goal, completion, &completer);
                         return true;
+                    }
+                    // A commit character accepts the item, then is typed as usual.
+                    KeyInput::Insert(t)
+                        if !read_only
+                            && open
+                                .current()
+                                .is_some_and(|it| it.commit_characters.iter().any(|c| c == t)) =>
+                    {
+                        completion::accept(state, history, code, goal, completion, &completer);
                     }
                     KeyInput::Escape => {
                         completion.set(None);
@@ -779,8 +810,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     return true;
                 }
                 KeyInput::TriggerCompletion => {
-                    let Some(pv) = &provider else { return false }; // no provider: bubble
-                    completion::trigger(state, completion, pv, true);
+                    if !completer.has_source() {
+                        return false; // no source: bubble
+                    }
+                    completer.request(state, completion, true, Default::default());
                     return true;
                 }
                 // F12: jump the caret to the provider's target (autoscroll follows).
@@ -843,8 +876,13 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 {
                     1
                 }
-                KeyInput::Backspace if completion.peek().is_some() => 1,
+                KeyInput::Insert(s) if completer.is_trigger(s) => 3,
+                KeyInput::Backspace if completion.peek().is_some() => 2,
                 _ => 0,
+            };
+            let typed_char = match &k {
+                KeyInput::Insert(s) => Some(s.clone()),
+                _ => None,
             };
             // Signature help follows the same "before consume" rule: `(`/`,` opens it, `)`/Esc
             // closes it. Evaluated before `k` is moved into the command engine.
@@ -1025,11 +1063,45 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     }
                 }
             }
-            if let Some(pv) = &provider {
-                if follow == 1 {
-                    completion::trigger(state, completion, pv, false);
-                } else {
-                    completion.set(None);
+            if editing {
+                completer.gate.bump_version();
+            }
+            if completer.has_source() {
+                use crate::language::{CompletionContext as Cx, CompletionTriggerKind as Tk};
+                let open = completion.peek();
+                let caret = state.peek().primary().head;
+                match (follow, open) {
+                    // Deleting back to the word start closes the popup.
+                    (2, Some(s)) if caret <= s.anchor => {
+                        completer.gate.cancel();
+                        completion.set(None);
+                    }
+                    // An incomplete list re-queries the source as the word grows.
+                    (1 | 2, Some(s)) if s.incomplete => completer.request(
+                        state,
+                        completion,
+                        true,
+                        Cx {
+                            trigger_kind: Tk::TriggerForIncompleteCompletions,
+                            trigger_character: None,
+                        },
+                    ),
+                    // Otherwise the open list is filtered locally.
+                    (1 | 2, Some(_)) => completion::refilter(state, completion),
+                    (1, None) => completer.request(state, completion, false, Default::default()),
+                    (3, _) => completer.request(
+                        state,
+                        completion,
+                        true,
+                        Cx {
+                            trigger_kind: Tk::TriggerCharacter,
+                            trigger_character: typed_char,
+                        },
+                    ),
+                    _ => {
+                        completer.gate.cancel();
+                        completion.set(None);
+                    }
                 }
             }
             // Re-query inline suggestions after a typing edit.
@@ -1326,7 +1398,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         (Some(g), None) if g.at == primary.head => g.items.get(g.idx).cloned(),
         (_, Some(sess)) if p.suggest_preview => sess.items.get(sess.selected).and_then(|it| {
             let typed = &src[sess.anchor.min(primary.head)..primary.head];
-            it.insert
+            it.new_text()
                 .strip_prefix(typed)
                 .filter(|rest| !rest.is_empty() && !rest.contains('$'))
                 .map(str::to_string)

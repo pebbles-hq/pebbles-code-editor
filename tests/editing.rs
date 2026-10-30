@@ -245,7 +245,8 @@ fn completion_popup_types_navigates_and_accepts() {
     // Type "pr" — the popup opens (both items match).
     key(&mut ui, &mut env, KeyInput::Insert("p".to_string()));
     key(&mut ui, &mut env, KeyInput::Insert("r".to_string()));
-    // Down selects the 2nd item ("print"); Enter accepts it, replacing the "pr" prefix.
+    // Equal fuzzy scores rank by label, so "print" is first; Down selects the 2nd item
+    // ("println"); Enter accepts it, replacing the "pr" prefix.
     key(
         &mut ui,
         &mut env,
@@ -255,7 +256,7 @@ fn completion_popup_types_navigates_and_accepts() {
         },
     );
     key(&mut ui, &mut env, KeyInput::Enter);
-    assert_eq!(code.get(), "print");
+    assert_eq!(code.get(), "println!()");
 }
 
 #[test]

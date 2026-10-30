@@ -1,0 +1,268 @@
+//! Language-service driven features through the headless harness: LSP completion (trigger
+//! characters, async + stale replies, fuzzy ranking, docs pane, commit characters,
+//! auto-import edits in one undo step, commands, incomplete re-query) and snippet sessions.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use pebbles::core::create_root_signal;
+use pebbles::prelude::*;
+use pebbles_code_editor::code_editor;
+use pebbles_code_editor::language::*;
+use pebbles_testing::Harness;
+
+type Pending = Rc<RefCell<Vec<(CompletionContext, Reply<Option<CompletionList>>)>>>;
+
+/// A language service whose completion replies are held until the test delivers them.
+#[derive(Default)]
+struct Lsp {
+    pending: Pending,
+    items: Vec<CompletionItem>,
+    incomplete: bool,
+    commands: Rc<RefCell<Vec<String>>>,
+}
+
+impl LanguageService for Lsp {
+    fn completion_trigger_characters(&self) -> Vec<String> {
+        vec![".".into()]
+    }
+    fn completion(
+        &self,
+        _doc: &DocRef,
+        _pos: Position,
+        cx: CompletionContext,
+        reply: Reply<Option<CompletionList>>,
+    ) -> bool {
+        self.pending.borrow_mut().push((cx, reply));
+        true
+    }
+    fn execute_command(&self, command: &LspCommand) -> bool {
+        self.commands.borrow_mut().push(command.command.clone());
+        true
+    }
+}
+
+impl Lsp {
+    fn deliver(&self, h: &mut Harness, which: usize) {
+        let (_, r) = self.pending.borrow_mut().remove(which);
+        r(Some(CompletionList {
+            is_incomplete: self.incomplete,
+            items: self.items.clone(),
+        }));
+        h.frames(2);
+    }
+}
+
+fn typ(h: &mut Harness, s: &str) {
+    for c in s.chars() {
+        h.key(KeyInput::Insert(c.to_string()));
+    }
+    h.frames(1);
+}
+
+fn mount(code: Signal<String>, lsp: Rc<Lsp>) -> Harness {
+    let mut h = Harness::new().window(900.0, 500.0);
+    h.mount_widget(
+        code_editor(code)
+            .language_service(lsp)
+            .document_uri("file:///w/main.rs")
+            .word_based_suggestions(false)
+            .builtin_snippets(false)
+            .height(400.0)
+            .autofocus(),
+    );
+    h.frames(3);
+    h
+}
+
+#[test]
+fn trigger_character_async_reply_docs_pane_and_auto_import() {
+    let code = create_root_signal(String::from("\nlet v = x"));
+    let mut len = CompletionItem::new("len", CompletionItemKind::Method)
+        .detail("fn len(&self) -> usize")
+        .documentation("Returns the **length** of `self`.\n\n```rust\nlet n = v.len();\n```");
+    len.additional_text_edits = vec![TextEdit::new(
+        Range::new(Position::new(0, 0), Position::new(0, 0)),
+        "use std::vec::Vec;",
+    )];
+    len.command = Some(LspCommand {
+        title: "Trigger parameter hints".into(),
+        command: "editor.action.triggerParameterHints".into(),
+        arguments: vec![],
+    });
+    let lsp = Rc::new(Lsp {
+        items: vec![
+            CompletionItem::new("last", CompletionItemKind::Method),
+            len,
+            CompletionItem::new("capacity", CompletionItemKind::Method),
+        ],
+        ..Default::default()
+    });
+    let mut h = mount(code, lsp.clone());
+    h.key(KeyInput::Move {
+        motion: Motion::DocEnd,
+        extend: false,
+    });
+    typ(&mut h, ".");
+    // `.` is a trigger character: one request, marked as such, still pending.
+    assert_eq!(lsp.pending.borrow().len(), 1);
+    assert_eq!(
+        lsp.pending.borrow()[0].0.trigger_kind,
+        CompletionTriggerKind::TriggerCharacter
+    );
+    assert_eq!(
+        lsp.pending.borrow()[0].0.trigger_character.as_deref(),
+        Some(".")
+    );
+    assert!(!h.find_text("capacity"), "no popup before the reply");
+    lsp.deliver(&mut h, 0);
+    assert!(h.find_text("capacity"), "popup opens on the async reply");
+    // Typing filters the open list locally (no re-query): "le" fuzzy-matches only "len".
+    typ(&mut h, "le");
+    assert!(
+        lsp.pending.borrow().is_empty(),
+        "complete list is not re-queried"
+    );
+    assert!(!h.find_text("capacity"));
+    // The details line and the Markdown documentation render in the side pane.
+    assert!(h.find_text("fn len(&self) -> usize"), "detail line");
+    assert!(
+        h.find_text("Returns the length of self."),
+        "markdown paragraph"
+    );
+    assert!(h.find_text("let n = v.len();"), "highlighted code block");
+    h.key(KeyInput::Enter);
+    h.frames(1);
+    assert_eq!(code.get(), "use std::vec::Vec;\nlet v = x.len");
+    assert_eq!(
+        *lsp.commands.borrow(),
+        vec!["editor.action.triggerParameterHints".to_string()]
+    );
+    // Main edit + auto-import are one undo step.
+    h.key(KeyInput::Undo);
+    h.frames(1);
+    assert_eq!(code.get(), "\nlet v = x.le");
+}
+
+#[test]
+fn stale_completion_replies_are_dropped() {
+    let code = create_root_signal(String::new());
+    let lsp = Rc::new(Lsp {
+        items: vec![CompletionItem::new(
+            "alpha_beta",
+            CompletionItemKind::Variable,
+        )],
+        ..Default::default()
+    });
+    let mut h = mount(code, lsp.clone());
+    typ(&mut h, "a"); // request 1
+    typ(&mut h, "b"); // request 2 (the document changed: request 1 is stale)
+    assert_eq!(lsp.pending.borrow().len(), 2);
+    lsp.deliver(&mut h, 0);
+    assert!(!h.find_text("alpha_beta"), "stale reply ignored");
+    lsp.deliver(&mut h, 0);
+    assert!(h.find_text("alpha_beta"), "current reply shown");
+    h.key(KeyInput::Enter);
+    h.frames(1);
+    assert_eq!(code.get(), "alpha_beta");
+}
+
+#[test]
+fn commit_characters_accept_then_type() {
+    let code = create_root_signal(String::new());
+    let mut item = CompletionItem::new("println", CompletionItemKind::Function);
+    item.commit_characters = vec!["(".into()];
+    let lsp = Rc::new(Lsp {
+        items: vec![item],
+        ..Default::default()
+    });
+    let mut h = mount(code, lsp.clone());
+    typ(&mut h, "pl");
+    let n = lsp.pending.borrow().len();
+    lsp.deliver(&mut h, n - 1);
+    typ(&mut h, "(");
+    assert!(code.get().starts_with("println("), "{:?}", code.get());
+}
+
+#[test]
+fn incomplete_lists_requery_and_ctrl_space_opens_with_nothing_typed() {
+    let code = create_root_signal(String::new());
+    let lsp = Rc::new(Lsp {
+        items: vec![CompletionItem::new("foo_bar", CompletionItemKind::Function)],
+        incomplete: true,
+        ..Default::default()
+    });
+    let mut h = mount(code, lsp.clone());
+    h.key(KeyInput::TriggerCompletion);
+    assert_eq!(lsp.pending.borrow().len(), 1);
+    assert_eq!(
+        lsp.pending.borrow()[0].0.trigger_kind,
+        CompletionTriggerKind::Invoked
+    );
+    lsp.deliver(&mut h, 0);
+    assert!(
+        h.find_text("foo_bar"),
+        "explicit request opens with an empty prefix"
+    );
+    typ(&mut h, "f");
+    assert_eq!(lsp.pending.borrow().len(), 1, "incomplete list re-queried");
+    assert_eq!(
+        lsp.pending.borrow()[0].0.trigger_kind,
+        CompletionTriggerKind::TriggerForIncompleteCompletions
+    );
+}
+
+#[test]
+fn fuzzy_ranking_and_sort_text_order_the_popup() {
+    let code = create_root_signal(String::new());
+    let mut z = CompletionItem::new("fbz", CompletionItemKind::Variable);
+    z.sort_text = Some("0".into());
+    let lsp = Rc::new(Lsp {
+        items: vec![
+            CompletionItem::new("fabric", CompletionItemKind::Variable),
+            CompletionItem::new("fooBar", CompletionItemKind::Variable),
+            CompletionItem::new("xfb", CompletionItemKind::Variable), // no strong first match
+            z,
+        ],
+        ..Default::default()
+    });
+    let mut h = mount(code, lsp.clone());
+    typ(&mut h, "fb");
+    let n = lsp.pending.borrow().len();
+    lsp.deliver(&mut h, n - 1);
+    assert!(!h.find_text("xfb"), "first char must match a word start");
+    // "fbz" (contiguous prefix) ranks first, then camelCase "fooBar" above "fabric".
+    h.key(KeyInput::Enter);
+    h.frames(1);
+    assert_eq!(code.get(), "fbz");
+    for _ in 0..3 {
+        h.key(KeyInput::Backspace);
+    }
+    typ(&mut h, "fb");
+    let n = lsp.pending.borrow().len();
+    lsp.deliver(&mut h, n - 1);
+    h.key(KeyInput::Move {
+        motion: Motion::Down,
+        extend: false,
+    });
+    h.key(KeyInput::Enter);
+    h.frames(1);
+    assert_eq!(code.get(), "fooBar");
+}
+
+#[test]
+fn old_providers_still_complete_through_the_adapter() {
+    use pebbles_code_editor::{
+        CompletionContext as Cx, CompletionItem as Old, CompletionKind, CompletionProvider,
+    };
+    let code = create_root_signal(String::new());
+    let p: CompletionProvider =
+        Rc::new(|_: &Cx| vec![Old::new("println", CompletionKind::Function)]);
+    let mut h = Harness::new().window(900.0, 500.0);
+    h.mount_widget(code_editor(code).completion(p).height(300.0).autofocus());
+    h.frames(3);
+    typ(&mut h, "pn"); // fuzzy: p…n
+    h.key(KeyInput::Enter);
+    h.frames(1);
+    assert_eq!(code.get(), "println");
+}

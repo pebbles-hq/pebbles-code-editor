@@ -9,17 +9,26 @@ use std::rc::Rc;
 use pebbles::prelude::*;
 
 use crate::commands::dispatch;
-use crate::edit::{ChangeSet, Coalesce, EditorState, History, Selection, Selections, Transaction};
+use crate::edit::{
+    Change, ChangeSet, Coalesce, EditorState, History, Selection, Selections, Transaction,
+};
 use crate::geometry::{col_of, is_word, prev_char};
+use crate::language::{self as lsp, LanguageService, ProviderService, RequestGate};
 use crate::providers::{CompletionContext, CompletionItem, CompletionKind, CompletionProvider};
 
-/// A live completion session: the filtered items, which one is selected, and the byte where
-/// the typed prefix starts (accepting replaces `anchor..caret`).
+/// A live completion session: every item the source returned (`all`), the filtered + ranked
+/// view (`items`, with the matched label chars in `hits`), the selection, and the byte where
+/// the typed word starts (accepting replaces `anchor..caret` unless the item has its own
+/// edit range).
 #[derive(Clone)]
 pub(crate) struct Session {
-    pub(crate) items: Vec<CompletionItem>,
+    pub(crate) all: Rc<Vec<lsp::CompletionItem>>,
+    pub(crate) items: Vec<lsp::CompletionItem>,
+    pub(crate) hits: Vec<Vec<usize>>,
     pub(crate) selected: usize,
     pub(crate) anchor: usize,
+    /// The source said the list is incomplete: further typing re-queries.
+    pub(crate) incomplete: bool,
 }
 
 impl Session {
@@ -30,6 +39,171 @@ impl Session {
             self.selected = (((self.selected as isize + delta) % n + n) % n) as usize;
         }
     }
+    /// The highlighted item.
+    pub(crate) fn current(&self) -> Option<&lsp::CompletionItem> {
+        self.items.get(self.selected)
+    }
+}
+
+/// VS Code-style fuzzy match of `pattern` against `word`: every pattern char must appear in
+/// order (case-insensitively); the first one must land on a strong position (the word start,
+/// after a separator, or a camelCase hump). Contiguous runs, word starts, camelCase humps and
+/// exact case score bonuses; gaps cost a little. Returns the score and the matched char
+/// indices of `word`, or `None` when it does not match.
+pub(crate) fn fuzzy_score(pattern: &str, word: &str) -> Option<(i32, Vec<usize>)> {
+    const NEG: i32 = i32::MIN / 4;
+    let p: Vec<char> = pattern.chars().collect();
+    let w: Vec<char> = word.chars().take(255).collect();
+    if p.is_empty() {
+        return Some((0, Vec::new()));
+    }
+    let (n, m) = (p.len(), w.len());
+    if n > m {
+        return None;
+    }
+    let strong = |j: usize| {
+        j == 0
+            || !w[j - 1].is_alphanumeric()
+            || (w[j].is_uppercase() && w[j - 1].is_lowercase())
+            || (w[j].is_ascii_digit() && !w[j - 1].is_ascii_digit())
+    };
+    let same = |a: char, b: char| a == b || a.to_lowercase().eq(b.to_lowercase());
+    let mut dp = vec![vec![NEG; m]; n];
+    let mut from = vec![vec![usize::MAX; m]; n];
+    for i in 0..n {
+        // Best `dp[i-1][k]` over k < j-1 (a gap), maintained as j advances.
+        let mut gap_best = (NEG, usize::MAX);
+        for j in i..m {
+            if i > 0 && j >= 2 && dp[i - 1][j - 2] > gap_best.0 {
+                gap_best = (dp[i - 1][j - 2], j - 2);
+            }
+            if !same(p[i], w[j]) {
+                continue;
+            }
+            let mut bonus = 1;
+            if p[i] == w[j] {
+                bonus += 1;
+            }
+            if j == 0 {
+                bonus += 8;
+            } else if strong(j) {
+                bonus += 6;
+            }
+            if i == 0 {
+                if strong(j) {
+                    dp[0][j] = bonus;
+                }
+                continue;
+            }
+            let contiguous = if j >= 1 && dp[i - 1][j - 1] > NEG {
+                dp[i - 1][j - 1] + 5
+            } else {
+                NEG
+            };
+            let gapped = if gap_best.0 > NEG {
+                gap_best.0 - 1
+            } else {
+                NEG
+            };
+            if contiguous >= gapped && contiguous > NEG {
+                dp[i][j] = contiguous + bonus;
+                from[i][j] = j - 1;
+            } else if gapped > NEG {
+                dp[i][j] = gapped + bonus;
+                from[i][j] = gap_best.1;
+            }
+        }
+    }
+    let (mut j, score) = dp[n - 1]
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| **s > NEG)
+        .max_by_key(|(j, s)| (**s, std::cmp::Reverse(*j)))
+        .map(|(j, s)| (j, *s))?;
+    let mut hits = vec![0; n];
+    for i in (0..n).rev() {
+        hits[i] = j;
+        j = from[i][j];
+    }
+    Some((score, hits))
+}
+
+/// Filter + rank `all` against the text typed since each item's word start.
+fn filter(
+    all: &[lsp::CompletionItem],
+    src: &str,
+    anchor: usize,
+    caret: usize,
+) -> (Vec<lsp::CompletionItem>, Vec<Vec<usize>>) {
+    let mut scored: Vec<(i32, &lsp::CompletionItem, Vec<usize>)> = all
+        .iter()
+        .filter_map(|it| {
+            let start = item_start(it, src).unwrap_or(anchor).min(caret);
+            let typed = src.get(start..caret).unwrap_or("");
+            let (score, hits) = fuzzy_score(typed, it.filter_key())?;
+            // Highlight on the label (only when the filter key *is* the label).
+            let hits = if it.filter_text.is_none() {
+                hits
+            } else {
+                Vec::new()
+            };
+            Some((score, it, hits))
+        })
+        .collect();
+    scored.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| a.1.sort_key().cmp(b.1.sort_key()))
+            .then_with(|| a.1.label.cmp(&b.1.label))
+    });
+    scored.into_iter().map(|(_, it, h)| (it.clone(), h)).unzip()
+}
+
+/// The start byte of an item's own edit range (when it has one on the caret line).
+fn item_start(it: &lsp::CompletionItem, src: &str) -> Option<usize> {
+    let r = match it.text_edit.as_ref()? {
+        lsp::CompletionTextEdit::Edit(e) => e.range,
+        lsp::CompletionTextEdit::InsertReplace { replace, .. } => *replace,
+    };
+    Some(lsp::range_to_bytes(src, r).0)
+}
+
+/// Open (or close) the popup over `all` for the current caret.
+fn open(
+    state: Signal<EditorState>,
+    session: Signal<Option<Session>>,
+    anchor: usize,
+    all: Vec<lsp::CompletionItem>,
+    incomplete: bool,
+) {
+    let st = state.peek();
+    let src = st.text();
+    let caret = st.primary().head;
+    if caret < anchor || all.is_empty() {
+        session.set(None);
+        return;
+    }
+    let all = Rc::new(all);
+    let (items, hits) = filter(&all, &src, anchor, caret);
+    let selected = if src[anchor..caret].is_empty() {
+        items.iter().position(|i| i.preselect).unwrap_or(0)
+    } else {
+        0
+    };
+    session.set((!items.is_empty()).then_some(Session {
+        all,
+        items,
+        hits,
+        selected,
+        anchor,
+        incomplete,
+    }));
+}
+
+/// Re-filter the open session after typing (no re-query). Closes it when the caret left the
+/// word or nothing matches.
+pub(crate) fn refilter(state: Signal<EditorState>, session: Signal<Option<Session>>) {
+    let Some(s) = session.peek() else { return };
+    open(state, session, s.anchor, (*s.all).clone(), s.incomplete);
 }
 
 /// Word-based completion (VS Code `editor.wordBasedSuggestions`, used when no provider is
@@ -93,62 +267,193 @@ pub(crate) fn prefix_start(src: &str, caret: usize) -> usize {
     b
 }
 
-/// Ask the provider for candidates at the caret, filter by the typed prefix, and open (or
-/// close) the popup. `explicit` (Ctrl+Space) opens even with an empty prefix.
-pub(crate) fn trigger(
-    state: Signal<EditorState>,
-    session: Signal<Option<Session>>,
-    provider: &CompletionProvider,
-    explicit: bool,
-) {
-    let st = state.peek();
-    let src = st.text();
-    let caret = st.primary().head;
-    let anchor = prefix_start(&src, caret);
-    let prefix = &src[anchor..caret];
-    if prefix.is_empty() && !explicit {
-        session.set(None);
-        return;
-    }
-    let mut items = provider(&CompletionContext {
-        src: &src,
-        cursor: caret,
-        prefix,
-    });
-    if !prefix.is_empty() {
-        let pl = prefix.to_lowercase();
-        items.retain(|it| it.label.to_lowercase().contains(&pl));
-        // Prefix matches rank above mere substring matches.
-        items.sort_by_key(|it| !it.label.to_lowercase().starts_with(&pl));
-    }
-    session.set((!items.is_empty()).then_some(Session {
-        items,
-        selected: 0,
-        anchor,
-    }));
+/// The completion engine for one editor: the host [`LanguageService`] (if any), the local
+/// source (the old provider or word-based suggestions, plus snippets) used when the host does
+/// not support completion, the snippet source merged into host results, and the
+/// stale-reply gates.
+pub(crate) struct Completer {
+    pub(crate) host: Option<Rc<dyn LanguageService>>,
+    pub(crate) local: Option<CompletionProvider>,
+    pub(crate) snippets: Option<CompletionProvider>,
+    pub(crate) gate: RequestGate,
+    pub(crate) resolve_gate: RequestGate,
+    pub(crate) uri: String,
+    pub(crate) triggers: Vec<String>,
 }
 
-/// Apply the selected item (expanding snippet tabstops) and close the popup.
+impl Completer {
+    /// Whether any completion source exists.
+    pub(crate) fn has_source(&self) -> bool {
+        self.host.is_some() || self.local.is_some()
+    }
+    /// Whether typing `s` should open completion (a server trigger character).
+    pub(crate) fn is_trigger(&self, s: &str) -> bool {
+        self.triggers.iter().any(|t| t == s)
+    }
+    /// Request completions at the primary caret. `explicit` (Ctrl+Space, trigger chars,
+    /// incomplete re-query) opens even with nothing typed.
+    pub(crate) fn request(
+        &self,
+        state: Signal<EditorState>,
+        session: Signal<Option<Session>>,
+        explicit: bool,
+        cx: lsp::CompletionContext,
+    ) {
+        let st = state.peek();
+        let src = st.text();
+        let caret = st.primary().head;
+        let anchor = prefix_start(&src, caret);
+        if anchor == caret && !explicit {
+            self.gate.cancel();
+            session.set(None);
+            return;
+        }
+        let ctx = CompletionContext {
+            src: &src,
+            cursor: caret,
+            prefix: &src[anchor..caret],
+        };
+        let extra: Vec<lsp::CompletionItem> = self
+            .snippets
+            .as_ref()
+            .map(|p| p(&ctx).into_iter().map(Into::into).collect())
+            .unwrap_or_default();
+        let doc = lsp::DocRef {
+            uri: &self.uri,
+            text: &src,
+            version: self.gate.version(),
+        };
+        let pos = lsp::byte_to_position(&src, caret);
+        // One reply, handed to the host first and taken back if it declines.
+        let deliver = move |list: Option<lsp::CompletionList>, extra: Vec<lsp::CompletionItem>| {
+            let list = list.unwrap_or_default();
+            let mut items = list.items;
+            items.extend(extra);
+            open(state, session, anchor, items, list.is_incomplete);
+        };
+        let slot: Rc<RefCell<Option<lsp::Reply<Option<lsp::CompletionList>>>>> =
+            Rc::new(RefCell::new(None));
+        if let Some(h) = &self.host {
+            let extra = extra.clone();
+            *slot.borrow_mut() = Some(self.gate.wrap(move |l| deliver(l, extra)));
+            let s2 = slot.clone();
+            let handed: lsp::Reply<Option<lsp::CompletionList>> = Box::new(move |l| {
+                if let Some(r) = s2.borrow_mut().take() {
+                    r(l);
+                }
+            });
+            if h.completion(&doc, pos, cx.clone(), handed) {
+                return;
+            }
+            slot.borrow_mut().take(); // declined: fall back to the local source
+        }
+        let local = ProviderService {
+            completion: self.local.clone(),
+            ..Default::default()
+        };
+        let reply = self.gate.wrap(move |l| deliver(l, Vec::new()));
+        if !local.completion(&doc, pos, cx, reply) {
+            session.set(None);
+        }
+    }
+
+    /// Ask the host to resolve the highlighted item (lazy documentation / detail / edits).
+    pub(crate) fn resolve_selected(&self, session: Signal<Option<Session>>) {
+        let (Some(h), Some(s)) = (&self.host, session.peek()) else {
+            return;
+        };
+        let Some(item) = s.current().cloned() else {
+            return;
+        };
+        if item.documentation.is_some() && item.detail.is_some() {
+            return;
+        }
+        let idx = s.selected;
+        let label = item.label.clone();
+        let reply = self
+            .resolve_gate
+            .wrap(move |resolved: lsp::CompletionItem| {
+                let mut cur = session.peek();
+                if let Some(c) = &mut cur
+                    && c.items.get(idx).is_some_and(|i| i.label == label)
+                {
+                    c.items[idx] = resolved;
+                    session.set(cur);
+                }
+            });
+        h.resolve_completion(item, reply);
+    }
+}
+
+/// Apply the selected item — its own edit range (or the typed word), the inserted text
+/// (expanding snippets) and its `additionalTextEdits` (auto-imports) as **one** undo step —
+/// close the popup, then run the item's command.
 pub(crate) fn accept(
     state: Signal<EditorState>,
     history: Signal<Rc<RefCell<History>>>,
     code: Signal<String>,
     goal: Signal<usize>,
     session: Signal<Option<Session>>,
+    completer: &Completer,
 ) {
     let Some(s) = session.peek() else { return };
-    let Some(item) = s.items.get(s.selected) else {
+    let Some(item) = s.current().cloned() else {
         return;
     };
-    let caret = state.peek().primary().head;
-    let (text, caret_off) = expand_snippet(&item.insert);
-    let tx = Transaction::change_and_select(
-        ChangeSet::replace(s.anchor, caret, text),
-        Selections::single(Selection::caret(s.anchor + caret_off)),
-    );
-    dispatch(state, history, code, tx, Coalesce::Never);
-    goal.set(col_of(&state.peek().text(), state.peek().primary().head));
     session.set(None);
+    completer.gate.cancel();
+    let st = state.peek();
+    let src = st.text();
+    let caret = st.primary().head;
+    let (a, b) = match &item.text_edit {
+        Some(lsp::CompletionTextEdit::Edit(e)) => lsp::range_to_bytes(&src, e.range),
+        Some(lsp::CompletionTextEdit::InsertReplace { replace, .. }) => {
+            lsp::range_to_bytes(&src, *replace)
+        }
+        None => (s.anchor, caret),
+    };
+    // The range was computed when the list arrived; cover what was typed since.
+    let (a, b) = (a.min(caret), b.max(caret));
+    let raw = item.new_text();
+    let (text, caret_off) = if item.insert_text_format == lsp::InsertTextFormat::Snippet {
+        expand_snippet(raw)
+    } else {
+        (raw.to_string(), raw.len())
+    };
+    let mut changes = vec![Change {
+        from: a,
+        to: b,
+        insert: text,
+    }];
+    let mut shift = 0isize;
+    for e in &item.additional_text_edits {
+        let (x, y) = lsp::range_to_bytes(&src, e.range);
+        if y <= a {
+            shift += e.new_text.len() as isize - (y - x) as isize;
+        } else if x < b {
+            continue; // overlaps the main edit: invalid per LSP, skip
+        }
+        changes.push(Change {
+            from: x,
+            to: y,
+            insert: e.new_text.clone(),
+        });
+    }
+    let at = (a as isize + shift) as usize + caret_off;
+    dispatch(
+        state,
+        history,
+        code,
+        Transaction::change_and_select(
+            ChangeSet::from_changes(changes),
+            Selections::single(Selection::caret(at)),
+        ),
+        Coalesce::Never,
+    );
+    goal.set(col_of(&state.peek().text(), state.peek().primary().head));
+    if let (Some(cmd), Some(h)) = (&item.command, &completer.host) {
+        h.execute_command(cmd);
+    }
 }
 
 /// Expand a snippet body: `${N:default}` → `default`, `$N` → "", and the caret lands at the
@@ -219,40 +524,108 @@ fn expand_snippet(insert: &str) -> (String, usize) {
     (out, caret)
 }
 
-/// The popup widget, positioned just below the caret line, within the content grid.
+/// The tabler icon and color for a completion kind (VS Code's symbol colors, from the theme).
+fn kind_icon(
+    kind: Option<lsp::CompletionItemKind>,
+    theme: &crate::theme::EditorTheme,
+) -> (IconData, Color) {
+    use crate::lang::TokenKind as T;
+    use lsp::CompletionItemKind as K;
+    let Some(kind) = kind else {
+        return (tabler::ABC, theme.muted);
+    };
+    let (icon, tk) = match kind {
+        K::Text => (tabler::ABC, None),
+        K::Method => (tabler::CUBE, Some(T::Function)),
+        K::Function => (tabler::MATH_FUNCTION, Some(T::Function)),
+        K::Constructor => (tabler::TOOL, Some(T::Function)),
+        K::Field => (tabler::TAG, Some(T::Property)),
+        K::Variable => (tabler::VARIABLE, Some(T::Property)),
+        K::Class => (tabler::BOX, Some(T::Type)),
+        K::Interface => (tabler::PLUG, Some(T::Type)),
+        K::Module => (tabler::PACKAGE, Some(T::Namespace)),
+        K::Property => (tabler::KEY, Some(T::Property)),
+        K::Unit => (tabler::RULER, Some(T::Constant)),
+        K::Value => (tabler::NUMBERS, Some(T::Constant)),
+        K::Enum => (tabler::LIST_NUMBERS, Some(T::Type)),
+        K::Keyword => (tabler::CODE, Some(T::Keyword)),
+        K::Snippet => (tabler::BRACKETS_CONTAIN, None),
+        K::Color => (tabler::PALETTE, Some(T::Constant)),
+        K::File => (tabler::FILE, Some(T::Namespace)),
+        K::Reference => (tabler::ARROW_FORWARD_UP, Some(T::Property)),
+        K::Folder => (tabler::FOLDER, Some(T::Namespace)),
+        K::EnumMember => (tabler::SQUARE_LETTER_E, Some(T::Constant)),
+        K::Constant => (tabler::SQUARE_LETTER_C, Some(T::Constant)),
+        K::Struct => (tabler::SITEMAP, Some(T::Type)),
+        K::Event => (tabler::BOLT, Some(T::Type)),
+        K::Operator => (tabler::PLUS_MINUS, Some(T::Keyword)),
+        K::TypeParameter => (tabler::LETTER_T, Some(T::Type)),
+    };
+    (icon, tk.map_or(theme.foreground, |k| theme.color(k)))
+}
+
+/// The popup: the ranked list (kind icon, label with the matched chars emphasized, label
+/// details, right-aligned detail) and, beside it, the details + documentation pane for the
+/// highlighted item (Markdown rendered by [`super::markdown`]).
 pub(crate) fn popup(s: &Session, f: &crate::view::Frame) -> AnyWidget {
+    const ROWS: usize = 12;
     let (theme, fs, line_px) = (f.theme, f.fs, f.line_px);
     let line = f.li.line_of(f.src, s.anchor);
     let col = f.li.col_of(f.src, s.anchor);
     let x = f.pad_l + col as f64 * f.advance;
     let y = f.pad_t + (line + 1) as f64 * line_px + 2.0;
-
+    let first = s.selected.saturating_sub(ROWS - 1);
     let mut rows: Vec<AnyWidget> = Vec::new();
-    for (i, it) in s.items.iter().take(12).enumerate() {
+    for (i, it) in s.items.iter().enumerate().skip(first).take(ROWS) {
         let selected = i == s.selected;
         let bg = if selected {
             theme.selection
         } else {
             Color::from_rgba8(0, 0, 0, 0)
         };
+        let (ic, icol) = kind_icon(it.kind, theme);
+        let hits = s.hits.get(i).cloned().unwrap_or_default();
+        let mut label: Vec<TextSpan> = it
+            .label
+            .chars()
+            .enumerate()
+            .map(|(k, c)| {
+                let mut sp = span(c.to_string())
+                    .font_family(f.font_family)
+                    .size(fs as f32)
+                    .color(theme.foreground);
+                if hits.contains(&k) {
+                    sp = sp.bold().color(theme.accent);
+                }
+                if it.deprecated {
+                    sp = sp.strikethrough();
+                }
+                sp
+            })
+            .collect();
+        if let Some(d) = it.label_details.as_ref().and_then(|d| d.detail.clone()) {
+            label.push(
+                span(d)
+                    .font_family(f.font_family)
+                    .size(fs as f32)
+                    .color(theme.muted),
+            );
+        }
         let mut cells: Vec<AnyWidget> = vec![
-            text(kind_glyph(it.kind).to_string())
-                .size((fs * 0.85) as f32)
-                .font_family(f.font_family)
-                .color(theme.accent)
-                .into_widget(),
+            icon(ic).size(fs * 1.05).color(icol).into_widget(),
             gap_w(6.0).into_widget(),
-            text(it.label.clone())
-                .size(fs as f32)
-                .font_family(f.font_family)
-                .color(theme.foreground)
-                .into_widget(),
+            text_rich(label).soft_wrap(false).into_widget(),
         ];
-        if let Some(d) = &it.detail {
+        let right = it
+            .label_details
+            .as_ref()
+            .and_then(|d| d.description.clone())
+            .or_else(|| it.detail.clone());
+        if let Some(d) = right {
             cells.push(spacer().into_widget());
             cells.push(gap_w(10.0).into_widget());
             cells.push(
-                text(d.clone())
+                text(d.lines().next().unwrap_or("").to_string())
                     .size((fs * 0.85) as f32)
                     .font_family(f.font_family)
                     .color(theme.muted)
@@ -264,37 +637,76 @@ pub(crate) fn popup(s: &Session, f: &crate::view::Frame) -> AnyWidget {
                 .height(line_px)
                 .padding(EdgeInsets::symmetric(8.0, 0.0))
                 .decoration(BoxDecoration::new().color(bg))
+                .clip()
                 .child(row(cells).cross_axis_alignment(CrossAxisAlignment::Center))
                 .into_widget(),
         );
     }
-    let panel = container()
+    let deco = || {
+        BoxDecoration::new()
+            .color(theme.overlay_bg)
+            .radius(BorderRadius::all(theme.overlay_radius))
+            .border(Border::new(theme.border, 1.0))
+    };
+    let list = container()
         .width(340.0)
-        .decoration(
-            BoxDecoration::new()
-                .color(theme.overlay_bg)
-                .radius(BorderRadius::all(theme.overlay_radius))
-                .border(Border::new(theme.border, 1.0)),
-        )
+        .decoration(deco())
         .clip()
         .child(column(rows).main_axis_size(MainAxisSize::Min));
-    Positioned::new(panel).left(x).top(y).into_widget()
-}
-
-/// A one-glyph marker per completion kind (no icon font dependency).
-fn kind_glyph(kind: CompletionKind) -> char {
-    match kind {
-        CompletionKind::Keyword => 'k',
-        CompletionKind::Function => 'ƒ',
-        CompletionKind::Method => 'm',
-        CompletionKind::Variable => 'v',
-        CompletionKind::Field => '.',
-        CompletionKind::Type => 'T',
-        CompletionKind::Module => 'M',
-        CompletionKind::Constant => 'c',
-        CompletionKind::Snippet => '⋯',
-        CompletionKind::Text => 'a',
+    let mut parts: Vec<AnyWidget> = vec![list.into_widget()];
+    if let Some(it) = s.current()
+        && (it.detail.is_some() || it.documentation.is_some())
+    {
+        let mut kids: Vec<AnyWidget> = Vec::new();
+        if let Some(d) = &it.detail {
+            kids.push(
+                text_rich(super::markdown::code_spans(
+                    d,
+                    f.p.language.as_ref().map_or("", |l| l.name()),
+                    theme,
+                    (fs * 0.92) as f32,
+                    f.font_family,
+                ))
+                .into_widget(),
+            );
+        }
+        if let Some(doc) = &it.documentation {
+            if !kids.is_empty() {
+                kids.push(gap_h(6.0).into_widget());
+            }
+            kids.push(match doc.kind {
+                lsp::MarkupKind::Markdown => {
+                    super::markdown::render(&doc.value, theme, fs * 0.92, f.font_family)
+                }
+                lsp::MarkupKind::PlainText => text(doc.value.clone())
+                    .size((fs * 0.92) as f32)
+                    .color(theme.foreground)
+                    .into_widget(),
+            });
+        }
+        parts.push(gap_w(4.0).into_widget());
+        parts.push(
+            container()
+                .width(320.0)
+                .padding(EdgeInsets::symmetric(10.0, 8.0))
+                .decoration(deco())
+                .clip()
+                .child(
+                    column(kids)
+                        .cross_axis_alignment(CrossAxisAlignment::Stretch)
+                        .main_axis_size(MainAxisSize::Min),
+                )
+                .into_widget(),
+        );
     }
+    Positioned::new(
+        row(parts)
+            .cross_axis_alignment(CrossAxisAlignment::Start)
+            .main_axis_size(MainAxisSize::Min),
+    )
+    .left(x)
+    .top(y)
+    .into_widget()
 }
 
 #[cfg(test)]
@@ -313,5 +725,33 @@ mod tests {
         // bare $0 → caret there
         let (t3, c3) = expand_snippet("()$0");
         assert_eq!((t3.as_str(), c3), ("()", 2));
+    }
+}
+
+#[cfg(test)]
+mod fuzzy_tests {
+    use super::fuzzy_score;
+
+    fn score(p: &str, w: &str) -> i32 {
+        fuzzy_score(p, w).map_or(i32::MIN, |s| s.0)
+    }
+
+    #[test]
+    fn fuzzy_scoring_rewards_contiguous_camel_case_and_word_starts() {
+        // Matches in order, case-insensitively; returns the matched char indices.
+        assert_eq!(fuzzy_score("gw", "getWidth").unwrap().1, vec![0, 3]);
+        assert_eq!(fuzzy_score("", "x").unwrap().0, 0);
+        // The first pattern char must land on a strong position.
+        assert!(fuzzy_score("idt", "getWidth").is_none());
+        assert!(fuzzy_score("wid", "getWidth").is_some()); // camelCase hump
+        assert!(fuzzy_score("val", "max_value").is_some()); // after a separator
+        assert!(fuzzy_score("ab", "a").is_none());
+        // Contiguous prefix > camelCase humps > scattered.
+        assert!(score("fb", "fbz") > score("fb", "fooBar"));
+        assert!(score("fb", "fooBar") > score("fb", "fabric"));
+        // Exact case wins a tie.
+        assert!(score("Foo", "Foo") > score("Foo", "foo"));
+        // Word start beats mid-word.
+        assert!(score("con", "console") > score("con", "my_icon_conf"));
     }
 }
