@@ -14,7 +14,7 @@
 //! Capture names map to [`TokenKind`]s (see [`kind_for_capture`]); the colors themselves come
 //! from the editor theme's [`HighlightStyle`](crate::HighlightStyle), so every color stays
 //! themeable. Grammars whose query fails to compile fall back to the hand-written scanner for
-//! that language (see [`by_name`]).
+//! that language (see [`by_name`](super::by_name)).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -364,7 +364,7 @@ fn build(s: &Spec) -> Result<GrammarDef, String> {
 }
 
 /// A tree-sitter-backed [`Language`]. Cheap to construct (grammars are compiled lazily and
-/// cached per thread). Prefer [`by_name`], which also falls back to a hand-written scanner.
+/// cached per thread). Prefer [`by_name`](super::by_name), which also falls back to a hand-written scanner.
 #[derive(Clone, Copy, Debug)]
 pub struct TreeSitter {
     id: &'static str,
