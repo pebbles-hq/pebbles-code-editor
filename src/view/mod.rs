@@ -16,6 +16,7 @@ mod decor;
 mod diffview;
 mod extensions;
 mod gutter;
+mod lsp;
 mod minimap;
 mod overlays;
 mod peek;
@@ -354,6 +355,22 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let cursor_hist = create_signal(Rc::new(RefCell::new(commands::CursorHistory::default())));
     let smart_stack = create_signal::<Vec<Selections>>(Vec::new());
     let pending_keys = create_signal::<Vec<crate::actions::Stroke>>(Vec::new());
+    // Language-service UI state (hover, signature help, peek, rename, …).
+    let lsp_hooks = lsp::hooks();
+    let lsp_ctl = lsp::Lsp {
+        svc: lsp::effective_service(p),
+        uri: Rc::from(p.document_uri.as_str()),
+        h: lsp_hooks,
+        store: lsp_hooks.store.peek(),
+        state,
+        history,
+        code,
+        goal,
+        hover_delay: p.hover_delay,
+        diag_old: p.diagnostics,
+        diag_lsp: p.lsp_diagnostics,
+        on_open_link: p.on_open_link.clone(),
+    };
     create_effect(move || {
         let st = state.get();
         cursor_hist.peek().borrow_mut().observe(&st);
@@ -505,6 +522,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         inline_provider: p.inline_suggestions.clone(),
         snippet,
         doc_uri: p.document_uri.clone(),
+        lsp: lsp_ctl.clone(),
     };
     // Raw-key command resolver: runs BEFORE the framework maps the key to an editing intent,
     // so editor chords (Alt+Up, Ctrl+Shift+K, Ctrl+K Ctrl+0, …) win over caret motion.
@@ -597,6 +615,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         let emmet_env = cmd_env.clone();
         let sig_provider = p.signature.clone();
         let ro_exts = p.extensions.clone(); // for read-only-range veto
+        let lsp_k = lsp_ctl.clone();
         // Register as a *code* editor so the shell routes Tab/Shift+Tab here (indent/outdent)
         // instead of moving focus. When the completion popup is open it intercepts navigation
         // keys; otherwise keys flow to the command engine, and typing re-queries completion.
@@ -625,6 +644,13 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             }
             if !preedit.peek().is_empty() {
                 preedit.set(String::new());
+            }
+            // Any key closes the hover (Escape is consumed by it).
+            if lsp_k.h.hover.peek().is_some() {
+                lsp_k.hide_hover();
+                if matches!(k, KeyInput::Escape) {
+                    return true;
+                }
             }
             // Emmet: Tab expands an abbreviation (VS Code `emmet.triggerExpansionOnTab`).
             if emmet_tab
@@ -1965,25 +1991,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     if let Some(sess) = completion.peek() {
         layers.push(completion::popup(&sess, &frame));
     }
-    // Hover tooltip: query the provider at the pointer's byte and float a panel there.
-    if let (Some(pos), Some(hp)) = (hover_pos.get(), &p.hover) {
-        let byte = p2b(&src, pos);
-        if let Some(h) = hp(&src, byte) {
-            let tip = chrome::tooltip(
-                text(h.contents)
-                    .size((fs * 0.92) as f32)
-                    .font_family(&p.font_family)
-                    .color(theme.foreground)
-                    .into_widget(),
-                theme,
-            );
-            layers.push(
-                Positioned::new(tip)
-                    .left(pos.x + 4.0)
-                    .top(pos.y + 18.0)
-                    .into_widget(),
-            );
-        }
+    // Hover (service-driven, shown after the pointer dwells or by Ctrl+K Ctrl+I).
+    if let Some(l) = lsp_ctl.hover_layer(&frame) {
+        layers.push(l);
     }
     // Signature help: a panel just above the caret line while typing a call.
     if let Some(sig) = sig_help.get() {
@@ -2363,8 +2373,21 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         })
         .on_double_tap(action_event(move |e| word_select(e.position)))
         .on_triple_tap(action_event(move |e| line_select(e.position)))
-        .on_hover_move(action_event(move |e| hover_pos.set(Some(e.position))))
-        .on_hover_exit(action(move || hover_pos.set(None)));
+        .on_hover_move(action_event({
+            let l = lsp_ctl.clone();
+            move |e| {
+                hover_pos.set(Some(e.position));
+                let text = state.peek().text();
+                l.pointer_moved(p2b(&text, e.position), e.position);
+            }
+        }))
+        .on_hover_exit(action({
+            let l = lsp_ctl.clone();
+            move || {
+                hover_pos.set(None);
+                l.pointer_left();
+            }
+        }));
 
     // Horizontal scroll: wrap the content (not the gutter) so long lines scroll sideways
     // while the line numbers stay put. Only when the editor is a bounded viewport.

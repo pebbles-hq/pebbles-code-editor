@@ -115,6 +115,10 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         controller: None,
         suggest_preview: false,
         format_on_paste: false,
+        format_on_type: false,
+        hover_delay: 0.3,
+        lsp_diagnostics: None,
+        problem_counts: None,
         emmet: false,
         inline_diff: false,
         diff_original_of: None,
@@ -210,6 +214,10 @@ pub struct CodeEditor {
     inline_suggestions: Option<crate::providers::InlineSuggestionProvider>,
     suggest_preview: bool,
     format_on_paste: bool,
+    format_on_type: bool,
+    hover_delay: f64,
+    lsp_diagnostics: Option<Signal<Vec<crate::language::LspDiagnostic>>>,
+    problem_counts: Option<Signal<crate::language::ProblemCounts>>,
     emmet: bool,
     inline_diff: bool,
     diff_original_of: Option<Signal<String>>,
@@ -619,6 +627,35 @@ impl CodeEditor {
         self.format_on_paste = v;
         self
     }
+    /// Format the line as you type the language service's on-type trigger characters (VS
+    /// Code `editor.formatOnType`, default off). Each format is its own undo step.
+    pub fn format_on_type(mut self, v: bool) -> Self {
+        self.format_on_type = v;
+        self
+    }
+    /// The pointer dwell before a hover request, in seconds (VS Code `editor.hover.delay`,
+    /// default 0.3).
+    pub fn hover_delay(mut self, secs: f64) -> Self {
+        self.hover_delay = secs.max(0.0);
+        self
+    }
+    /// Diagnostics in LSP form (`textDocument/publishDiagnostics`), a reactive list:
+    /// squiggles by severity (unnecessary = faded, deprecated = struck through), gutter
+    /// markers, hover messages with related information, F8 / Shift+F8 problem navigation
+    /// and quick fixes. Merged with [`diagnostics`](Self::diagnostics).
+    pub fn lsp_diagnostics(
+        mut self,
+        diagnostics: Signal<Vec<crate::language::LspDiagnostic>>,
+    ) -> Self {
+        self.lsp_diagnostics = Some(diagnostics);
+        self
+    }
+    /// A signal the editor keeps updated with its problem counts (errors / warnings / infos
+    /// / hints), for the host's status bar or problems panel.
+    pub fn problem_counts(mut self, counts: Signal<crate::language::ProblemCounts>) -> Self {
+        self.problem_counts = Some(counts);
+        self
+    }
     /// Tab expands Emmet abbreviations in HTML / CSS (VS Code `emmet.triggerExpansionOnTab`,
     /// default off). The "Emmet: Expand Abbreviation" command works regardless.
     pub fn emmet(mut self, v: bool) -> Self {
@@ -736,6 +773,10 @@ pub(crate) struct Props {
     pub(crate) inline_suggestions: Option<crate::providers::InlineSuggestionProvider>,
     pub(crate) suggest_preview: bool,
     pub(crate) format_on_paste: bool,
+    pub(crate) format_on_type: bool,
+    pub(crate) hover_delay: f64,
+    pub(crate) lsp_diagnostics: Option<Signal<Vec<crate::language::LspDiagnostic>>>,
+    pub(crate) problem_counts: Option<Signal<crate::language::ProblemCounts>>,
     pub(crate) emmet: bool,
     pub(crate) inline_diff: bool,
     pub(crate) diff_original_of: Option<Signal<String>>,
@@ -834,6 +875,10 @@ impl From<CodeEditor> for Props {
             controller: e.controller,
             suggest_preview: e.suggest_preview,
             format_on_paste: e.format_on_paste,
+            format_on_type: e.format_on_type,
+            hover_delay: e.hover_delay,
+            lsp_diagnostics: e.lsp_diagnostics,
+            problem_counts: e.problem_counts,
             emmet: e.emmet,
             inline_diff: e.inline_diff,
             diff_original_of: e.diff_original_of,

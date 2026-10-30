@@ -238,6 +238,8 @@ commands! {
     ExpandSelection => "editor.action.smartSelect.expand", "Expand Selection", ["Shift+Alt+Right"];
     /// Shrink the selection back.
     ShrinkSelection => "editor.action.smartSelect.shrink", "Shrink Selection", ["Shift+Alt+Left"];
+    /// Show the hover for the symbol at the caret.
+    ShowHover => "editor.action.showHover", "Show or Focus Hover", ["Ctrl+K Ctrl+I"];
 }
 
 /// One parsed keystroke.

@@ -308,19 +308,74 @@ pub enum DiagnosticSeverity {
     Hint,
 }
 
-/// A diagnostic in LSP coordinates (used in [`CodeActionContext`]).
+/// Extra diagnostic rendering hints (LSP `DiagnosticTag`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DiagnosticTag {
+    /// Unused / unnecessary code: rendered faded.
+    Unnecessary,
+    /// Deprecated code: rendered struck through.
+    Deprecated,
+}
+
+/// A related location for a diagnostic (LSP `DiagnosticRelatedInformation`).
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiagnosticRelatedInformation {
+    /// Where.
+    pub location: Location,
+    /// What.
+    pub message: String,
+}
+
+/// A diagnostic in LSP coordinates (`textDocument/publishDiagnostics`; also sent in
+/// [`CodeActionContext`]). Bind a reactive list with `CodeEditor::lsp_diagnostics`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LspDiagnostic {
     /// The range.
     pub range: Range,
-    /// The severity.
+    /// The severity (`None` is shown as an error, as VS Code does).
     pub severity: Option<DiagnosticSeverity>,
     /// The diagnostic code.
     pub code: Option<String>,
+    /// A link explaining the code (LSP `codeDescription.href`).
+    pub code_href: Option<String>,
     /// The producer (e.g. `rustc`).
     pub source: Option<String>,
     /// The message.
     pub message: String,
+    /// Rendering tags (unnecessary = faded, deprecated = strikethrough).
+    pub tags: Vec<DiagnosticTag>,
+    /// Related locations (shown in the hover and the problem peek).
+    pub related_information: Vec<DiagnosticRelatedInformation>,
+}
+
+impl LspDiagnostic {
+    /// A diagnostic at `range` with `severity` and `message`.
+    pub fn new(range: Range, severity: DiagnosticSeverity, message: impl Into<String>) -> Self {
+        LspDiagnostic {
+            range,
+            severity: Some(severity),
+            message: message.into(),
+            ..Default::default()
+        }
+    }
+    /// The effective severity (missing = error).
+    pub fn severity(&self) -> DiagnosticSeverity {
+        self.severity.unwrap_or(DiagnosticSeverity::Error)
+    }
+}
+
+/// Problem counts for the host's status bar / problems panel (see
+/// `CodeEditor::problem_counts`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProblemCounts {
+    /// Errors.
+    pub errors: usize,
+    /// Warnings.
+    pub warnings: usize,
+    /// Informational.
+    pub infos: usize,
+    /// Hints.
+    pub hints: usize,
 }
 
 /// Why code actions were requested.
@@ -994,6 +1049,11 @@ pub trait LanguageService {
     /// Open another document at `loc` (cross-file navigation). Return `false` if the host
     /// cannot (the editor then ignores locations outside its own document).
     fn open_location(&self, loc: &Location) -> bool {
+        false
+    }
+    /// Show a references list in the host UI (Shift+Alt+F12, VS Code's references view).
+    /// Return `false` to let the editor show them in its inline peek instead.
+    fn show_references(&self, origin: &Location, locations: &[Location]) -> bool {
         false
     }
     /// Read another document's text (for peek views). `None` when unavailable.

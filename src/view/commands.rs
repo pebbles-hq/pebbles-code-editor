@@ -86,6 +86,8 @@ pub(crate) struct Env {
     pub(crate) snippet: Signal<Option<crate::snippet::SnippetSession>>,
     /// The document URI (snippet variables).
     pub(crate) doc_uri: String,
+    /// The language-service UI (hover, navigation, rename, …).
+    pub(crate) lsp: crate::view::lsp::Lsp,
 }
 
 /// Whether `cmd` edits the document (vetoed in read-only mode).
@@ -153,6 +155,10 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
     let select = |sel: Selections| edit(Some(Transaction::select(sel)));
     let caret_line = line_of(&src, sels.primary().head);
     match cmd {
+        C::ShowHover => {
+            env.lsp.show_hover_at_caret();
+            true
+        }
         C::AddCursorAbove => edit(ops::add_cursor_vertical(&src, &sels, false)),
         C::AddCursorBelow => edit(ops::add_cursor_vertical(&src, &sels, true)),
         C::SelectAllOccurrences => edit(ops::select_all_occurrences(&src, &sels)),
