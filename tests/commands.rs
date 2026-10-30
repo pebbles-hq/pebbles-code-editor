@@ -320,6 +320,22 @@ fn controller_runs_save_actions() {
 }
 
 #[test]
+fn controller_applies_host_edits_as_one_undo_step() {
+    use pebbles_code_editor::language::{Position, Range, TextEdit};
+    let mut h = harness("let a = 1;\nlet b = a;\n");
+    let r = |l, s, e| Range::new(Position::new(l, s), Position::new(l, e));
+    h.ctrl.apply_edits(vec![
+        TextEdit::new(r(0, 4, 5), "alpha"),
+        TextEdit::new(r(1, 8, 9), "alpha"),
+    ]);
+    h.frame();
+    h.frame();
+    assert_eq!(h.code.get(), "let alpha = 1;\nlet b = alpha;\n");
+    h.key(KeyInput::Undo);
+    assert_eq!(h.code.get(), "let a = 1;\nlet b = a;\n", "one undo step");
+}
+
+#[test]
 fn every_command_runs_without_panicking() {
     // Smoke: every command on a small multi-cursor document, then undo everything.
     for &cmd in EditorCommand::ALL {

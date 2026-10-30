@@ -23,6 +23,8 @@ pub(crate) enum Request {
     Run(crate::actions::EditorCommand),
     /// Format the document through the language service, then publish the ticket.
     FormatForSave(u64),
+    /// Apply text edits as one undo step (a workspace edit from the host).
+    ApplyEdits(Vec<crate::language::TextEdit>),
 }
 
 /// A handle for driving an editor programmatically. `Copy`; create it with
@@ -94,6 +96,14 @@ impl EditorController {
         self.ticket.set(t);
         self.requests.update(|r| r.push(Request::FormatForSave(t)));
         t
+    }
+
+    /// Apply LSP text edits (UTF-16 ranges in the current text) to the document as ONE undo
+    /// step, carets mapped through them — how a host applies a workspace edit (rename in
+    /// another file, `workspace/applyEdit`) to an open editor. Overlapping edits after the
+    /// first are skipped, as VS Code does.
+    pub fn apply_edits(&self, edits: Vec<crate::language::TextEdit>) {
+        self.requests.update(|r| r.push(Request::ApplyEdits(edits)));
     }
 
     /// The last finished [`format_for_save`](Self::format_for_save) ticket (reactive).

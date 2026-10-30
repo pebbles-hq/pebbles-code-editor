@@ -1421,6 +1421,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                             .format_document_then(Box::new(move || ready.set(t)));
                         None
                     }
+                    crate::controller::Request::ApplyEdits(edits) => {
+                        cmd_env.lsp.apply_text_edits(&edits);
+                        None
+                    }
                 };
                 if let Some(sel) = sel {
                     state.set(EditorState {
