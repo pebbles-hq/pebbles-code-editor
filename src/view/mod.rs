@@ -113,6 +113,8 @@ pub(crate) struct Frame<'a> {
     pub(crate) lsp: &'a lsp::Lsp,
     /// The fold display-map (buffer line ↔ display row).
     pub(crate) disp: &'a crate::fold::DisplayMap,
+    /// Where each inlay hint sits (the space reserved for it in `disp`).
+    pub(crate) inlay_slots: &'a inlay::InlaySlots,
     pub(crate) folds: Signal<std::collections::BTreeSet<usize>>,
     /// Inline diff against the base text (added lines / removed markers), if configured.
     pub(crate) diff: Option<&'a crate::diff::LineDiff>,
@@ -127,6 +129,27 @@ impl Frame<'_> {
             self.pad_l + xcol as f64 * self.advance,
             self.pad_t + row as f64 * self.line_px,
         )
+    }
+    /// The caret x (px) of `col` on visual row `seg` (before any inlay hint at `col`).
+    pub(crate) fn seg_x(&self, seg: &crate::fold::Row, col: usize) -> f64 {
+        self.pad_l + self.disp.caret_xcol(seg, col) as f64 * self.advance
+    }
+    /// The x (px) where the char at `col` is drawn on `seg` (after any inlay hint at `col`).
+    pub(crate) fn seg_char_x(&self, seg: &crate::fold::Row, col: usize) -> f64 {
+        self.pad_l + self.disp.char_xcol(seg, col) as f64 * self.advance
+    }
+    /// `[cs, ce)` split at the inlay-hint columns inside it, so each piece draws contiguously.
+    pub(crate) fn inlay_pieces(&self, line: usize, cs: usize, ce: usize) -> Vec<(usize, usize)> {
+        let mut out = Vec::new();
+        let mut a = cs;
+        for &(c, _) in self.disp.inlays_of(line) {
+            if c > a && c < ce {
+                out.push((a, c));
+                a = c;
+            }
+        }
+        out.push((a, ce));
+        out
     }
     /// The y (px) of a display row index.
     pub(crate) fn row_y(&self, row: usize) -> f64 {
@@ -333,6 +356,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let metrics_hold = create_signal(Rc::new(std::cell::Cell::new((0.0_f64, 0.0_f64, 0.0_f64))));
     // The line index, updated by each edit's delta (see `crate::lines`), so a rebuild costs
     // the edited lines rather than the whole document. Shared with the autoscroll effect.
+    // The current inlay widths, for the pointer mapping and autoscroll (outside the render).
+    let inlay_hold = create_signal(Rc::new(RefCell::new(Rc::new(crate::fold::Inlays::new()))));
     let line_cache = create_signal(Rc::new(RefCell::new(crate::lines::LineCache::default())));
     // Find/replace state.
     let find = search::State {
@@ -1653,11 +1678,23 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             block_gaps[b.line] += (b.height / line_px).ceil().max(1.0) as usize;
         }
     }
-    let disp = std::rc::Rc::new(crate::fold::DisplayMap::for_index(
+    // Inlay hints reserve columns in the display map (host hints + language-service hints).
+    let inlay_slots = {
+        let props = p.inlay_hints.map(|s| s.get()).unwrap_or_default();
+        let lsp_hints = if lsp_ctl.inlays_on() {
+            lsp_ctl.h.inlays.get()
+        } else {
+            Rc::new(Vec::new())
+        };
+        inlay::slots(&src, &li, &props, &lsp_hints)
+    };
+    inlay_hold.peek().replace(inlay_slots.map.clone());
+    let disp = std::rc::Rc::new(crate::fold::DisplayMap::for_index_inlays(
         &li,
         &folds.get(),
         wrap_cols,
         &block_gaps,
+        inlay_slots.map.clone(),
     ));
     let display_rows = disp.rows();
     let content_h = display_rows as f64 * line_px + pad_t * 2.0;
@@ -1692,15 +1729,15 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         let xcol = (((pos.x - pad_l) / advance).round().max(0.0)) as usize;
         let nlines = text.split('\n').count().max(1);
         let fset = folds.peek();
-        if wrap_cols == 0 && fset.is_empty() {
+        let inl = inlay_hold.peek().borrow().clone();
+        if wrap_cols == 0 && fset.is_empty() && inl.is_empty() {
             return byte_at(text, row.min(nlines - 1), xcol);
         }
         let li = line_cache.peek().borrow_mut().sync(text);
-        let map = crate::fold::DisplayMap::for_index(&li, &fset, wrap_cols, &[]);
-        let r = map.row_at(row);
-        let col = (r.start + xcol.saturating_sub(r.indent))
-            .min(li.char_lens().get(r.line).copied().unwrap_or(0));
-        byte_at(text, r.line, col)
+        let map = crate::fold::DisplayMap::for_index_inlays(&li, &fset, wrap_cols, &[], inl);
+        let xf = ((pos.x - pad_l) / advance).max(0.0);
+        let (line, col) = map.hit(row, xf, |l| li.char_lens().get(l).copied().unwrap_or(0));
+        byte_at(text, line, col)
     };
 
     // ---- caret blink ----
@@ -1760,12 +1797,12 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             let col = li.col_of(&text, head);
             // The caret's DISPLAY row (fold/wrap-aware), so autoscroll targets the right place.
             let wc = wrap_hold.peek().get();
-            let drow = if wc == 0 && folds.peek().is_empty() {
-                line
+            let inl = inlay_hold.peek().borrow().clone();
+            let (drow, xcol) = if wc == 0 && folds.peek().is_empty() && inl.is_empty() {
+                (line, col)
             } else {
-                crate::fold::DisplayMap::for_index(&li, &folds.peek(), wc, &[])
+                crate::fold::DisplayMap::for_index_inlays(&li, &folds.peek(), wc, &[], inl)
                     .place(line, col)
-                    .0
             };
             let top = pad_t + drow as f64 * line_px;
             let bottom = top + line_px;
@@ -1781,7 +1818,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             if let Some(t) = target {
                 vscroll_a.to(t.min((content_h - vh).max(0.0)), scroll_top);
             }
-            let x = pad_l + col as f64 * advance;
+            let x = pad_l + xcol as f64 * advance;
             hscroll_a.ensure_visible(x, x + advance, advance * 4.0);
         });
     }
@@ -2060,6 +2097,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         hclip,
         ext_gutter_marks: &ext_gutter_marks,
         disp: disp.as_ref(),
+        inlay_slots: &inlay_slots,
         folds,
         diff: line_diff.as_ref(),
     };

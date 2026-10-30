@@ -1789,3 +1789,51 @@ fn format_for_save_formats_then_publishes_the_ticket() {
     assert_eq!(code.get(), "// fmt\nx\n");
     assert_eq!(ctrl.save_ready().get(), t, "ready after the edits applied");
 }
+
+#[test]
+fn inlay_hints_take_space_and_clicks_map_around_them() {
+    let fake = Rc::new(Fake::default());
+    // `let x = 1;` with `: i32` after `x` (col 5).
+    *fake.inlays.borrow_mut() = vec![InlayHint::new(
+        Position::new(0, 5),
+        ": i32",
+        Some(InlayHintKind::Type),
+    )];
+    let (mut h, code) = mount("let x = 1;\nnext\n", fake.clone(), |e| e);
+    h.frames(2);
+    // The line is split around the hint, so the rest of it is pushed right (not overdrawn).
+    assert!(h.find_text("let x"), "text before the hint is its own run");
+    assert!(
+        h.find_text(" = 1;"),
+        "text after the hint is drawn after it"
+    );
+    assert!(!h.find_text("let x = 1;"), "no single run under the hint");
+    assert!(h.find_text("next"), "lines without hints are one run");
+    let node = h
+        .semantics_tree()
+        .into_iter()
+        .find(|n| n.props.label == "Inlay hint : i32")
+        .expect("hint rendered");
+    let b = node.bounds;
+    // The label renders at 0.9 of a cell per char; the chip starts 2px left of it (col 5).
+    let adv = b.width() / (5.0 * 0.9);
+    let col5 = b.x0 - 2.0;
+    let y = b.y0 + b.height() / 2.0;
+    // Seven columns right of col 5 is past the 5-column hint plus 2 chars: col 7.
+    h.click(Offset::new(col5 + 7.0 * adv, y));
+    h.frames(1);
+    h.key(KeyInput::Insert("Z".into()));
+    h.frames(1);
+    assert_eq!(
+        code.get(),
+        "let x =Z 1;\nnext\n",
+        "click maps around the hint"
+    );
+    h.key(KeyInput::Undo);
+    // Left of the hint is unshifted: col 3.
+    h.click(Offset::new(col5 - 2.0 * adv, y));
+    h.frames(1);
+    h.key(KeyInput::Insert("Q".into()));
+    h.frames(1);
+    assert_eq!(code.get(), "letQ x = 1;\nnext\n");
+}

@@ -6,6 +6,10 @@
 //! `data` and nothing to act on is resolved first) with its tooltip. Code lenses are requested
 //! per document version, unresolved ones resolved, and drawn on a row above their line;
 //! clicking one runs its command through the host. Both have toggle commands.
+//!
+//! Hints occupy space like VS Code's injected text: each reserves whole grid columns (see
+//! [`slots`]) in the display map, so the rest of the line shifts right and the caret,
+//! selection, hit-testing and soft wrap all map around them.
 
 use std::rc::Rc;
 
@@ -14,6 +18,71 @@ use pebbles::prelude::*;
 use crate::language::{self as lsp};
 use crate::view::Frame;
 use crate::view::lsp::Lsp;
+
+/// Where one hint sits: `(line, col, width_cols, x_offset_cols)` — the offset stacks hints
+/// that share a column.
+pub(crate) type Slot = (usize, usize, usize, usize);
+
+/// Every hint's reserved slot, for both the host-provided and the language-service hints
+/// (same order as their source lists), plus the display map's per-line widths.
+#[derive(Default)]
+pub(crate) struct InlaySlots {
+    pub(crate) props: Vec<Option<Slot>>,
+    pub(crate) lsp: Vec<Option<Slot>>,
+    pub(crate) map: Rc<crate::fold::Inlays>,
+}
+
+/// The whole grid columns a hint label of `chars` chars occupies (drawn at 0.9 of the font
+/// size inside a chip with 2px side padding), plus half a column per LSP padding side.
+pub(crate) fn hint_cols(chars: usize, pads: usize) -> usize {
+    // Chars render at 0.9x the cell; 4px of chip padding is ~0.5 col at common sizes.
+    let w = chars as f64 * 0.9 + 0.5 + pads as f64 * 0.5;
+    (w.ceil() as usize).max(1)
+}
+
+/// Lay out every hint (host hints first, then language-service hints, stable per column).
+pub(crate) fn slots(
+    src: &str,
+    li: &crate::lines::LineIndex,
+    props: &[crate::providers::InlayHint],
+    hints: &[lsp::InlayHint],
+) -> InlaySlots {
+    let mut map = crate::fold::Inlays::new();
+    let mut used: std::collections::HashMap<(usize, usize), usize> = Default::default();
+    let mut place = |at: usize, w: usize| -> Slot {
+        let at = at.min(src.len());
+        let line = li.line_of(src, at);
+        let col = li.col_of(src, at);
+        let off = used.entry((line, col)).or_insert(0);
+        let slot = (line, col, w, *off);
+        *off += w;
+        map.entry(line).or_default().push((col, w));
+        slot
+    };
+    let props = props
+        .iter()
+        .map(|h| Some(place(h.at, hint_cols(h.label.chars().count(), 0))))
+        .collect();
+    let lsp = hints
+        .iter()
+        .map(|h| {
+            let chars: usize = h.parts().iter().map(|p| p.value.chars().count()).sum();
+            let pads = h.padding_left as usize + h.padding_right as usize;
+            Some(place(
+                lsp::position_to_byte(src, h.position),
+                hint_cols(chars, pads),
+            ))
+        })
+        .collect();
+    for v in map.values_mut() {
+        v.sort_by_key(|(c, _)| *c);
+    }
+    InlaySlots {
+        props,
+        lsp,
+        map: Rc::new(map),
+    }
+}
 
 impl Lsp {
     /// Whether inlay hints are shown (the toggle over the configured default).
@@ -142,13 +211,15 @@ impl Lsp {
         }
         let hints = self.h.inlays.get();
         let fs = f.fs * 0.9;
-        for hint in hints.iter() {
-            let at = lsp::position_to_byte(f.src, hint.position);
-            let line = f.li.line_of(f.src, at);
+        for (k, hint) in hints.iter().enumerate() {
+            let Some(Some((line, col, w, off))) = f.inlay_slots.lsp.get(k).copied() else {
+                continue;
+            };
             if !f.line_visible(line) {
                 continue;
             }
-            let (x, y) = f.xy(line, f.li.col_of(f.src, at));
+            let (x, y) = f.xy(line, col);
+            let x = x + off as f64 * f.advance;
             let mut parts: Vec<AnyWidget> = Vec::new();
             for (i, p) in hint.parts().into_iter().enumerate() {
                 let label = text(p.value.clone())
@@ -179,6 +250,7 @@ impl Lsp {
             }
             let pad = f.advance * 0.5;
             let chip = container()
+                .width(w as f64 * f.advance)
                 .padding(EdgeInsets::only(
                     if hint.padding_left { pad } else { 0.0 },
                     0.0,

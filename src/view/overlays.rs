@@ -209,8 +209,12 @@ fn selection(f: &Frame, layers: &mut Vec<AnyWidget>) {
                 if e < s || (e == s && !(extend_nl && is_last)) {
                     continue;
                 }
-                let x = f.pad_l + (s - seg.start + seg.indent) as f64 * f.advance;
-                let mut w = (e - s) as f64 * f.advance;
+                let x = if e > s {
+                    f.seg_char_x(&seg, s)
+                } else {
+                    f.seg_x(&seg, s)
+                };
+                let mut w = (f.seg_x(&seg, e) - x).max(0.0);
                 if extend_nl && is_last {
                     w += f.advance;
                 }
@@ -275,24 +279,27 @@ fn code_text(f: &Frame, layers: &mut Vec<AnyWidget>) {
                 Some((c0, c1)) => (seg.start.max(c0).min(seg.end), seg.end.min(c1)),
                 None => (seg.start, seg.end),
             };
-            // Byte range of this row's char span [cs, ce).
-            let bs = f.li.byte_at(f.src, line, cs);
-            let be = f.li.byte_at(f.src, line, ce);
-            if be <= bs {
-                continue;
+            // One run per piece between inlay hints (a single run when the line has none).
+            for (a, b) in f.inlay_pieces(line, cs, ce) {
+                // Byte range of this piece's char span [a, b).
+                let bs = f.li.byte_at(f.src, line, a);
+                let be = f.li.byte_at(f.src, line, b);
+                if be <= bs {
+                    continue;
+                }
+                let toks = slice_tokens(f.tokens, bs, be);
+                let spans = to_spans(&f.src[bs..be], &toks, f.theme, f.fs, f.font_family);
+                layers.push(
+                    Positioned::new(
+                        text_rich(spans)
+                            .line_height(f.lh as f32)
+                            .letter_spacing(f.letter_spacing as f32),
+                    )
+                    .left(f.seg_char_x(&seg, a))
+                    .top(f.row_y(row))
+                    .into_widget(),
+                );
             }
-            let toks = slice_tokens(f.tokens, bs, be);
-            let spans = to_spans(&f.src[bs..be], &toks, f.theme, f.fs, f.font_family);
-            layers.push(
-                Positioned::new(
-                    text_rich(spans)
-                        .line_height(f.lh as f32)
-                        .letter_spacing(f.letter_spacing as f32),
-                )
-                .left(f.pad_l + (cs - seg.start + seg.indent) as f64 * f.advance)
-                .top(f.row_y(row))
-                .into_widget(),
-            );
         }
     }
 }
@@ -312,32 +319,34 @@ fn whitespace(f: &Frame, layers: &mut Vec<AnyWidget>) {
                 Some((c0, c1)) => (seg.start.max(c0).min(seg.end), seg.end.min(c1)),
                 None => (seg.start, seg.end),
             };
-            let bs = f.li.byte_at(f.src, line, cs);
-            let be = f.li.byte_at(f.src, line, ce);
-            let marks: String = f.src[bs..be]
-                .chars()
-                .map(|c| match c {
-                    ' ' => '·',
-                    '\t' => '→',
-                    _ => ' ',
-                })
-                .collect();
-            if !marks.trim().is_empty() {
-                layers.push(
-                    Positioned::new(
-                        text_rich(vec![
-                            span(marks)
-                                .size(f.fs as f32)
-                                .font_family(f.font_family)
-                                .color(f.theme.whitespace),
-                        ])
-                        .line_height(f.lh as f32)
-                        .letter_spacing(f.letter_spacing as f32),
-                    )
-                    .left(f.pad_l + (cs - seg.start + seg.indent) as f64 * f.advance)
-                    .top(f.row_y(row))
-                    .into_widget(),
-                );
+            for (a, b) in f.inlay_pieces(line, cs, ce) {
+                let bs = f.li.byte_at(f.src, line, a);
+                let be = f.li.byte_at(f.src, line, b);
+                let marks: String = f.src[bs..be]
+                    .chars()
+                    .map(|c| match c {
+                        ' ' => '·',
+                        '\t' => '→',
+                        _ => ' ',
+                    })
+                    .collect();
+                if !marks.trim().is_empty() {
+                    layers.push(
+                        Positioned::new(
+                            text_rich(vec![
+                                span(marks)
+                                    .size(f.fs as f32)
+                                    .font_family(f.font_family)
+                                    .color(f.theme.whitespace),
+                            ])
+                            .line_height(f.lh as f32)
+                            .letter_spacing(f.letter_spacing as f32),
+                        )
+                        .left(f.seg_char_x(&seg, a))
+                        .top(f.row_y(row))
+                        .into_widget(),
+                    );
+                }
             }
             // ¶ at the true line end (only on the line's last segment).
             if seg.end == len {
@@ -349,7 +358,7 @@ fn whitespace(f: &Frame, layers: &mut Vec<AnyWidget>) {
                             .font_family(f.font_family)
                             .color(f.theme.whitespace),
                     )
-                    .left(f.pad_l + (len - seg.start + seg.indent) as f64 * f.advance)
+                    .left(f.seg_char_x(&seg, len))
                     .top(f.row_y(row))
                     .into_widget(),
                 );
@@ -404,8 +413,8 @@ fn diagnostics(f: &Frame, layers: &mut Vec<AnyWidget>) {
                 if e <= s && !(lo == hi && line == la) {
                     continue;
                 }
-                let x = f.pad_l + (s - seg.start + seg.indent) as f64 * f.advance;
-                let w = (e.saturating_sub(s) as f64 * f.advance).max(f.advance);
+                let x = f.seg_char_x(&seg, s);
+                let w = (f.seg_x(&seg, e) - x).max(f.advance);
                 let y = f.row_y(row);
                 if unnecessary {
                     layers.push(rect_at(
@@ -439,19 +448,20 @@ fn rect_at(x: f64, y: f64, w: f64, h: f64, color: Color) -> AnyWidget {
     .into_widget()
 }
 
-/// Inlay hints: faded inline labels anchored at a byte offset (visible window only). On the
-/// fixed grid these overlay at the column rather than reflowing the line, so they read best
-/// as end-of-line / at-boundary annotations (type hints, parameter names).
+/// Host-provided inlay hints: faded inline labels in the columns reserved for them (the
+/// display map shifts the rest of the line right, like VS Code's injected text).
 fn inlay_hints(f: &Frame, layers: &mut Vec<AnyWidget>) {
     let Some(sig) = f.p.inlay_hints else {
         return;
     };
-    for h in sig.get() {
-        let line = f.li.line_of(f.src, h.at);
+    for (k, h) in sig.get().iter().enumerate() {
+        let Some(Some((line, col, _, off))) = f.inlay_slots.props.get(k).copied() else {
+            continue;
+        };
         if !f.line_visible(line) {
             continue;
         }
-        let (x, y) = f.xy(line, f.li.col_of(f.src, h.at));
+        let (x, y) = f.xy(line, col);
         layers.push(
             Positioned::new(
                 text(h.label.clone())
@@ -460,7 +470,7 @@ fn inlay_hints(f: &Frame, layers: &mut Vec<AnyWidget>) {
                     .font_family(f.font_family)
                     .color(f.theme.muted),
             )
-            .left(x)
+            .left(x + (off as f64 + 0.25) * f.advance)
             .top(y)
             .into_widget(),
         );

@@ -82,8 +82,14 @@ pub(crate) struct Row {
     pub indent: usize,
 }
 
+/// Inline widgets that occupy space on a line (inlay hints): `line -> [(col, width_cols)]`,
+/// sorted by column. A hint at `col` is drawn just before the char at `col` (after the caret
+/// position at `col`, like VS Code's injected text), pushing the rest of the line right.
+pub(crate) type Inlays = std::collections::HashMap<usize, Vec<(usize, usize)>>;
+
 /// Buffer-line ↔ visual-row mapping for a fold set + wrap width.
 pub(crate) struct DisplayMap {
+    inlays: std::rc::Rc<Inlays>,
     rows: Vec<Row>,
     row0: Vec<usize>, // line -> index of its first row (hidden lines -> the fold head's row)
     hidden: Vec<bool>,
@@ -95,6 +101,7 @@ pub(crate) struct DisplayMap {
 impl DisplayMap {
     /// Build the map. `char_lens[line]` is that line's length in chars; `wrap_cols == 0`
     /// disables wrapping (one row per visible line).
+    #[cfg(test)]
     pub(crate) fn new(
         line_count: usize,
         folded: &BTreeSet<usize>,
@@ -103,6 +110,31 @@ impl DisplayMap {
         wrap_cols: usize,
         gaps: &[usize],
         wrap_indents: &[usize],
+    ) -> Self {
+        Self::new_with_inlays(
+            line_count,
+            folded,
+            regions,
+            char_lens,
+            wrap_cols,
+            gaps,
+            wrap_indents,
+            std::rc::Rc::new(Inlays::new()),
+        )
+    }
+
+    /// [`DisplayMap::new`] with inlay widths: they count toward the wrap width and shift
+    /// every column after them (see [`DisplayMap::place`]).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_inlays(
+        line_count: usize,
+        folded: &BTreeSet<usize>,
+        regions: &[(usize, usize)],
+        char_lens: &[usize],
+        wrap_cols: usize,
+        gaps: &[usize],
+        wrap_indents: &[usize],
+        inlays: std::rc::Rc<Inlays>,
     ) -> Self {
         let mut hidden = vec![false; line_count];
         for &(head, last) in regions {
@@ -122,7 +154,9 @@ impl DisplayMap {
             }
             row0[line] = rows.len();
             let len = char_lens.get(line).copied().unwrap_or(0);
-            if wrap_cols == 0 || len <= wrap_cols {
+            let ins = inlays.get(&line).map(|v| v.as_slice()).unwrap_or(&[]);
+            let ins_w: usize = ins.iter().filter(|(c, _)| *c < len).map(|(_, w)| w).sum();
+            if wrap_cols == 0 || len + ins_w <= wrap_cols {
                 rows.push(Row {
                     line,
                     start: 0,
@@ -140,7 +174,26 @@ impl DisplayMap {
                 let ind = if ind * 2 < wrap_cols { ind } else { 0 };
                 while s < len {
                     let width = if first { wrap_cols } else { wrap_cols - ind };
-                    let e = (s + width.max(1)).min(len);
+                    let e = if ins.is_empty() {
+                        (s + width.max(1)).min(len)
+                    } else {
+                        // Visual widths: each char is 1 column plus the hints drawn before it.
+                        let mut e = s;
+                        let mut acc = 0;
+                        while e < len {
+                            let w = 1 + ins
+                                .iter()
+                                .filter(|(c, _)| *c == e)
+                                .map(|(_, w)| w)
+                                .sum::<usize>();
+                            if e > s && acc + w > width.max(1) {
+                                break;
+                            }
+                            acc += w;
+                            e += 1;
+                        }
+                        e
+                    };
                     rows.push(Row {
                         line,
                         start: s,
@@ -166,6 +219,7 @@ impl DisplayMap {
             }
         }
         DisplayMap {
+            inlays,
             rows,
             row0,
             hidden,
@@ -182,10 +236,29 @@ impl DisplayMap {
         wrap_cols: usize,
         gaps: &[usize],
     ) -> Self {
+        Self::for_index_inlays(
+            index,
+            folded,
+            wrap_cols,
+            gaps,
+            std::rc::Rc::new(Inlays::new()),
+        )
+    }
+
+    /// [`DisplayMap::for_index`] with inlay widths (the identity fast path still applies
+    /// when nothing folds, wraps or reserves gap rows).
+    pub(crate) fn for_index_inlays(
+        index: &std::rc::Rc<crate::lines::LineIndex>,
+        folded: &BTreeSet<usize>,
+        wrap_cols: usize,
+        gaps: &[usize],
+        inlays: std::rc::Rc<Inlays>,
+    ) -> Self {
         let regions = index.regions();
         let any_fold = folded.iter().any(|h| index.is_fold_head(*h));
         if !any_fold && wrap_cols == 0 && gaps.iter().all(|g| *g == 0) {
             return DisplayMap {
+                inlays,
                 rows: Vec::new(),
                 row0: Vec::new(),
                 hidden: Vec::new(),
@@ -197,7 +270,7 @@ impl DisplayMap {
         } else {
             Vec::new()
         };
-        DisplayMap::new(
+        DisplayMap::new_with_inlays(
             index.line_count(),
             folded,
             regions,
@@ -205,7 +278,64 @@ impl DisplayMap {
             wrap_cols,
             gaps,
             &wrap_indents,
+            inlays,
         )
+    }
+
+    /// The inlays of `line` (sorted `(col, width_cols)`).
+    pub(crate) fn inlays_of(&self, line: usize) -> &[(usize, usize)] {
+        self.inlays.get(&line).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+
+    /// Total inlay width on `line` for hint columns in `[lo, hi)`.
+    fn inlay_sum(&self, line: usize, lo: usize, hi: usize) -> usize {
+        self.inlays_of(line)
+            .iter()
+            .filter(|(c, _)| *c >= lo && *c < hi)
+            .map(|(_, w)| w)
+            .sum()
+    }
+
+    /// The x column (within `row`) of the caret position at `col`: before any hint at `col`.
+    pub(crate) fn caret_xcol(&self, row: &Row, col: usize) -> usize {
+        col.saturating_sub(row.start) + self.inlay_sum(row.line, row.start, col) + row.indent
+    }
+
+    /// The x column (within `row`) where the char at `col` is drawn: after the hints at `col`.
+    pub(crate) fn char_xcol(&self, row: &Row, col: usize) -> usize {
+        col.saturating_sub(row.start) + self.inlay_sum(row.line, row.start, col + 1) + row.indent
+    }
+
+    /// Hit-test: the buffer `(line, col)` whose caret x is nearest `xcol` (fractional
+    /// columns) on display `row` — a click on a hint lands on the nearer side of it.
+    pub(crate) fn hit(
+        &self,
+        row: usize,
+        xcol: f64,
+        line_len: impl Fn(usize) -> usize,
+    ) -> (usize, usize) {
+        let r = self.row_at(row);
+        let len = line_len(r.line);
+        let end = r.end.min(len);
+        if self.inlays_of(r.line).is_empty() {
+            let c = (r.start as f64 + (xcol - r.indent as f64).max(0.0)).round() as usize;
+            return (r.line, c.min(end));
+        }
+        let mut best = (r.start, f64::MAX);
+        for c in r.start..=end {
+            let d = (self.caret_xcol(&r, c) as f64 - xcol).abs();
+            if d < best.1 {
+                best = (c, d);
+            }
+        }
+        (r.line, best.0)
+    }
+
+    #[cfg(test)]
+    /// The `(display_row, x_col)` at which the char at `(line, col)` is drawn (after hints).
+    pub(crate) fn place_char(&self, line: usize, col: usize) -> (usize, usize) {
+        let (row, _) = self.place(line, col);
+        (row, self.char_xcol(&self.row_at(row), col))
     }
 
     pub(crate) fn rows(&self) -> usize {
@@ -272,7 +402,8 @@ impl DisplayMap {
     /// Place `(line, col)` → `(display_row, x_col_within_row)` (never on a gap row).
     pub(crate) fn place(&self, line: usize, col: usize) -> (usize, usize) {
         if let Some(ix) = &self.ident {
-            return (if line < ix.line_count() { line } else { 0 }, col);
+            let line = if line < ix.line_count() { line } else { 0 };
+            return (line, col + self.inlay_sum(line, 0, col));
         }
         let mut i = self.row0.get(line).copied().unwrap_or(0);
         while i + 1 < self.rows.len()
@@ -282,12 +413,10 @@ impl DisplayMap {
         {
             i += 1;
         }
-        let (start, indent) = self
-            .rows
-            .get(i)
-            .map(|r| (r.start, r.indent))
-            .unwrap_or((0, 0));
-        (i, col.saturating_sub(start) + indent)
+        match self.rows.get(i) {
+            Some(r) => (i, self.caret_xcol(r, col)),
+            None => (i, col),
+        }
     }
 }
 
@@ -440,5 +569,65 @@ mod tests {
         assert_eq!((m.row_at(1).start, m.row_at(1).end), (10, 16));
         // Column 12 sits on row 1, drawn at x-col 4 + (12 - 10).
         assert_eq!(m.place(0, 12), (1, 6));
+    }
+
+    fn inl(v: &[(usize, usize, usize)]) -> std::rc::Rc<Inlays> {
+        let mut m = Inlays::new();
+        for &(l, c, w) in v {
+            m.entry(l).or_default().push((c, w));
+        }
+        std::rc::Rc::new(m)
+    }
+
+    #[test]
+    fn inlays_push_columns_right_caret_before_char_after() {
+        // `let x = 1;` with a 5-col hint `: i32` at col 5 (after `x`).
+        let ix = std::rc::Rc::new(crate::lines::LineIndex::build("let x = 1;\nnext"));
+        let m = DisplayMap::for_index_inlays(&ix, &folds(&[]), 0, &[], inl(&[(0, 5, 5)]));
+        assert_eq!(m.place(0, 4), (0, 4));
+        // The caret at the hint column sits before the hint...
+        assert_eq!(m.place(0, 5), (0, 5));
+        // ...the char there is drawn after it, and everything later shifts by its width.
+        assert_eq!(m.place_char(0, 5), (0, 10));
+        assert_eq!(m.place(0, 6), (0, 11));
+        assert_eq!(m.place(0, 10), (0, 15));
+        // Other lines are untouched.
+        assert_eq!(m.place(1, 2), (1, 2));
+    }
+
+    #[test]
+    fn inlay_hit_testing_maps_around_hints() {
+        let ix = std::rc::Rc::new(crate::lines::LineIndex::build("let x = 1;"));
+        let m = DisplayMap::for_index_inlays(&ix, &folds(&[]), 0, &[], inl(&[(0, 5, 5)]));
+        let len = |_| 10;
+        assert_eq!(m.hit(0, 3.0, len), (0, 3));
+        // Clicks on the hint snap to its nearer side.
+        assert_eq!(m.hit(0, 6.0, len), (0, 5));
+        assert_eq!(m.hit(0, 9.6, len), (0, 6));
+        // Past the hint: shifted back by its width.
+        assert_eq!(m.hit(0, 13.0, len), (0, 8));
+        assert_eq!(m.hit(0, 99.0, len), (0, 10));
+    }
+
+    #[test]
+    fn inlays_count_toward_soft_wrap() {
+        // 12 chars, wrap at 10, a 4-col hint at col 2: visual width 16 -> wraps at col 6.
+        let m = DisplayMap::new_with_inlays(
+            1,
+            &folds(&[]),
+            &[],
+            &[12],
+            10,
+            &[],
+            &[],
+            inl(&[(0, 2, 4)]),
+        );
+        assert_eq!(m.rows(), 2);
+        assert_eq!((m.row_at(0).start, m.row_at(0).end), (0, 6));
+        assert_eq!(m.place(0, 6), (1, 0));
+        assert_eq!(m.place(0, 3), (0, 7));
+        // Without the hint the same line wraps at col 10.
+        let plain = DisplayMap::new(1, &folds(&[]), &[], &[12], 10, &[], &[]);
+        assert_eq!(plain.row_at(0).end, 10);
     }
 }
