@@ -2799,7 +2799,16 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     }
                 })
                 .into_widget();
-            let scroller = sticky::overlay(&frame, scroller, scroll_top);
+            let jump_v = vscroll.clone();
+            let on_jump: Rc<dyn Fn(usize, f64)> = Rc::new(move |at: usize, t: f64| {
+                let cur = state.peek();
+                state.set(EditorState {
+                    doc: cur.doc.clone(),
+                    selection: Selections::single(Selection::caret(at)),
+                });
+                jump_v.to(t.min(jump_v.handle.max()), scroll_top);
+            });
+            let scroller = sticky::overlay(&frame, scroller, scroll_top, scroll_left, on_jump);
             let scroller = match content_w.and_then(|cw| {
                 scrollbar::horizontal(theme, hscroll.clone(), scroll_left, cw, h_view, hbar)
             }) {

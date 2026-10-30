@@ -15,11 +15,7 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
     if !f.p.gutter {
         return content;
     }
-    let digits = f.line_count.to_string().len().max(2);
-    let arrow_w = 14.0;
-    // The breakpoint area (glyph margin), when the host binds breakpoints.
-    let bp_w = glyph_margin_w(f.p, f.line_px);
-    let gutter_w = digits as f64 * f.advance + 22.0 + arrow_w + bp_w;
+    let (gutter_w, arrow_w, bp_w) = (width(f), ARROW_W, glyph_margin_w(f.p, f.line_px));
     let breakpoints = f.p.breakpoints.map(|s| (s, s.get()));
 
     // The most-severe diagnostic / extension marker per line (drives the gutter dot).
@@ -179,35 +175,11 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
                     .into_widget(),
             );
         }
-        let active = n == f.cl;
         nums.push(
-            Positioned::new(
-                container()
-                    .width(gutter_w - arrow_w - 6.0 - bp_w)
-                    .height(f.line_px)
-                    .alignment(Alignment::CENTER_RIGHT)
-                    .child(
-                        text(match f.p.line_numbers {
-                            crate::config::LineNumbers::On => (n + 1).to_string(),
-                            crate::config::LineNumbers::Relative if n == f.cl => {
-                                (n + 1).to_string()
-                            }
-                            crate::config::LineNumbers::Relative => n.abs_diff(f.cl).to_string(),
-                            crate::config::LineNumbers::Off => String::new(),
-                        })
-                        .size(f.fs as f32)
-                        .line_height(f.lh as f32)
-                        .font_family(f.font_family)
-                        .color(if active {
-                            f.theme.gutter_active_fg
-                        } else {
-                            f.theme.gutter_fg
-                        }),
-                    ),
-            )
-            .left(bp_w)
-            .top(y)
-            .into_widget(),
+            Positioned::new(number_cell(f, n))
+                .left(bp_w)
+                .top(y)
+                .into_widget(),
         );
     }
     // The code-action lightbulb on the caret line (click opens the menu); the quick-fix
@@ -247,6 +219,44 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
         .into_widget();
     row(children![gutter_col, expanded(content)])
         .cross_axis_alignment(CrossAxisAlignment::Start)
+        .into_widget()
+}
+
+/// The fold-arrow column at the gutter's right edge.
+pub(crate) const ARROW_W: f64 = 14.0;
+
+/// The gutter's full width: line numbers (at least 2 digits), the fold arrows and the
+/// breakpoint area (glyph margin) when bound. Sticky-scroll rows reuse it so their numbers
+/// line up with the real gutter's.
+pub(crate) fn width(f: &Frame) -> f64 {
+    let digits = f.line_count.to_string().len().max(2);
+    digits as f64 * f.advance + 22.0 + ARROW_W + glyph_margin_w(f.p, f.line_px)
+}
+
+/// The line-number cell of `line` (right-aligned, the gutter's text style); placed at
+/// `left = glyph_margin_w`. Shared by the gutter and the sticky-scroll rows.
+pub(crate) fn number_cell(f: &Frame, line: usize) -> AnyWidget {
+    let active = line == f.cl;
+    container()
+        .width(width(f) - ARROW_W - 6.0 - glyph_margin_w(f.p, f.line_px))
+        .height(f.line_px)
+        .alignment(Alignment::CENTER_RIGHT)
+        .child(
+            text(match f.p.line_numbers {
+                crate::config::LineNumbers::On => (line + 1).to_string(),
+                crate::config::LineNumbers::Relative if line == f.cl => (line + 1).to_string(),
+                crate::config::LineNumbers::Relative => line.abs_diff(f.cl).to_string(),
+                crate::config::LineNumbers::Off => String::new(),
+            })
+            .size(f.fs as f32)
+            .line_height(f.lh as f32)
+            .font_family(f.font_family)
+            .color(if active {
+                f.theme.gutter_active_fg
+            } else {
+                f.theme.gutter_fg
+            }),
+        )
         .into_widget()
 }
 

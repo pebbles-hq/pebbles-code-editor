@@ -606,16 +606,18 @@ fn sticky_scroll_pins_and_navigates_to_scopes() {
     let deep = v_offset(&ui);
     assert!(deep > 300.0, "scrolled deep into the block");
     // The enclosing scopes are pinned at the top as a pointer barrier: a click on the pinned
-    // header area is absorbed, so it does NOT move the caret in the content hidden behind it
-    // (which would jerk the viewport). Without sticky, the click would land in the content.
+    // header does NOT reach the content hidden behind it; it reveals the header's own line
+    // (VS Code), scrolling `fn outer() {` (row 0) back to the viewport top.
     ui.dispatch_pointer_down(Offset::new(40.0, 8.0));
-    for _ in 0..2 {
+    ui.dispatch_tap(Offset::new(40.0, 8.0));
+    for _ in 0..3 {
         ui.rebuild_if_dirty();
         ui.layout(&mut env, win);
     }
+    let after = v_offset(&ui);
     assert!(
-        (v_offset(&ui) - deep).abs() < 2.0,
-        "click on the pinned scope header was absorbed (content undisturbed)"
+        after < deep - 300.0 && after <= 12.0,
+        "click on the pinned header revealed its line: {deep} -> {after}"
     );
 }
 
