@@ -79,6 +79,8 @@ pub(crate) struct Env {
     pub(crate) inline: Signal<Option<crate::view::InlineGhost>>,
     pub(crate) tab_focus: Signal<bool>,
     pub(crate) overtype: Signal<bool>,
+    /// The language name (for Emmet).
+    pub(crate) lang_name: String,
     pub(crate) inline_provider: Option<crate::providers::InlineSuggestionProvider>,
 }
 
@@ -442,6 +444,7 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
             env.inline.set(Some(g));
             true
         }
+        C::EmmetExpand => emmet_expand(env),
         C::ToggleTabFocusMode => {
             env.tab_focus.set(!env.tab_focus.peek());
             true
@@ -677,4 +680,30 @@ fn run_fold(cmd: C, env: &Env, src: &str, line: usize, sels: &Selections) {
         });
     }
     env.folds.set(f);
+}
+
+/// Expand the Emmet abbreviation before the primary caret; false when there is none.
+pub(crate) fn emmet_expand(env: &Env) -> bool {
+    let st = env.state.peek();
+    let pr = st.primary();
+    if !pr.is_empty() || st.selection.is_multi() {
+        return false;
+    }
+    let src = st.text();
+    let Some((start, text, off)) =
+        crate::emmet::expand_at(&src, pr.head, &env.lang_name, &env.ops.tab)
+    else {
+        return false;
+    };
+    dispatch(
+        env.state,
+        env.history,
+        env.code,
+        Transaction::change_and_select(
+            crate::edit::ChangeSet::replace(start, pr.head, text),
+            Selections::single(Selection::caret(start + off)),
+        ),
+        Coalesce::Never,
+    );
+    true
 }

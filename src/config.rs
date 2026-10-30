@@ -113,6 +113,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         controller: None,
         suggest_preview: false,
         format_on_paste: false,
+        emmet: false,
         inline_diff: false,
         diff_original_of: None,
         diff_align: false,
@@ -205,6 +206,7 @@ pub struct CodeEditor {
     inline_suggestions: Option<crate::providers::InlineSuggestionProvider>,
     suggest_preview: bool,
     format_on_paste: bool,
+    emmet: bool,
     inline_diff: bool,
     diff_original_of: Option<Signal<String>>,
     diff_align: bool,
@@ -597,6 +599,12 @@ impl CodeEditor {
         self.format_on_paste = v;
         self
     }
+    /// Tab expands Emmet abbreviations in HTML / CSS (VS Code `emmet.triggerExpansionOnTab`,
+    /// default off). The "Emmet: Expand Abbreviation" command works regardless.
+    pub fn emmet(mut self, v: bool) -> Self {
+        self.emmet = v;
+        self
+    }
     /// Inline diff view against [`diff_base`](Self::diff_base): removed base lines are shown
     /// as red rows above their position and changed words are highlighted (VS Code's inline
     /// diff editor). See [`diff_editor`](crate::diff_editor) for side-by-side.
@@ -706,6 +714,7 @@ pub(crate) struct Props {
     pub(crate) inline_suggestions: Option<crate::providers::InlineSuggestionProvider>,
     pub(crate) suggest_preview: bool,
     pub(crate) format_on_paste: bool,
+    pub(crate) emmet: bool,
     pub(crate) inline_diff: bool,
     pub(crate) diff_original_of: Option<Signal<String>>,
     pub(crate) diff_align: bool,
@@ -799,6 +808,7 @@ impl From<CodeEditor> for Props {
             controller: e.controller,
             suggest_preview: e.suggest_preview,
             format_on_paste: e.format_on_paste,
+            emmet: e.emmet,
             inline_diff: e.inline_diff,
             diff_original_of: e.diff_original_of,
             diff_align: e.diff_align,

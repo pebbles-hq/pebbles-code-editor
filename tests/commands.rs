@@ -503,3 +503,27 @@ fn overtype_and_tab_focus_modes() {
     h.key(KeyInput::Indent);
     assert_ne!(h.code.get(), "-aZZd\nxQR");
 }
+
+#[test]
+fn emmet_expands_on_tab_and_via_the_palette_command() {
+    let mut h = harness_cfg("", Keymap::new(), |e| {
+        e.language(pebbles_code_editor::lang::by_name("html"))
+            .emmet(true)
+    });
+    h.typ("ul>li*2");
+    h.key(KeyInput::Escape);
+    h.key(KeyInput::Indent);
+    assert_eq!(h.code.get(), "<ul>\n    <li></li>\n    <li></li>\n</ul>");
+    // The caret sits inside the first <li>.
+    h.typ("x");
+    assert!(h.code.get().contains("<li>x</li>"));
+    // Without Tab expansion, the command still expands (CSS here).
+    let mut h = harness_cfg("", Keymap::new(), |e| {
+        e.language(pebbles_code_editor::lang::by_name("css"))
+    });
+    h.typ("m10");
+    h.key(KeyInput::Escape);
+    h.ctrl.run_command(EditorCommand::EmmetExpand);
+    h.frame();
+    assert_eq!(h.code.get(), "margin: 10px;");
+}

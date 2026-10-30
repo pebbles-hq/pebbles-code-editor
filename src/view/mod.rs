@@ -470,6 +470,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         inline,
         tab_focus,
         overtype,
+        lang_name: p
+            .language
+            .as_ref()
+            .map_or_else(String::new, |l| l.name().to_string()),
         inline_provider: p.inline_suggestions.clone(),
     };
     // Raw-key command resolver: runs BEFORE the framework maps the key to an editing intent,
@@ -541,6 +545,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         let definition = p.definition.clone();
         let format = p.format.clone();
         let format_on_paste = p.format_on_paste;
+        let emmet_tab = p.emmet;
+        let emmet_env = cmd_env.clone();
         let sig_provider = p.signature.clone();
         let ro_exts = p.extensions.clone(); // for read-only-range veto
         // Register as a *code* editor so the shell routes Tab/Shift+Tab here (indent/outdent)
@@ -571,6 +577,16 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             }
             if !preedit.peek().is_empty() {
                 preedit.set(String::new());
+            }
+            // Emmet: Tab expands an abbreviation (VS Code `emmet.triggerExpansionOnTab`).
+            if emmet_tab
+                && !read_only
+                && matches!(k, KeyInput::Indent)
+                && completion.peek().is_none()
+                && inline.peek().is_none()
+                && commands::emmet_expand(&emmet_env)
+            {
+                return true;
             }
             // Tab focus mode (Ctrl+M): Tab / Shift+Tab bubble so focus traversal moves on.
             if tab_focus.peek() && matches!(k, KeyInput::Indent | KeyInput::Outdent) {

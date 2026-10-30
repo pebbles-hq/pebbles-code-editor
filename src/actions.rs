@@ -226,6 +226,8 @@ commands! {
     ToggleTabFocusMode => "editor.action.toggleTabFocusMode", "Toggle Tab Key Moves Focus", ["Ctrl+M"];
     /// Toggle overtype mode: typed characters replace the character after the caret.
     ToggleOvertype => "editor.action.toggleOvertypeInsertMode", "Toggle Overtype/Insert Mode", ["Insert"];
+    /// Expand the Emmet abbreviation before the caret (HTML / CSS).
+    EmmetExpand => "editor.emmet.action.expandAbbreviation", "Emmet: Expand Abbreviation", [];
     /// Show the next inline suggestion.
     InlineSuggestNext => "editor.action.inlineSuggest.showNext", "Show Next Inline Suggestion", ["Alt+]"];
     /// Show the previous inline suggestion.

@@ -44,6 +44,7 @@
 
 pub mod actions;
 pub mod edit;
+mod emmet;
 pub mod extensions;
 pub mod keymap;
 pub mod lang;
@@ -74,6 +75,7 @@ pub use controller::{EditorController, editor_controller};
 pub use diff::{ChangeHunk, ChangeKind};
 pub use diff_editor::{DiffEditor, DiffSideConfig, diff_editor};
 pub use edit::{ChangeSet, EditorState, History, Selection, Selections, Transaction};
+pub use emmet::{expand_css, expand_html};
 pub use extensions::{
     BlockWidget, Command, ConfigPatch, DecoStyle, Decoration, EditContext, Extension, GutterMark,
     Snapshot, extension,
