@@ -17,6 +17,32 @@ use crate::edit::{
 };
 use crate::geometry::*;
 
+thread_local! {
+    /// The change sets dispatched while [`record`] runs (snippet sessions map their stops
+    /// through every edit a key causes).
+    static LOG: RefCell<Option<Vec<crate::edit::ChangeSet>>> = const { RefCell::new(None) };
+}
+
+/// Run `f`, returning the change sets it dispatched.
+pub(crate) fn record<R>(f: impl FnOnce() -> R) -> (R, Vec<crate::edit::ChangeSet>) {
+    let outer = LOG.with(|l| l.borrow_mut().replace(Vec::new()));
+    let r = f();
+    let log = LOG
+        .with(|l| std::mem::replace(&mut *l.borrow_mut(), outer))
+        .unwrap_or_default();
+    (r, log)
+}
+
+/// Forget the change sets recorded so far (an edit that created state already in the new
+/// coordinates, e.g. a snippet insertion starting its session).
+pub(crate) fn clear_recorded() {
+    LOG.with(|l| {
+        if let Some(v) = l.borrow_mut().as_mut() {
+            v.clear();
+        }
+    });
+}
+
 /// The single mutation path: apply `tx` to the state, record its inverse for undo (edits
 /// only), and keep the public `code` signal in sync with the document.
 pub(crate) fn dispatch(
@@ -29,6 +55,11 @@ pub(crate) fn dispatch(
     let cur = state.peek();
     let (next, inverse) = cur.apply(&tx);
     if tx.is_edit() {
+        LOG.with(|l| {
+            if let Some(v) = l.borrow_mut().as_mut() {
+                v.push(tx.changes.clone());
+            }
+        });
         history
             .peek()
             .borrow_mut()

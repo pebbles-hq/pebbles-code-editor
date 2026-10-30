@@ -279,6 +279,7 @@ pub(crate) struct Completer {
     pub(crate) resolve_gate: RequestGate,
     pub(crate) uri: String,
     pub(crate) triggers: Vec<String>,
+    pub(crate) line_comment: Option<String>,
 }
 
 impl Completer {
@@ -395,6 +396,7 @@ pub(crate) fn accept(
     goal: Signal<usize>,
     session: Signal<Option<Session>>,
     completer: &Completer,
+    snippet: Signal<Option<crate::snippet::SnippetSession>>,
 ) {
     let Some(s) = session.peek() else { return };
     let Some(item) = s.current().cloned() else {
@@ -415,113 +417,88 @@ pub(crate) fn accept(
     // The range was computed when the list arrived; cover what was typed since.
     let (a, b) = (a.min(caret), b.max(caret));
     let raw = item.new_text();
-    let (text, caret_off) = if item.insert_text_format == lsp::InsertTextFormat::Snippet {
-        expand_snippet(raw)
-    } else {
-        (raw.to_string(), raw.len())
-    };
-    let mut changes = vec![Change {
-        from: a,
-        to: b,
-        insert: text,
-    }];
-    let mut shift = 0isize;
-    for e in &item.additional_text_edits {
-        let (x, y) = lsp::range_to_bytes(&src, e.range);
-        if y <= a {
-            shift += e.new_text.len() as isize - (y - x) as isize;
-        } else if x < b {
-            continue; // overlaps the main edit: invalid per LSP, skip
+    let extra: Vec<Change> = item
+        .additional_text_edits
+        .iter()
+        .map(|e| {
+            let (x, y) = lsp::range_to_bytes(&src, e.range);
+            Change {
+                from: x,
+                to: y,
+                insert: e.new_text.clone(),
+            }
+        })
+        .collect();
+    if item.insert_text_format == lsp::InsertTextFormat::Snippet {
+        crate::snippet::insert(
+            state,
+            history,
+            code,
+            snippet,
+            a,
+            b,
+            raw,
+            extra,
+            &crate::snippet::InsertOpts {
+                uri: &completer.uri,
+                line_comment: completer.line_comment.as_deref(),
+                adjust_indent: true,
+            },
+        );
+        if let Some(sn) = snippet.peek() {
+            open_choices(session, sn.stop());
         }
-        changes.push(Change {
-            from: x,
-            to: y,
-            insert: e.new_text.clone(),
-        });
+    } else {
+        let mut changes = vec![Change {
+            from: a,
+            to: b,
+            insert: raw.to_string(),
+        }];
+        let mut shift = 0isize;
+        for c in extra {
+            if c.to <= a {
+                shift += c.insert.len() as isize - (c.to - c.from) as isize;
+            } else if c.from < b {
+                continue; // overlaps the main edit: invalid per LSP, skip
+            }
+            changes.push(c);
+        }
+        let at = (a as isize + shift) as usize + raw.len();
+        dispatch(
+            state,
+            history,
+            code,
+            Transaction::change_and_select(
+                ChangeSet::from_changes(changes),
+                Selections::single(Selection::caret(at)),
+            ),
+            Coalesce::Never,
+        );
     }
-    let at = (a as isize + shift) as usize + caret_off;
-    dispatch(
-        state,
-        history,
-        code,
-        Transaction::change_and_select(
-            ChangeSet::from_changes(changes),
-            Selections::single(Selection::caret(at)),
-        ),
-        Coalesce::Never,
-    );
     goal.set(col_of(&state.peek().text(), state.peek().primary().head));
     if let (Some(cmd), Some(h)) = (&item.command, &completer.host) {
         h.execute_command(cmd);
     }
 }
 
-/// Expand a snippet body: `${N:default}` → `default`, `$N` → "", and the caret lands at the
-/// first `$1`/`${1:…}` (else `$0`, else the end). Returns `(text, caret_byte_offset)`.
-fn expand_snippet(insert: &str) -> (String, usize) {
-    if !insert.contains('$') {
-        let len = insert.len();
-        return (insert.to_string(), len);
+/// Offer a snippet choice stop's options (`${1|a,b|}`) as a pick list over the stop.
+pub(crate) fn open_choices(session: Signal<Option<Session>>, stop: &crate::snippet::Stop) {
+    if stop.choices.len() < 2 {
+        return;
     }
-    let mut out = String::with_capacity(insert.len());
-    let mut stops: Vec<(u32, usize)> = Vec::new(); // (tabstop number, byte offset in `out`)
-    let mut chars = insert.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c != '$' {
-            out.push(c);
-            continue;
-        }
-        // `${N:default}`
-        if chars.peek() == Some(&'{') {
-            chars.next();
-            let mut num = String::new();
-            while let Some(&d) = chars.peek() {
-                if d.is_ascii_digit() {
-                    num.push(d);
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-            if chars.peek() == Some(&':') {
-                chars.next();
-            }
-            if let Ok(n) = num.parse::<u32>() {
-                stops.push((n, out.len()));
-            }
-            for d in chars.by_ref() {
-                if d == '}' {
-                    break;
-                }
-                out.push(d);
-            }
-        } else {
-            // `$N`
-            let mut num = String::new();
-            while let Some(&d) = chars.peek() {
-                if d.is_ascii_digit() {
-                    num.push(d);
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-            if let Ok(n) = num.parse::<u32>() {
-                stops.push((n, out.len()));
-            } else {
-                out.push('$');
-            }
-        }
-    }
-    // Prefer $1 (first non-zero), else $0, else end of text.
-    let caret = stops
+    let items: Vec<lsp::CompletionItem> = stop
+        .choices
         .iter()
-        .filter(|(n, _)| *n > 0)
-        .min_by_key(|(n, _)| *n)
-        .or_else(|| stops.iter().find(|(n, _)| *n == 0))
-        .map(|(_, off)| *off)
-        .unwrap_or(out.len());
-    (out, caret)
+        .map(|c| lsp::CompletionItem::new(c.clone(), lsp::CompletionItemKind::Value))
+        .collect();
+    session.set(Some(Session {
+        all: Rc::new(items.clone()),
+        hits: vec![Vec::new(); items.len()],
+        items,
+        selected: 0,
+        anchor: stop.ranges[0].0,
+        incomplete: false,
+    }));
 }
 
 /// The tabler icon and color for a completion kind (VS Code's symbol colors, from the theme).
@@ -707,25 +684,6 @@ pub(crate) fn popup(s: &Session, f: &crate::view::Frame) -> AnyWidget {
     .left(x)
     .top(y)
     .into_widget()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn snippet_caret_and_placeholders() {
-        // caret at $1, placeholder rendered, $0 ignored when $1 present
-        let (text, caret) = expand_snippet("if ${1:cond} {\n\t$0\n}");
-        assert_eq!(text, "if cond {\n\t\n}");
-        assert_eq!(&text[caret..caret + 4], "cond");
-        // no tabstops → caret at end
-        let (t2, c2) = expand_snippet("println!");
-        assert_eq!((t2.as_str(), c2), ("println!", 8));
-        // bare $0 → caret there
-        let (t3, c3) = expand_snippet("()$0");
-        assert_eq!((t3.as_str(), c3), ("()", 2));
-    }
 }
 
 #[cfg(test)]

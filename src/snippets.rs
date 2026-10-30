@@ -217,17 +217,6 @@ pub fn builtin_snippets(language: &str) -> Vec<Snippet> {
     }
 }
 
-/// Indent a snippet body for insertion at `cursor`: `\t` becomes one indent `unit` and
-/// every continuation line gets the caret line's leading whitespace.
-pub(crate) fn indent_body(body: &str, src: &str, cursor: usize, unit: &str) -> String {
-    let ls = src[..cursor].rfind('\n').map_or(0, |i| i + 1);
-    let lead: String = src[ls..]
-        .chars()
-        .take_while(|c| *c == ' ' || *c == '\t')
-        .collect();
-    body.replace('\t', unit).replace('\n', &format!("\n{lead}"))
-}
-
 /// Wrap `base` (the host provider, word completion, or none) so `snippets` are offered too.
 pub(crate) fn with_snippets(
     base: Option<CompletionProvider>,
@@ -241,7 +230,7 @@ pub(crate) fn with_snippets(
         let mut items = base.as_ref().map(|b| b(cx)).unwrap_or_default();
         items.extend(snippets.iter().map(|s| {
             CompletionItem::new(s.prefix.clone(), CompletionKind::Snippet)
-                .insert(indent_body(&s.body, cx.src, cx.cursor, &unit))
+                .insert(s.body.replace('\t', &unit))
                 .detail(s.description.clone())
         }));
         items
@@ -260,12 +249,5 @@ mod tests {
             assert!(!builtin_snippets(l).is_empty(), "{l}");
         }
         assert!(builtin_snippets("Plain Text").is_empty());
-    }
-
-    #[test]
-    fn body_is_indented_like_the_caret_line() {
-        let src = "fn a() {\n    if";
-        let out = indent_body("if x {\n\t$0\n}", src, src.len(), "    ");
-        assert_eq!(out, "if x {\n        $0\n    }");
     }
 }

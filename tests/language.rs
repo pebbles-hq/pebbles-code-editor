@@ -266,3 +266,138 @@ fn old_providers_still_complete_through_the_adapter() {
     h.frames(1);
     assert_eq!(code.get(), "println");
 }
+
+fn snippet_editor(code: Signal<String>, snips: Vec<pebbles_code_editor::Snippet>) -> Harness {
+    let mut h = Harness::new().window(900.0, 500.0);
+    h.mount_widget(
+        code_editor(code)
+            .snippets(snips)
+            .document_uri("file:///w/src/main.rs")
+            .word_based_suggestions(false)
+            .builtin_snippets(false)
+            .height(400.0)
+            .autofocus(),
+    );
+    h.frames(3);
+    h
+}
+
+#[test]
+fn snippet_session_mirrors_choices_tab_stops_and_final_stop() {
+    use pebbles_code_editor::Snippet;
+    let code = create_root_signal(String::new());
+    let mut h = snippet_editor(
+        code,
+        vec![Snippet::new(
+            "tag",
+            "<${1:div}>${2|alpha,beta,gamma|}</$1>$0",
+            "Tag",
+        )],
+    );
+    typ(&mut h, "tag");
+    h.key(KeyInput::Enter);
+    h.frames(1);
+    assert_eq!(code.get(), "<div>alpha</div>");
+    // The placeholder is selected and its mirror has a cursor: typing renames both.
+    typ(&mut h, "span");
+    assert_eq!(code.get(), "<span>alpha</span>");
+    // Tab: the choice stop, with its options offered.
+    h.key(KeyInput::Indent);
+    h.frames(1);
+    assert!(h.find_text("gamma"), "choice list open");
+    h.key(KeyInput::Move {
+        motion: Motion::Down,
+        extend: false,
+    });
+    h.key(KeyInput::Enter);
+    h.frames(1);
+    assert_eq!(code.get(), "<span>beta</span>");
+    // Tab: the final stop ends the session with the caret after the snippet.
+    h.key(KeyInput::Indent);
+    typ(&mut h, "!");
+    assert_eq!(code.get(), "<span>beta</span>!");
+    // Session over: Tab indents again.
+    h.key(KeyInput::Indent);
+    h.frames(1);
+    assert_ne!(code.get(), "<span>beta</span>!");
+}
+
+#[test]
+fn snippet_shift_tab_nested_placeholders_and_escape() {
+    use pebbles_code_editor::Snippet;
+    let code = create_root_signal(String::new());
+    let mut h = snippet_editor(
+        code,
+        vec![
+            Snippet::new("call", "${1:foo(${2:bar})} ${3:baz}", "Call"),
+            Snippet::new("pair", "${1:a} ${2:b}", "Pair"),
+        ],
+    );
+    typ(&mut h, "call");
+    h.key(KeyInput::Enter);
+    h.frames(1);
+    assert_eq!(code.get(), "foo(bar) baz");
+    h.key(KeyInput::Indent); // nested $2
+    typ(&mut h, "x");
+    assert_eq!(code.get(), "foo(x) baz");
+    h.key(KeyInput::Indent); // $3
+    h.key(KeyInput::Outdent); // back to $2
+    typ(&mut h, "y");
+    assert_eq!(code.get(), "foo(y) baz");
+    // Esc leaves the session: Tab no longer jumps (it indents).
+    h.key(KeyInput::Escape);
+    h.key(KeyInput::Indent);
+    h.frames(1);
+    assert_ne!(code.get(), "foo(y) baz");
+    assert!(code.get().starts_with("foo(y"));
+}
+
+#[test]
+fn lsp_snippet_completion_resolves_variables_and_selects_the_placeholder() {
+    let code = create_root_signal(String::new());
+    let lsp = Rc::new(Lsp {
+        items: vec![
+            CompletionItem::new("todo", CompletionItemKind::Snippet)
+                .snippet("// ${TM_FILENAME}: ${1:what} ($CURRENT_YEAR)"),
+        ],
+        ..Default::default()
+    });
+    let mut h = mount(code, lsp.clone());
+    typ(&mut h, "todo");
+    let n = lsp.pending.borrow().len();
+    lsp.deliver(&mut h, n - 1);
+    h.key(KeyInput::Enter);
+    h.frames(1);
+    let year = code.get();
+    assert!(year.starts_with("// main.rs: what ("), "{year}");
+    typ(&mut h, "fix");
+    assert!(
+        code.get().starts_with("// main.rs: fix ("),
+        "{}",
+        code.get()
+    );
+}
+
+#[test]
+fn emmet_expansion_tabs_through_its_slots() {
+    let code = create_root_signal(String::new());
+    let mut h = Harness::new().window(900.0, 500.0);
+    h.mount_widget(
+        code_editor(code)
+            .language(pebbles_code_editor::lang::by_name("html"))
+            .emmet(true)
+            .word_based_suggestions(false)
+            .builtin_snippets(false)
+            .height(400.0)
+            .autofocus(),
+    );
+    h.frames(3);
+    typ(&mut h, "a");
+    h.key(KeyInput::Indent);
+    h.frames(1);
+    assert_eq!(code.get(), "<a href=\"\"></a>");
+    typ(&mut h, "u");
+    h.key(KeyInput::Indent);
+    typ(&mut h, "t");
+    assert_eq!(code.get(), "<a href=\"u\">t</a>");
+}

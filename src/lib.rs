@@ -65,6 +65,7 @@ mod lines;
 mod ops;
 mod scan_text;
 mod search;
+mod snippet;
 mod snippets;
 mod theme;
 mod view;

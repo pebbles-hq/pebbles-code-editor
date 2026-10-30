@@ -356,6 +356,52 @@ pub(crate) fn expand_at(
     Some((start, indented, caret_off))
 }
 
+/// [`expand_at`] as a snippet body: every empty attribute value and element body becomes a
+/// tab stop (`$1`, `$2`, …) so Tab walks through them; for CSS the caret slot is `$0`.
+/// Returns `(start, body)`.
+pub(crate) fn expand_at_snippet(
+    src: &str,
+    caret: usize,
+    language: &str,
+    unit: &str,
+) -> Option<(usize, String)> {
+    let (start, text, off) = expand_at(src, caret, language, unit)?;
+    let esc = |s: &str| {
+        s.replace('\\', "\\\\")
+            .replace('$', "\\$")
+            .replace('}', "\\}")
+    };
+    let html = !matches!(
+        language.to_ascii_lowercase().as_str(),
+        "css" | "scss" | "less"
+    );
+    let mut slots: Vec<usize> = Vec::new();
+    if html {
+        slots.extend(text.match_indices("\"\"").map(|(i, _)| i + 1));
+        slots.extend(text.match_indices("></").map(|(i, _)| i + 1));
+        slots.sort_unstable();
+    }
+    let mut body = String::new();
+    let mut at = 0;
+    if slots.is_empty() {
+        if off < text.len() {
+            body.push_str(&esc(&text[..off]));
+            body.push_str("$0");
+            body.push_str(&esc(&text[off..]));
+        } else {
+            body.push_str(&esc(&text));
+        }
+        return Some((start, body));
+    }
+    for (k, &s) in slots.iter().enumerate() {
+        body.push_str(&esc(&text[at..s]));
+        body.push_str(&format!("${}", k + 1));
+        at = s;
+    }
+    body.push_str(&esc(&text[at..]));
+    Some((start, body))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -395,6 +441,17 @@ mod tests {
         assert_eq!(expand_css("df").unwrap().0, "display: flex;");
         assert_eq!(expand_css("c"), Some(("color: ;".to_string(), 7)));
         assert!(expand_css("zz9").is_none());
+    }
+
+    #[test]
+    fn emmet_expansions_become_snippets_with_tab_stops() {
+        let (st, body) = expand_at_snippet("x a", 3, "html", "  ").unwrap();
+        assert_eq!(st, 2);
+        assert_eq!(body, "<a href=\"$1\">$2</a>");
+        let (_, body) = expand_at_snippet("ul>li*2", 7, "html", "  ").unwrap();
+        assert_eq!(body, "<ul>\n  <li>$1</li>\n  <li>$2</li>\n</ul>");
+        let (_, body) = expand_at_snippet("df", 2, "css", "  ").unwrap();
+        assert_eq!(body, "display: flex;");
     }
 
     #[test]

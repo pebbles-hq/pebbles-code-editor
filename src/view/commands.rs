@@ -82,6 +82,10 @@ pub(crate) struct Env {
     /// The language name (for Emmet).
     pub(crate) lang_name: String,
     pub(crate) inline_provider: Option<crate::providers::InlineSuggestionProvider>,
+    /// The live snippet session (Emmet expansions start one).
+    pub(crate) snippet: Signal<Option<crate::snippet::SnippetSession>>,
+    /// The document URI (snippet variables).
+    pub(crate) doc_uri: String,
 }
 
 /// Whether `cmd` edits the document (vetoed in read-only mode).
@@ -690,20 +694,25 @@ pub(crate) fn emmet_expand(env: &Env) -> bool {
         return false;
     }
     let src = st.text();
-    let Some((start, text, off)) =
-        crate::emmet::expand_at(&src, pr.head, &env.lang_name, &env.ops.tab)
+    let Some((start, body)) =
+        crate::emmet::expand_at_snippet(&src, pr.head, &env.lang_name, &env.ops.tab)
     else {
         return false;
     };
-    dispatch(
+    crate::snippet::insert(
         env.state,
         env.history,
         env.code,
-        Transaction::change_and_select(
-            crate::edit::ChangeSet::replace(start, pr.head, text),
-            Selections::single(Selection::caret(start + off)),
-        ),
-        Coalesce::Never,
+        env.snippet,
+        start,
+        pr.head,
+        &body,
+        Vec::new(),
+        &crate::snippet::InsertOpts {
+            uri: &env.doc_uri,
+            line_comment: None,
+            adjust_indent: false,
+        },
     );
     true
 }

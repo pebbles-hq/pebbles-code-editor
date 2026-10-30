@@ -297,6 +297,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let scroll_left = create_signal(0.0_f64); // live horizontal offset (long-line clipping)
     let completion = create_signal::<Option<completion::Session>>(None); // autocomplete popup
     // Stale-reply gates for completion / resolve requests (persist across re-renders).
+    // The live snippet session (tab stops), if any.
+    let snippet = create_signal::<Option<crate::snippet::SnippetSession>>(None);
     let completion_gates = create_signal((
         crate::language::RequestGate::new(),
         crate::language::RequestGate::new(),
@@ -501,6 +503,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             .as_ref()
             .map_or_else(String::new, |l| l.name().to_string()),
         inline_provider: p.inline_suggestions.clone(),
+        snippet,
+        doc_uri: p.document_uri.clone(),
     };
     // Raw-key command resolver: runs BEFORE the framework maps the key to an editing intent,
     // so editor chords (Alt+Up, Ctrl+Shift+K, Ctrl+K Ctrl+0, …) win over caret motion.
@@ -580,6 +584,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             gate: completion_gates.peek().0,
             resolve_gate: completion_gates.peek().1,
             uri: p.document_uri.clone(),
+            line_comment: p
+                .language
+                .as_ref()
+                .and_then(|l| l.line_comment().map(str::to_string)),
         });
         let inline_provider = p.inline_suggestions.clone();
         let definition = p.definition.clone();
@@ -600,7 +608,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     "HTML" | "XML" | "TSX" | "JavaScript" | "Markdown" | "Vue" | "Svelte"
                 )
             });
-        let handle = Rc::new(move |k: KeyInput, via_binding: bool| -> bool {
+        let inner = move |k: KeyInput, via_binding: bool| -> bool {
             // A built-in whose default chord the host disabled is declined, so the key
             // bubbles to the app's shortcuts. (A host `Keymap::bind` chord still runs it.)
             if !via_binding
@@ -624,6 +632,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 && matches!(k, KeyInput::Indent)
                 && completion.peek().is_none()
                 && inline.peek().is_none()
+                && snippet.peek().is_none()
                 && commands::emmet_expand(&emmet_env)
             {
                 return true;
@@ -745,7 +754,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                         return true;
                     }
                     KeyInput::Enter | KeyInput::Indent => {
-                        completion::accept(state, history, code, goal, completion, &completer);
+                        completion::accept(
+                            state, history, code, goal, completion, &completer, snippet,
+                        );
                         return true;
                     }
                     // A commit character accepts the item, then is typed as usual.
@@ -755,10 +766,30 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                                 .current()
                                 .is_some_and(|it| it.commit_characters.iter().any(|c| c == t)) =>
                     {
-                        completion::accept(state, history, code, goal, completion, &completer);
+                        completion::accept(
+                            state, history, code, goal, completion, &completer, snippet,
+                        );
                     }
                     KeyInput::Escape => {
                         completion.set(None);
+                        return true;
+                    }
+                    _ => {}
+                }
+            }
+            // A live snippet: Tab / Shift+Tab move between its stops, Esc leaves it.
+            if snippet.peek().is_some() {
+                match k {
+                    KeyInput::Indent | KeyInput::Outdent => {
+                        let fwd = matches!(k, KeyInput::Indent);
+                        if let Some(stop) = crate::snippet::jump(state, snippet, fwd) {
+                            completion::open_choices(completion, &stop);
+                        }
+                        goal.set(col_of(&state.peek().text(), state.peek().primary().head));
+                        return true;
+                    }
+                    KeyInput::Escape => {
+                        snippet.set(None);
                         return true;
                     }
                     _ => {}
@@ -1125,6 +1156,16 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 _ => {}
             }
             true
+        };
+        // Every key runs with its edits recorded, so a live snippet session can map its tab
+        // stops through them (and end when the caret leaves the snippet).
+        let handle = Rc::new(move |k: KeyInput, via_binding: bool| -> bool {
+            if snippet.peek().is_none() {
+                return inner(k, via_binding);
+            }
+            let (handled, log) = crate::commands::record(|| inner(k, via_binding));
+            crate::snippet::after_key(state, snippet, &log);
+            handled
         });
         {
             let h = handle.clone();
