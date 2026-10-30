@@ -29,6 +29,10 @@ pub(crate) struct State {
     pub(crate) regex: Signal<bool>,
     /// Index of the "current" match within the match list.
     pub(crate) idx: Signal<usize>,
+    /// Find in Selection: the byte range searched (None = whole document).
+    pub(crate) scope: Signal<Option<(usize, usize)>>,
+    /// Preserve Case on replace.
+    pub(crate) preserve: Signal<bool>,
 }
 
 impl State {
@@ -111,6 +115,7 @@ pub(crate) fn bar(
     // ---- find row ----
     let query_field = text_field()
         .placeholder("Find")
+        .bind(st.query)
         .bare(false)
         .autofocus()
         .on_changed(move |s| {
@@ -168,6 +173,47 @@ pub(crate) fn bar(
         toggle_chip(st.word.peek(), "W", st.word),
         gap_w(4.0),
         toggle_chip(st.regex.peek(), ".*", st.regex),
+        gap_w(4.0),
+        {
+            // Find in Selection: scope the search to the current selection.
+            let ui2 = theme.clone();
+            toggle(
+                st.scope.peek().is_some(),
+                ui2.ui_text("≡", -0.5).weight(600.0).color(fg),
+            )
+            .variant(ToggleVariant::Outline)
+            .size(ToggleSize::Sm)
+            .on_changed(move || {
+                if st.scope.peek().is_some() {
+                    st.scope.set(None);
+                } else {
+                    let p = state.peek().primary();
+                    if !p.is_empty() {
+                        st.scope.set(Some((p.min(), p.max())));
+                    }
+                }
+                st.idx.set(0);
+            })
+            .into_widget()
+        },
+        gap_w(4.0),
+        {
+            // Select All Matches (Alt+Enter in VS Code): one cursor per match.
+            let m_sel = matches.clone();
+            icon_button(IconKind::Check).size(16.0).on_pressed(move || {
+                if m_sel.is_empty() {
+                    return;
+                }
+                let doc = state.peek().doc.clone();
+                let ranges = m_sel.iter().map(|&(a, b)| Selection::range(a, b)).collect();
+                state.set(EditorState {
+                    doc,
+                    selection: Selections::new(ranges, 0),
+                });
+                st.open.set(0);
+                focus.request_focus();
+            })
+        },
         gap_w(6.0),
         icon_button(IconKind::Close).size(16.0).on_pressed(move || {
             st.open.set(0);
@@ -183,12 +229,23 @@ pub(crate) fn bar(
     if st.open.peek() == 2 {
         let replace_field = text_field()
             .placeholder("Replace")
+            .bind(st.replace)
             .bare(false)
             .on_changed(move |s| st.replace.set(s.to_string()));
         let m_one = matches.clone();
         let m_all = matches.clone();
+        let fg2 = theme.foreground;
+        let ui3 = theme.clone();
         let replace_row = row(children![
             expanded(replace_field),
+            gap_w(6.0),
+            toggle(
+                st.preserve.peek(),
+                ui3.ui_text("AB", -0.5).weight(600.0).color(fg2)
+            )
+            .variant(ToggleVariant::Outline)
+            .size(ToggleSize::Sm)
+            .on_changed(move || st.preserve.set(!st.preserve.peek())),
             gap_w(6.0),
             button("Replace")
                 .size(ButtonSize::Sm)
@@ -196,7 +253,15 @@ pub(crate) fn bar(
                 .on_pressed(move || {
                     let i = st.idx.peek().min(m_one.len().saturating_sub(1));
                     if let Some(&(a, b)) = m_one.get(i) {
-                        let rep = st.replace.peek();
+                        let src = state.peek().text();
+                        let rep = crate::search::replacement(
+                            &src,
+                            (a, b),
+                            &st.query.peek(),
+                            &st.replace.peek(),
+                            &st.options(),
+                            st.preserve.peek(),
+                        );
                         dispatch(
                             state,
                             history,
@@ -218,13 +283,19 @@ pub(crate) fn bar(
                     if m_all.is_empty() {
                         return;
                     }
-                    let rep = st.replace.peek();
+                    let src = state.peek().text();
+                    let (q, r, o, pc) = (
+                        st.query.peek(),
+                        st.replace.peek(),
+                        st.options(),
+                        st.preserve.peek(),
+                    );
                     let changes: Vec<Change> = m_all
                         .iter()
                         .map(|&(a, b)| Change {
                             from: a,
                             to: b,
-                            insert: rep.clone(),
+                            insert: crate::search::replacement(&src, (a, b), &q, &r, &o, pc),
                         })
                         .collect();
                     dispatch(

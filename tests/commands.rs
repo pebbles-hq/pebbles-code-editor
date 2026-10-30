@@ -346,3 +346,18 @@ fn syntax_folding_uses_the_parse_tree() {
     h.press("Ctrl+Shift+[");
     assert!(h.folds.get().contains(&1), "{:?}", h.folds.get());
 }
+
+#[test]
+fn find_seeds_from_word_and_f3_cycles_matches() {
+    let mut h = harness("foo bar foo baz foo");
+    h.caret(0, 1);
+    // F3 with an empty query seeds from the word under the caret, then cycles.
+    assert!(h.press("F3"));
+    assert_eq!(h.pos(), (0, 11));
+    h.press("F3");
+    assert_eq!(h.pos(), (0, 19));
+    h.press("F3");
+    assert_eq!(h.pos(), (0, 3)); // wrapped
+    h.press("Shift+F3"); // previous from the first match wraps to the last one
+    assert_eq!(h.pos(), (0, 19));
+}

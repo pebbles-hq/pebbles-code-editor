@@ -186,6 +186,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         word: create_signal(false),
         regex: create_signal(false),
         idx: create_signal(0usize),
+        scope: create_signal(None),
+        preserve: create_signal(false),
     };
     let palette = extensions::Palette {
         open: create_signal(false),
@@ -454,14 +456,31 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             match &k {
                 // Find / replace: open the bar (it autofocuses its query field). Escape (while
                 // the editor is focused) closes it.
-                KeyInput::Find => {
-                    find.open.set(1);
-                    // Release focus so the bar's query field (autofocus) can take it.
-                    pebbles::core::focus::set_focus(None);
-                    return true;
-                }
-                KeyInput::Replace => {
-                    find.open.set(2);
+                KeyInput::Find | KeyInput::Replace => {
+                    // Seed the query from a single-line selection (or the word at the caret),
+                    // and scope to a multi-line selection (VS Code `seedSearchStringFromSelection`
+                    // + `autoFindInSelection: multiline`).
+                    let st = state.peek();
+                    let pr = st.primary();
+                    let text = st.text();
+                    if !pr.is_empty() {
+                        let sel = &text[pr.min()..pr.max()];
+                        if sel.contains('\n') {
+                            find.scope.set(Some((pr.min(), pr.max())));
+                        } else {
+                            find.query.set(sel.to_string());
+                            find.scope.set(None);
+                        }
+                    } else {
+                        let (a, b) = word_at(&text, pr.head);
+                        if b > a {
+                            find.query.set(text[a..b].to_string());
+                        }
+                        find.scope.set(None);
+                    }
+                    find.idx.set(0);
+                    find.open
+                        .set(if matches!(k, KeyInput::Replace) { 2 } else { 1 });
                     pebbles::core::focus::set_focus(None);
                     return true;
                 }
@@ -1145,16 +1164,17 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // below and driven by the find bar's navigation/replace actions.
     let search_matches: Vec<(usize, usize)> = if find.open.get() > 0 {
         // Read the option signals so a toggle re-runs the search.
-        let (q, _, _, _) = (
+        let (q, _, _, _, scope) = (
             find.query.get(),
             find.case.get(),
             find.word.get(),
             find.regex.get(),
+            find.scope.get(),
         );
         if q.is_empty() {
             Vec::new()
         } else {
-            crate::search::find_all(&src, &q, &find.options())
+            crate::search::in_scope(crate::search::find_all(&src, &q, &find.options()), scope)
         }
     } else {
         Vec::new()

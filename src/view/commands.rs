@@ -465,7 +465,6 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
                 None => true,
             }
         }
-        _ => false,
     }
 }
 

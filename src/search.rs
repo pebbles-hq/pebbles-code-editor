@@ -84,6 +84,78 @@ fn regex_matches(src: &str, pattern: &str, opts: &Options) -> Vec<(usize, usize)
         .collect()
 }
 
+/// Keep only matches fully inside `scope` (Find in Selection).
+pub(crate) fn in_scope(
+    matches: Vec<(usize, usize)>,
+    scope: Option<(usize, usize)>,
+) -> Vec<(usize, usize)> {
+    match scope {
+        Some((a, b)) => matches
+            .into_iter()
+            .filter(|&(s, e)| s >= a && e <= b)
+            .collect(),
+        None => matches,
+    }
+}
+
+/// Apply the case pattern of `matched` to `rep` (VS Code "Preserve Case"): all-upper →
+/// upper, all-lower → lower, Capitalized → capitalized; mixed leaves `rep` unchanged.
+pub(crate) fn preserve_case(matched: &str, rep: &str) -> String {
+    let letters: Vec<char> = matched.chars().filter(|c| c.is_alphabetic()).collect();
+    if letters.is_empty() {
+        return rep.to_string();
+    }
+    if letters.iter().all(|c| c.is_uppercase()) && letters.len() > 1 {
+        return rep.to_uppercase();
+    }
+    if letters.iter().all(|c| c.is_lowercase()) {
+        return rep.to_lowercase();
+    }
+    if letters[0].is_uppercase() && letters[1..].iter().all(|c| c.is_lowercase()) {
+        let mut cs = rep.chars();
+        return match cs.next() {
+            Some(f) => f.to_uppercase().chain(cs).collect(),
+            None => String::new(),
+        };
+    }
+    rep.to_string()
+}
+
+/// The replacement text for one match: regex mode expands `$1` / `${name}` capture groups
+/// (and `\n`/`\t` escapes, as VS Code does); preserve-case adapts the result's case.
+pub(crate) fn replacement(
+    src: &str,
+    m: (usize, usize),
+    query: &str,
+    rep: &str,
+    opts: &Options,
+    preserve: bool,
+) -> String {
+    let matched = src.get(m.0..m.1).unwrap_or("");
+    let mut out = rep.to_string();
+    if opts.regex {
+        let pattern = if opts.whole_word {
+            format!(r"\b(?:{query})\b")
+        } else {
+            query.to_string()
+        };
+        if let Ok(re) = regex::RegexBuilder::new(&pattern)
+            .case_insensitive(!opts.case_sensitive)
+            .build()
+            && let Some(caps) = re.captures(matched)
+        {
+            let unescaped = rep.replace("\\n", "\n").replace("\\t", "\t");
+            let mut s = String::new();
+            caps.expand(&unescaped, &mut s);
+            out = s;
+        }
+    }
+    if preserve {
+        out = preserve_case(matched, &out);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,5 +203,31 @@ mod tests {
         // overlapping (0,2),(1,3),(2,4) an advance-by-first-char scan would produce.
         let m = find_all("aaaa", "aa", &opts(true, false, false));
         assert_eq!(m, vec![(0, 2), (2, 4)]);
+    }
+
+    #[test]
+    fn find_in_selection_and_preserve_case_and_captures() {
+        let src = "foo Foo FOO foo";
+        let m = find_all(src, "foo", &opts(false, false, false));
+        assert_eq!(in_scope(m.clone(), Some((4, 11))), vec![(4, 7), (8, 11)]);
+        assert_eq!(preserve_case("Foo", "bar"), "Bar");
+        assert_eq!(preserve_case("FOO", "bar"), "BAR");
+        assert_eq!(preserve_case("foo", "Bar"), "bar");
+        let o = opts(true, false, true);
+        assert_eq!(
+            replacement("ab12", (0, 4), r"([a-z]+)(\d+)", "$2-$1", &o, false),
+            "12-ab"
+        );
+        assert_eq!(
+            replacement(
+                "Foo",
+                (0, 3),
+                "foo",
+                "bar",
+                &opts(false, false, false),
+                true
+            ),
+            "Bar"
+        );
     }
 }
