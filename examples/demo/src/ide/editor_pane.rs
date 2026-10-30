@@ -4,7 +4,7 @@
 
 use pebbles::prelude::*;
 use pebbles_code_editor::{
-    BlockWidget, Command, Decoration, Extension, GutterMark, code_editor, extension,
+    BlockWidget, Command, Decoration, Extension, GutterMark, code_editor, diff_editor, extension,
 };
 
 use super::providers;
@@ -103,6 +103,11 @@ pub fn pane(ws: Workspace, s: Settings, height: f64) -> AnyWidget {
         .initial_scroll(scroll.peek())
         .on_scroll(move |px| scroll.set(px))
         .folds(f.folds)
+        .breakpoints(f.breakpoints)
+        .smooth_scrolling(true)
+        .suggest_preview(true)
+        .emmet(true)
+        .format_on_paste(true)
         .diff_base(f.saved) // inline diff of unsaved edits (git-gutter style)
         .height(height.max(120.0))
         .font_size(s.font_size.get())
@@ -128,6 +133,14 @@ pub fn pane(ws: Workspace, s: Settings, height: f64) -> AnyWidget {
         .format(providers::format());
     if s.plugins.get() {
         editor = editor.extensions(sample_extensions());
+    }
+    if s.diff_view.get() {
+        // VS Code's diff editor: saved (left, read-only) vs. the buffer (right).
+        let l = lang;
+        let diff = diff_editor(f.saved, code)
+            .height(height.max(120.0))
+            .configure(move |e| e.language(providers::lang_for(l)));
+        return container().color(c.background).child(diff).into_widget();
     }
 
     container().color(c.background).child(editor).into_widget()

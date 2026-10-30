@@ -16,6 +16,8 @@ pub struct Settings {
     pub plugins: Signal<bool>,
     pub relaxed: Signal<bool>,
     pub wrap: Signal<bool>,
+    /// Show unsaved edits in a side-by-side diff editor instead of the plain editor.
+    pub diff_view: Signal<bool>,
     pub font_size: Signal<f64>,
 }
 
@@ -30,6 +32,7 @@ impl Settings {
             plugins: create_signal(true),
             relaxed: create_signal(false),
             wrap: create_signal(false),
+            diff_view: create_signal(false),
             font_size: create_signal(13.5),
         }
     }
@@ -109,6 +112,12 @@ pub fn panel(s: Settings) -> AnyWidget {
         sw(s.wrap, "Word wrap", "wrap long lines to width"),
         gap_h(12.0),
         sw(s.relaxed, "Relaxed spacing", "taller lines + tracking"),
+        gap_h(12.0),
+        sw(
+            s.diff_view,
+            "Diff view",
+            "side-by-side diff of unsaved edits"
+        ),
         gap_h(20.0),
         section("Extensions"),
         sw(s.plugins, "Plugins", "TODO highlight, bookmarks, commands"),

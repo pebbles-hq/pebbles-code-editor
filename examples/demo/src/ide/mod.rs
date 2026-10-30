@@ -65,6 +65,7 @@ pub fn ide() -> AnyWidget {
                     inlays,
                     scroll: create_signal(0.0),
                     folds: create_signal(std::collections::BTreeSet::new()),
+                    breakpoints: create_signal(std::collections::BTreeSet::new()),
                 }
             })
             .collect(),
