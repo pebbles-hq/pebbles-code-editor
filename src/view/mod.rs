@@ -1095,6 +1095,16 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 _ => None,
             };
             let is_escape = matches!(k, KeyInput::Escape);
+            // Escape with nothing left to dismiss (no popup / peek / snippet above already
+            // took it, no signature help, a single empty caret) is declined so it bubbles to
+            // the app's shortcuts (VS Code: `editorHasSelection`/`hasMultipleSelections`-gated
+            // Escape bindings, otherwise the key reaches the workbench).
+            if is_escape && lsp_k.h.sig.peek().is_none() {
+                let st = state.peek();
+                if !st.selection.is_multi() && st.primary().is_empty() {
+                    return false;
+                }
+            }
             // Read-only veto: if an editing key would touch a range an extension marked
             // read-only, drop it (checked against the primary selection/caret).
             let editing = matches!(

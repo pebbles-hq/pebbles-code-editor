@@ -1886,3 +1886,45 @@ fn suggestion_preview_shows_ghost_text_and_tab_accepts() {
     key(&mut ui, &mut env, KeyInput::Indent);
     assert_eq!(code.get(), "println");
 }
+
+#[test]
+fn escape_bubbles_only_when_nothing_is_left_to_dismiss() {
+    let (mut ui, mut env, code) = mouse_harness("abc");
+    click(&mut ui, &mut env, at(0, 0));
+    pebbles::core::keyboard::set_modifiers(false, false, true, false);
+    click(&mut ui, &mut env, at(0, 3));
+    pebbles::core::keyboard::set_modifiers(false, false, false, false);
+    // First Escape collapses the multi-cursor: consumed.
+    assert!(
+        ui.dispatch_key(KeyInput::Escape),
+        "multi-cursor dismissal consumes Escape"
+    );
+    ui.rebuild_if_dirty();
+    ui.layout(&mut env, Size::new(600.0, 400.0));
+    // Nothing left to dismiss: declined, so it reaches app shortcuts.
+    assert!(!ui.dispatch_key(KeyInput::Escape), "bare Escape bubbles");
+    // A selection is dismissed first (consumed), then Escape bubbles again.
+    key(&mut ui, &mut env, KeyInput::SelectAll);
+    assert!(
+        ui.dispatch_key(KeyInput::Escape),
+        "selection dismissal consumes Escape"
+    );
+    ui.rebuild_if_dirty();
+    ui.layout(&mut env, Size::new(600.0, 400.0));
+    assert!(!ui.dispatch_key(KeyInput::Escape));
+    assert_eq!(code.get(), "abc");
+}
+
+#[test]
+fn escape_closes_the_inline_suggestion_before_bubbling() {
+    let (mut ui, mut env, _code) = inline_harness();
+    key(&mut ui, &mut env, KeyInput::Insert("f".to_string()));
+    key(&mut ui, &mut env, KeyInput::Insert("n".to_string()));
+    assert!(
+        ui.dispatch_key(KeyInput::Escape),
+        "ghost text dismissal consumes Escape"
+    );
+    ui.rebuild_if_dirty();
+    ui.layout(&mut env, Size::new(600.0, 400.0));
+    assert!(!ui.dispatch_key(KeyInput::Escape), "then Escape bubbles");
+}
