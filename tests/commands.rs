@@ -479,3 +479,27 @@ fn smooth_scrolling_animates_page_scrolls() {
     assert!(end > before + 300.0, "{before} -> {mid} -> {end}");
     assert!(mid > before && mid < end, "{before} -> {mid} -> {end}");
 }
+
+#[test]
+fn overtype_and_tab_focus_modes() {
+    let mut h = harness("abcd\nxy");
+    h.caret(0, 1);
+    assert!(h.press("Insert"));
+    h.typ("ZZ");
+    assert_eq!(h.code.get(), "aZZd\nxy");
+    // Never past the end of the line.
+    h.caret(1, 1);
+    h.typ("QR");
+    assert_eq!(h.code.get(), "aZZd\nxQR");
+    assert!(h.press("Insert"));
+    h.caret(0, 0);
+    h.typ("-");
+    assert_eq!(h.code.get(), "-aZZd\nxQR");
+    // Ctrl+M: Tab no longer indents (it bubbles for focus traversal).
+    assert!(h.press("Ctrl+M"));
+    h.key(KeyInput::Indent);
+    assert_eq!(h.code.get(), "-aZZd\nxQR");
+    assert!(h.press("Ctrl+M"));
+    h.key(KeyInput::Indent);
+    assert_ne!(h.code.get(), "-aZZd\nxQR");
+}

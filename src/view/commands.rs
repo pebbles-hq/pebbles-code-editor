@@ -77,6 +77,8 @@ pub(crate) struct Env {
     pub(crate) ops: Rc<OpCfg>,
     pub(crate) line_cache: Signal<Rc<RefCell<crate::lines::LineCache>>>,
     pub(crate) inline: Signal<Option<crate::view::InlineGhost>>,
+    pub(crate) tab_focus: Signal<bool>,
+    pub(crate) overtype: Signal<bool>,
     pub(crate) inline_provider: Option<crate::providers::InlineSuggestionProvider>,
 }
 
@@ -438,6 +440,14 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
                 (g.idx + n - 1) % n
             };
             env.inline.set(Some(g));
+            true
+        }
+        C::ToggleTabFocusMode => {
+            env.tab_focus.set(!env.tab_focus.peek());
+            true
+        }
+        C::ToggleOvertype => {
+            env.overtype.set(!env.overtype.peek());
             true
         }
         C::InlineSuggestTrigger => {

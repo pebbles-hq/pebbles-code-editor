@@ -468,7 +468,12 @@ fn carets(f: &Frame, layers: &mut Vec<AnyWidget>) {
             y += f.caret_offset.1;
         }
         let h = f.fs * 1.15;
-        let (w, hh, top, deco) = match f.p.cursor_style {
+        let style = if f.overtype {
+            S::Block
+        } else {
+            f.p.cursor_style
+        };
+        let (w, hh, top, deco) = match style {
             S::Line => (
                 2.0,
                 h * scale,

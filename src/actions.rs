@@ -222,6 +222,10 @@ commands! {
     NextChange => "editor.action.dirtydiff.next", "Go to Next Change", ["Alt+F3"];
     /// Go to the previous change.
     PreviousChange => "editor.action.dirtydiff.previous", "Go to Previous Change", ["Shift+Alt+F3"];
+    /// Toggle whether Tab inserts a tab or moves focus out of the editor (accessibility).
+    ToggleTabFocusMode => "editor.action.toggleTabFocusMode", "Toggle Tab Key Moves Focus", ["Ctrl+M"];
+    /// Toggle overtype mode: typed characters replace the character after the caret.
+    ToggleOvertype => "editor.action.toggleOvertypeInsertMode", "Toggle Overtype/Insert Mode", ["Insert"];
     /// Show the next inline suggestion.
     InlineSuggestNext => "editor.action.inlineSuggest.showNext", "Show Next Inline Suggestion", ["Alt+]"];
     /// Show the previous inline suggestion.

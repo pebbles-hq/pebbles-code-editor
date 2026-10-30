@@ -79,6 +79,8 @@ pub(crate) struct Frame<'a> {
     pub(crate) caret_offset: (f64, f64),
     /// Linked editing applies to this language.
     pub(crate) linked_editing_active: bool,
+    /// Overtype mode is on (the caret draws as a block, VS Code `editor.overtypeCursorStyle`).
+    pub(crate) overtype: bool,
     /// The colour-picker anchor (byte of the colour literal being edited).
     pub(crate) color_picker: Signal<Option<usize>>,
     /// The open change-peek hunk (gutter change bars set it).
@@ -317,6 +319,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let change_peek = create_signal::<Option<usize>>(None); // open change-peek hunk index
     let mid_anchor = create_signal::<Option<Offset>>(None); // middle-button box-select anchor
     let inline = create_signal::<Option<InlineGhost>>(None); // inline (ghost-text) suggestion
+    let tab_focus = create_signal(false); // Ctrl+M: Tab moves focus instead of indenting
+    let overtype = create_signal(false); // Insert: overtype mode
     let color_draft = create_signal(String::new()); // colour-picker hex field
     let zoom = create_signal(0.0_f64);
     let cursor_hist = create_signal(Rc::new(RefCell::new(commands::CursorHistory::default())));
@@ -464,6 +468,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         ops: ops_cfg,
         line_cache,
         inline,
+        tab_focus,
+        overtype,
         inline_provider: p.inline_suggestions.clone(),
     };
     // Raw-key command resolver: runs BEFORE the framework maps the key to an editing intent,
@@ -565,6 +571,68 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             }
             if !preedit.peek().is_empty() {
                 preedit.set(String::new());
+            }
+            // Tab focus mode (Ctrl+M): Tab / Shift+Tab bubble so focus traversal moves on.
+            if tab_focus.peek() && matches!(k, KeyInput::Indent | KeyInput::Outdent) {
+                return false;
+            }
+            // Overtype: typed text replaces the chars after each caret (never past the end
+            // of its line); a selection is replaced as usual. One typing undo step.
+            if overtype.peek()
+                && !read_only
+                && let KeyInput::Insert(t) = &k
+                && !t.is_empty()
+                && !t.contains('\n')
+            {
+                let st = state.peek();
+                let text = st.text();
+                let n = t.chars().count();
+                let mut spans: Vec<(usize, usize)> = st
+                    .selection
+                    .ranges()
+                    .iter()
+                    .map(|r| {
+                        if !r.is_empty() {
+                            return (r.min(), r.max());
+                        }
+                        let mut e = r.head;
+                        for c in text[r.head..].chars().take(n) {
+                            if c == '\n' {
+                                break;
+                            }
+                            e += c.len_utf8();
+                        }
+                        (r.head, e)
+                    })
+                    .collect();
+                spans.sort_unstable();
+                let mut delta = 0isize;
+                let mut carets = Vec::new();
+                for &(a, b) in &spans {
+                    let at = (a as isize + delta) as usize + t.len();
+                    carets.push(Selection::caret(at));
+                    delta += t.len() as isize - (b - a) as isize;
+                }
+                let cs = ChangeSet::from_changes(
+                    spans
+                        .iter()
+                        .map(|&(a, b)| crate::edit::Change {
+                            from: a,
+                            to: b,
+                            insert: t.clone(),
+                        })
+                        .collect(),
+                );
+                let pi = st.selection.primary_index().min(carets.len() - 1);
+                dispatch(
+                    state,
+                    history,
+                    code,
+                    Transaction::change_and_select(cs, Selections::new(carets, pi)),
+                    Coalesce::Typing,
+                );
+                goal.set(col_of(&state.peek().text(), state.peek().primary().head));
+                return true;
             }
             // Inline (ghost-text) suggestion: Tab accepts, Escape dismisses, Alt+] / Alt+[
             // (raw commands) cycle; any other key closes it and may re-query below.
@@ -1609,6 +1677,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         caret_phase,
         caret_offset,
         focused,
+        overtype: overtype.get(),
         linked_editing_active: p.linked_editing
             && p.language.as_ref().is_some_and(|l| {
                 matches!(
