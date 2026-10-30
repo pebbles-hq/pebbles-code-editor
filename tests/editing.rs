@@ -303,6 +303,52 @@ fn find_bar_opens_and_captures_typing() {
     );
 }
 
+/// A raw chord the way the shell delivers it: the focused node's raw key handler first,
+/// then (if ignored) the editing intent.
+fn shell_chord(ui: &mut Ui, env: &mut TextEnv, c: &str) {
+    let ev = pebbles::core::shortcuts::chord_event(c).unwrap();
+    if ui.dispatch_key_event(&ev) == KeyEventResult::Ignored
+        && let Some(k) = ev.intent()
+    {
+        ui.dispatch_key(k);
+    }
+    ui.rebuild_if_dirty();
+    ui.layout(env, Size::new(600.0, 400.0));
+}
+
+#[test]
+fn find_escape_closes_and_returns_focus_to_the_editor() {
+    let (mut ui, mut env, code) = harness("foo bar foo baz");
+    key(&mut ui, &mut env, KeyInput::Find);
+    key(&mut ui, &mut env, KeyInput::Insert("bar".to_string()));
+    shell_chord(&mut ui, &mut env, "Enter");
+    shell_chord(&mut ui, &mut env, "Escape");
+    // VS Code: the keyboard is back in the editor, with the match selected.
+    key(&mut ui, &mut env, KeyInput::Insert("X".to_string()));
+    assert_eq!(code.get(), "foo X foo baz");
+}
+
+#[test]
+fn find_alt_enter_selects_all_matches() {
+    let (mut ui, mut env, code) = harness("foo bar foo baz");
+    key(&mut ui, &mut env, KeyInput::Find);
+    key(&mut ui, &mut env, KeyInput::Insert("foo".to_string()));
+    shell_chord(&mut ui, &mut env, "Alt+Enter");
+    key(&mut ui, &mut env, KeyInput::Insert("X".to_string()));
+    assert_eq!(code.get(), "X bar X baz");
+}
+
+#[test]
+fn replace_ctrl_alt_enter_replaces_all_and_alt_c_toggles_case() {
+    let (mut ui, mut env, code) = harness("foo bar Foo baz");
+    key(&mut ui, &mut env, KeyInput::Replace);
+    key(&mut ui, &mut env, KeyInput::Insert("foo".to_string()));
+    // Alt+C: match case, so only the lowercase "foo" goes.
+    shell_chord(&mut ui, &mut env, "Alt+C");
+    shell_chord(&mut ui, &mut env, "Ctrl+Alt+Enter");
+    assert_eq!(code.get(), " bar Foo baz");
+}
+
 #[test]
 fn replace_bar_opens() {
     let (mut ui, mut env, _code) = harness("x");

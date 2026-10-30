@@ -115,6 +115,178 @@ pub(crate) fn bar(
         }
     };
 
+    // The widget's actions, shared by its buttons and its keyboard bindings.
+    let next: Rc<dyn Fn()> = {
+        let ms = matches.clone();
+        Rc::new(move || {
+            if !ms.is_empty() {
+                go(&ms, (st.idx.peek() + 1) % ms.len());
+            }
+        })
+    };
+    let prev: Rc<dyn Fn()> = {
+        let ms = matches.clone();
+        Rc::new(move || {
+            if !ms.is_empty() {
+                go(&ms, (st.idx.peek() + ms.len() - 1) % ms.len());
+            }
+        })
+    };
+    // Close the widget and give the keyboard back to the editor (VS Code).
+    let close: Rc<dyn Fn()> = Rc::new(move || {
+        st.open.set(0);
+        focus.request_focus();
+    });
+    // Select All Matches (Alt+Enter in VS Code): one cursor per match.
+    let select_all: Rc<dyn Fn()> = {
+        let ms = matches.clone();
+        Rc::new(move || {
+            if ms.is_empty() {
+                return;
+            }
+            let doc = state.peek().doc.clone();
+            let ranges = ms.iter().map(|&(a, b)| Selection::range(a, b)).collect();
+            state.set(EditorState {
+                doc,
+                selection: Selections::new(ranges, 0),
+            });
+            st.open.set(0);
+            focus.request_focus();
+        })
+    };
+    let toggle_scope: Rc<dyn Fn()> = Rc::new(move || {
+        if st.scope.peek().is_some() {
+            st.scope.set(None);
+        } else {
+            let p = state.peek().primary();
+            if !p.is_empty() {
+                st.scope.set(Some((p.min(), p.max())));
+            }
+        }
+        st.idx.set(0);
+    });
+    let replace_one: Rc<dyn Fn()> = {
+        let ms = matches.clone();
+        Rc::new(move || {
+            let i = st.idx.peek().min(ms.len().saturating_sub(1));
+            if let Some(&(a, b)) = ms.get(i) {
+                let src = state.peek().text();
+                let rep = crate::search::replacement(
+                    &src,
+                    (a, b),
+                    &st.query.peek(),
+                    &st.replace.peek(),
+                    &st.options(),
+                    st.preserve.peek(),
+                );
+                dispatch(
+                    state,
+                    history,
+                    code,
+                    Transaction::change_and_select(
+                        ChangeSet::replace(a, b, rep.clone()),
+                        Selections::single(Selection::caret(a + rep.len())),
+                    ),
+                    Coalesce::Never,
+                );
+                goal.set(col_of(&state.peek().text(), state.peek().primary().head));
+            }
+        })
+    };
+    let replace_all: Rc<dyn Fn()> = {
+        let ms = matches.clone();
+        Rc::new(move || {
+            if ms.is_empty() {
+                return;
+            }
+            let src = state.peek().text();
+            let (q, r, o, pc) = (
+                st.query.peek(),
+                st.replace.peek(),
+                st.options(),
+                st.preserve.peek(),
+            );
+            let changes: Vec<Change> = ms
+                .iter()
+                .map(|&(a, b)| Change {
+                    from: a,
+                    to: b,
+                    insert: crate::search::replacement(&src, (a, b), &q, &r, &o, pc),
+                })
+                .collect();
+            dispatch(
+                state,
+                history,
+                code,
+                Transaction::change(ChangeSet::from_changes(changes)),
+                Coalesce::Never,
+            );
+        })
+    };
+    let replacing = st.open.peek() == 2;
+    // VS Code's find-widget keybindings, live while either field is focused. `in_replace`:
+    // Enter replaces one there instead of moving to the next match.
+    let keys = {
+        let (next, prev, close, select_all) = (next.clone(), prev.clone(), close.clone(), select_all.clone());
+        let (toggle_scope, replace_one, replace_all) =
+            (toggle_scope.clone(), replace_one.clone(), replace_all.clone());
+        move |in_replace: bool| {
+            let (next, prev, close, select_all) = (next.clone(), prev.clone(), close.clone(), select_all.clone());
+            let (toggle_scope, replace_one, replace_all) =
+                (toggle_scope.clone(), replace_one.clone(), replace_all.clone());
+            move |ev: &KeyEvent| -> KeyEventResult {
+                if !ev.is_press() {
+                    return KeyEventResult::Ignored;
+                }
+                let m = ev.mods;
+                let cmd = m.ctrl || (cfg!(target_os = "macos") && m.meta);
+                let flip = |sig: Signal<bool>| {
+                    sig.set(!sig.peek());
+                    st.idx.set(0);
+                };
+                match ev.shortcut_key() {
+                    Some(ShortcutKey::Escape) if !cmd && !m.alt && !m.shift => close(),
+                    Some(ShortcutKey::Enter) if cmd && m.alt && !m.shift => {
+                        if replacing {
+                            replace_all();
+                        }
+                    }
+                    Some(ShortcutKey::Enter) if m.alt && !cmd && !m.shift => select_all(),
+                    Some(ShortcutKey::Enter) if m.shift && !cmd && !m.alt => prev(),
+                    Some(ShortcutKey::Enter) if !m.shift && !cmd && !m.alt => {
+                        if in_replace {
+                            replace_one();
+                        } else {
+                            next();
+                        }
+                    }
+                    Some(ShortcutKey::F(3)) if !cmd && !m.alt => {
+                        if m.shift {
+                            prev();
+                        } else {
+                            next();
+                        }
+                    }
+                    _ if cmd && m.shift && !m.alt && ev.physical.code() == "Digit1" => {
+                        if replacing {
+                            replace_one();
+                        }
+                    }
+                    Some(ShortcutKey::Char(c)) if m.alt && !cmd && !m.shift => match c {
+                        'c' => flip(st.case),
+                        'w' => flip(st.word),
+                        'r' => flip(st.regex),
+                        'l' => toggle_scope(),
+                        'p' if replacing => st.preserve.set(!st.preserve.peek()),
+                        _ => return KeyEventResult::Ignored,
+                    },
+                    _ => return KeyEventResult::Ignored,
+                }
+                KeyEventResult::Handled
+            }
+        }
+    };
+
     // ---- find row ----
     let focus_query = st.focus_query.peek();
     if focus_query {
@@ -131,14 +303,7 @@ pub(crate) fn bar(
             st.query.set(s.to_string());
             st.idx.set(0);
         })
-        .on_submit({
-            let ms = matches.clone();
-            move |_| {
-                if !ms.is_empty() {
-                    go(&ms, (st.idx.peek() + 1) % ms.len());
-                }
-            }
-        });
+        .on_key_event(keys(false));
     let query_field = if focus_query {
         query_field.autofocus()
     } else {
@@ -156,7 +321,6 @@ pub(crate) fn bar(
             .on_changed(move || sig.set(!sig.peek()))
             .into_widget()
     };
-    let (m_prev, m_next) = (matches.clone(), matches.clone());
     let find_row = row(children![
         expanded(query_field),
         gap_w(8.0),
@@ -169,17 +333,15 @@ pub(crate) fn bar(
         gap_w(6.0),
         icon_button(IconKind::ChevronUp)
             .size(16.0)
-            .on_pressed(move || {
-                if !m_prev.is_empty() {
-                    go(&m_prev, (st.idx.peek() + m_prev.len() - 1) % m_prev.len());
-                }
+            .on_pressed({
+                let prev = prev.clone();
+                move || prev()
             }),
         icon_button(IconKind::ChevronDown)
             .size(16.0)
-            .on_pressed(move || {
-                if !m_next.is_empty() {
-                    go(&m_next, (st.idx.peek() + 1) % m_next.len());
-                }
+            .on_pressed({
+                let next = next.clone();
+                move || next()
             }),
         gap_w(6.0),
         toggle_chip(st.case.peek(), "Aa", st.case),
@@ -197,41 +359,22 @@ pub(crate) fn bar(
             )
             .variant(ToggleVariant::Outline)
             .size(ToggleSize::Sm)
-            .on_changed(move || {
-                if st.scope.peek().is_some() {
-                    st.scope.set(None);
-                } else {
-                    let p = state.peek().primary();
-                    if !p.is_empty() {
-                        st.scope.set(Some((p.min(), p.max())));
-                    }
-                }
-                st.idx.set(0);
+            .on_changed({
+                let toggle_scope = toggle_scope.clone();
+                move || toggle_scope()
             })
             .into_widget()
         },
         gap_w(4.0),
         {
             // Select All Matches (Alt+Enter in VS Code): one cursor per match.
-            let m_sel = matches.clone();
-            icon_button(IconKind::Check).size(16.0).on_pressed(move || {
-                if m_sel.is_empty() {
-                    return;
-                }
-                let doc = state.peek().doc.clone();
-                let ranges = m_sel.iter().map(|&(a, b)| Selection::range(a, b)).collect();
-                state.set(EditorState {
-                    doc,
-                    selection: Selections::new(ranges, 0),
-                });
-                st.open.set(0);
-                focus.request_focus();
-            })
+            let select_all = select_all.clone();
+            icon_button(IconKind::Check).size(16.0).on_pressed(move || select_all())
         },
         gap_w(6.0),
-        icon_button(IconKind::Close).size(16.0).on_pressed(move || {
-            st.open.set(0);
-            focus.request_focus();
+        icon_button(IconKind::Close).size(16.0).on_pressed({
+            let close = close.clone();
+            move || close()
         }),
     ])
     .cross_axis_alignment(CrossAxisAlignment::Center)
@@ -240,14 +383,13 @@ pub(crate) fn bar(
     let mut rows: Vec<AnyWidget> = vec![find_row.into_widget()];
 
     // ---- replace row (mode 2) ----
-    if st.open.peek() == 2 {
+    if replacing {
         let replace_field = text_field()
             .placeholder("Replace")
             .bind(st.replace)
             .bare(false)
-            .on_changed(move |s| st.replace.set(s.to_string()));
-        let m_one = matches.clone();
-        let m_all = matches.clone();
+            .on_changed(move |s| st.replace.set(s.to_string()))
+            .on_key_event(keys(true));
         let fg2 = theme.foreground;
         let ui3 = theme.clone();
         let replace_row = row(children![
@@ -264,62 +406,12 @@ pub(crate) fn bar(
             button("Replace")
                 .size(ButtonSize::Sm)
                 .variant(ButtonVariant::Secondary)
-                .on_pressed(move || {
-                    let i = st.idx.peek().min(m_one.len().saturating_sub(1));
-                    if let Some(&(a, b)) = m_one.get(i) {
-                        let src = state.peek().text();
-                        let rep = crate::search::replacement(
-                            &src,
-                            (a, b),
-                            &st.query.peek(),
-                            &st.replace.peek(),
-                            &st.options(),
-                            st.preserve.peek(),
-                        );
-                        dispatch(
-                            state,
-                            history,
-                            code,
-                            Transaction::change_and_select(
-                                ChangeSet::replace(a, b, rep.clone()),
-                                Selections::single(Selection::caret(a + rep.len())),
-                            ),
-                            Coalesce::Never,
-                        );
-                        goal.set(col_of(&state.peek().text(), state.peek().primary().head));
-                    }
-                }),
+                .on_pressed(move || replace_one()),
             gap_w(6.0),
             button("All")
                 .size(ButtonSize::Sm)
                 .variant(ButtonVariant::Secondary)
-                .on_pressed(move || {
-                    if m_all.is_empty() {
-                        return;
-                    }
-                    let src = state.peek().text();
-                    let (q, r, o, pc) = (
-                        st.query.peek(),
-                        st.replace.peek(),
-                        st.options(),
-                        st.preserve.peek(),
-                    );
-                    let changes: Vec<Change> = m_all
-                        .iter()
-                        .map(|&(a, b)| Change {
-                            from: a,
-                            to: b,
-                            insert: crate::search::replacement(&src, (a, b), &q, &r, &o, pc),
-                        })
-                        .collect();
-                    dispatch(
-                        state,
-                        history,
-                        code,
-                        Transaction::change(ChangeSet::from_changes(changes)),
-                        Coalesce::Never,
-                    );
-                }),
+                .on_pressed(move || replace_all()),
         ])
         .cross_axis_alignment(CrossAxisAlignment::Center)
         .main_axis_size(MainAxisSize::Min);
