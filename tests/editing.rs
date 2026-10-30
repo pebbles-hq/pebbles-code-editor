@@ -1260,6 +1260,57 @@ fn click_inside_selection_collapses_it() {
     );
 }
 
+/// Regression (gravel-bugs sweep): a click inside a selection with an ordinary 2 px
+/// hand wobble became a text drag-and-drop onto itself, so the selection stayed and
+/// the next keystroke replaced it. Driven in the shell's order through the gesture
+/// layer's pan slop (`pebbles::core::pan`): the wobble is a tap, which collapses.
+#[test]
+fn wobbly_click_inside_selection_collapses_it() {
+    use pebbles::core::pan::{MOUSE_PAN_SLOP, PanGesture};
+    let (mut ui, mut env, code) = mouse_harness("abcdef");
+    key(
+        &mut ui,
+        &mut env,
+        KeyInput::Move {
+            motion: Motion::DocStart,
+            extend: false,
+        },
+    );
+    for _ in 0..3 {
+        key(
+            &mut ui,
+            &mut env,
+            KeyInput::Move {
+                motion: Motion::Right,
+                extend: true,
+            },
+        );
+    }
+    let inside = at(0, 1);
+    let wobble = Offset::new(inside.x + 2.0, inside.y + 1.0);
+    let mut pan = PanGesture::default();
+    pan.press(ui.pan_target_at(inside), inside, MOUSE_PAN_SLOP);
+    ui.dispatch_pointer_down(inside);
+    assert!(
+        !pan.moved(&mut ui, wobble).crossed_slop,
+        "a 2 px wobble stays under the slop"
+    );
+    assert!(
+        !pan.release(&mut ui, wobble),
+        "so the release is a tap, not a drop"
+    );
+    ui.dispatch_pointer_up(wobble);
+    ui.dispatch_tap(wobble);
+    ui.rebuild_if_dirty();
+    ui.layout(&mut env, Size::new(600.0, 400.0));
+    key(&mut ui, &mut env, KeyInput::Insert("X".to_string()));
+    assert_eq!(
+        code.get(),
+        "aXbcdef",
+        "the wobbly click collapsed the selection"
+    );
+}
+
 #[test]
 fn a11y_label_editor_renders() {
     pebbles::widgets::overlay::init();
