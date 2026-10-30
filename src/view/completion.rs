@@ -80,7 +80,7 @@ pub(crate) fn word_provider() -> CompletionProvider {
 }
 
 /// The identifier prefix start immediately before `caret`.
-fn prefix_start(src: &str, caret: usize) -> usize {
+pub(crate) fn prefix_start(src: &str, caret: usize) -> usize {
     let mut b = caret;
     while b > 0 {
         let p = prev_char(src, b);

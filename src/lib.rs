@@ -48,6 +48,7 @@ mod emmet;
 pub mod extensions;
 pub mod keymap;
 pub mod lang;
+pub mod language;
 pub mod providers;
 
 mod brackets;
@@ -82,6 +83,7 @@ pub use extensions::{
 };
 pub use keymap::{BuiltinCommand, Keymap};
 pub use lang::{Language, SyntaxNode, SyntaxSession, Token, TokenKind, bracket_tree};
+pub use language::{LanguageService, ProviderService, RequestGate};
 pub use ops::{LineEnding, detect_indentation, detect_line_ending};
 pub use providers::{
     CompletionContext, CompletionItem, CompletionKind, CompletionProvider, DefinitionProvider,

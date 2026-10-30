@@ -89,6 +89,8 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         match_brackets: true,
         semantic: None,
         completion: None,
+        language_service: None,
+        document_uri: None,
         hover: None,
         signature: None,
         diagnostics: None,
@@ -165,6 +167,8 @@ pub struct CodeEditor {
     match_brackets: bool,
     semantic: Option<Signal<Vec<Token>>>,
     completion: Option<CompletionProvider>,
+    language_service: Option<std::rc::Rc<dyn crate::language::LanguageService>>,
+    document_uri: Option<String>,
     hover: Option<HoverProvider>,
     signature: Option<SignatureProvider>,
     diagnostics: Option<Diagnostics>,
@@ -348,6 +352,22 @@ impl CodeEditor {
     /// The autocomplete source (Ctrl+Space, and as you type). See [`CompletionProvider`].
     pub fn completion(mut self, provider: CompletionProvider) -> Self {
         self.completion = Some(provider);
+        self
+    }
+    /// The language intelligence (an LSP client): completion, hover, navigation, edits, …
+    /// See [`LanguageService`](crate::language::LanguageService). The older synchronous
+    /// providers ([`completion`](Self::completion), [`hover`](Self::hover), …) still work and
+    /// are used for requests the service does not support.
+    pub fn language_service(
+        mut self,
+        service: std::rc::Rc<dyn crate::language::LanguageService>,
+    ) -> Self {
+        self.language_service = Some(service);
+        self
+    }
+    /// The document URI sent with language-service requests (default `untitled:Untitled-1`).
+    pub fn document_uri(mut self, uri: impl Into<String>) -> Self {
+        self.document_uri = Some(uri.into());
         self
     }
     /// The hover-tooltip source. See [`HoverProvider`].
@@ -674,6 +694,8 @@ pub(crate) struct Props {
     pub(crate) match_brackets: bool,
     pub(crate) semantic: Option<Signal<Vec<Token>>>,
     pub(crate) completion: Option<CompletionProvider>,
+    pub(crate) language_service: Option<std::rc::Rc<dyn crate::language::LanguageService>>,
+    pub(crate) document_uri: String,
     pub(crate) hover: Option<HoverProvider>,
     pub(crate) signature: Option<SignatureProvider>,
     pub(crate) diagnostics: Option<Diagnostics>,
@@ -785,6 +807,10 @@ impl From<CodeEditor> for Props {
             match_brackets,
             semantic: e.semantic,
             completion: e.completion,
+            language_service: e.language_service,
+            document_uri: e
+                .document_uri
+                .unwrap_or_else(|| "untitled:Untitled-1".to_string()),
             hover: e.hover,
             signature: e.signature,
             diagnostics: e.diagnostics,

@@ -10,6 +10,7 @@
 mod chrome;
 mod commands;
 mod completion;
+pub(crate) use completion::prefix_start as completion_prefix_start;
 mod decor;
 mod diffview;
 mod extensions;
