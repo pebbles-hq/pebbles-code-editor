@@ -824,7 +824,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     }
                     KeyInput::Enter | KeyInput::Indent => {
                         completion::accept(
-                            state, history, code, goal, completion, &completer, snippet,
+                            state, history, code, goal, completion, &completer, snippet, true,
                         );
                         return true;
                     }
@@ -836,7 +836,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                                 .is_some_and(|it| it.commit_characters.iter().any(|c| c == t)) =>
                     {
                         completion::accept(
-                            state, history, code, goal, completion, &completer, snippet,
+                            state, history, code, goal, completion, &completer, snippet, false,
                         );
                     }
                     KeyInput::Escape => {

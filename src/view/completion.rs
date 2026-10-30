@@ -389,14 +389,21 @@ impl Completer {
 /// Apply the selected item — its own edit range (or the typed word), the inserted text
 /// (expanding snippets) and its `additionalTextEdits` (auto-imports) as **one** undo step —
 /// close the popup, then run the item's command.
+///
+/// With `wait`, an item without `additionalTextEdits` is first resolved
+/// (`completionItem/resolve`, which is where servers put auto-imports): it applies when the
+/// reply arrives or after a short timeout, whichever comes first. A commit character does not
+/// wait (the character is typed right after).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn accept(
     state: Signal<EditorState>,
     history: Signal<Rc<RefCell<History>>>,
     code: Signal<String>,
     goal: Signal<usize>,
     session: Signal<Option<Session>>,
-    completer: &Completer,
+    completer: &Rc<Completer>,
     snippet: Signal<Option<crate::snippet::SnippetSession>>,
+    wait: bool,
 ) {
     let Some(s) = session.peek() else { return };
     let Some(item) = s.current().cloned() else {
@@ -404,6 +411,62 @@ pub(crate) fn accept(
     };
     session.set(None);
     completer.gate.cancel();
+    let anchor = s.anchor;
+    let apply = {
+        let completer = completer.clone();
+        let done = Rc::new(std::cell::Cell::new(false));
+        move |it: lsp::CompletionItem| {
+            if !done.replace(true) {
+                apply_item(
+                    state, history, code, goal, session, &completer, snippet, it, anchor,
+                );
+            }
+        }
+    };
+    if wait
+        && item.additional_text_edits.is_empty()
+        && let Some(h) = completer.host.clone()
+    {
+        let apply = Rc::new(apply);
+        let (a2, orig) = (apply.clone(), item.clone());
+        let reply: lsp::Reply<lsp::CompletionItem> = Box::new(move |mut r: lsp::CompletionItem| {
+            // Resolve must not change what is inserted; keep the original's edit if dropped.
+            if r.text_edit.is_none() {
+                r.text_edit = orig.text_edit.clone();
+            }
+            if r.insert_text.is_none() {
+                r.insert_text = orig.insert_text.clone();
+            }
+            a2(r);
+        });
+        if h.resolve_completion(item.clone(), reply) {
+            let fallback = item.clone();
+            pebbles::core::animation::set_timeout(
+                session.raw_id() ^ 0x5245_534f_4c56_4500,
+                0.15,
+                move || apply(fallback.clone()),
+            );
+            return;
+        }
+        apply(item);
+        return;
+    }
+    apply(item);
+}
+
+/// Apply `item` at `anchor` (see [`accept`]).
+#[allow(clippy::too_many_arguments)]
+fn apply_item(
+    state: Signal<EditorState>,
+    history: Signal<Rc<RefCell<History>>>,
+    code: Signal<String>,
+    goal: Signal<usize>,
+    session: Signal<Option<Session>>,
+    completer: &Completer,
+    snippet: Signal<Option<crate::snippet::SnippetSession>>,
+    item: lsp::CompletionItem,
+    anchor: usize,
+) {
     let st = state.peek();
     let src = st.text();
     let caret = st.primary().head;
@@ -412,7 +475,7 @@ pub(crate) fn accept(
         Some(lsp::CompletionTextEdit::InsertReplace { replace, .. }) => {
             lsp::range_to_bytes(&src, *replace)
         }
-        None => (s.anchor, caret),
+        None => (anchor, caret),
     };
     // The range was computed when the list arrived; cover what was typed since.
     let (a, b) = (a.min(caret), b.max(caret));

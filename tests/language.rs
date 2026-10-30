@@ -20,6 +20,8 @@ struct Lsp {
     items: Vec<CompletionItem>,
     incomplete: bool,
     commands: Rc<RefCell<Vec<String>>>,
+    /// When set, `completionItem/resolve` is supported and its replies are held here.
+    resolves: Option<Rc<RefCell<Vec<(CompletionItem, Reply<CompletionItem>)>>>>,
 }
 
 impl LanguageService for Lsp {
@@ -35,6 +37,15 @@ impl LanguageService for Lsp {
     ) -> bool {
         self.pending.borrow_mut().push((cx, reply));
         true
+    }
+    fn resolve_completion(&self, item: CompletionItem, reply: Reply<CompletionItem>) -> bool {
+        match &self.resolves {
+            Some(r) => {
+                r.borrow_mut().push((item, reply));
+                true
+            }
+            None => false,
+        }
     }
     fn execute_command(&self, command: &LspCommand) -> bool {
         self.commands.borrow_mut().push(command.command.clone());
@@ -142,6 +153,53 @@ fn trigger_character_async_reply_docs_pane_and_auto_import() {
     h.key(KeyInput::Undo);
     h.frames(1);
     assert_eq!(code.get(), "\nlet v = x.le");
+}
+
+#[test]
+fn accept_waits_briefly_for_resolve_to_bring_additional_edits() {
+    let resolves = Rc::new(RefCell::new(Vec::new()));
+    let lsp = Rc::new(Lsp {
+        items: vec![CompletionItem::new("HashMap", CompletionItemKind::Struct)],
+        resolves: Some(resolves.clone()),
+        ..Default::default()
+    });
+    let code = create_root_signal(String::from("\n"));
+    let mut h = mount(code, lsp.clone());
+    h.key(KeyInput::Move {
+        motion: Motion::DocEnd,
+        extend: false,
+    });
+    typ(&mut h, "Ha");
+    let n = lsp.pending.borrow().len();
+    lsp.deliver(&mut h, n - 1);
+    resolves.borrow_mut().clear(); // the popup's own resolve of the highlighted item
+    h.key(KeyInput::Enter);
+    assert_eq!(code.get(), "\nHa", "waiting for the resolve reply");
+    let (item, reply) = resolves.borrow_mut().remove(0);
+    let mut r = item;
+    r.additional_text_edits = vec![TextEdit::new(
+        Range::new(Position::new(0, 0), Position::new(0, 0)),
+        "use std::collections::HashMap;",
+    )];
+    reply(r);
+    h.frames(1);
+    assert_eq!(code.get(), "use std::collections::HashMap;\nHashMap");
+    h.key(KeyInput::Undo);
+    assert_eq!(code.get(), "\nHa", "still one undo step");
+    // No reply in time: the item applies as it is after the short timeout.
+    typ(&mut h, "s");
+    let n = lsp.pending.borrow().len();
+    lsp.deliver(&mut h, n - 1);
+    resolves.borrow_mut().clear();
+    h.key(KeyInput::Enter);
+    assert_eq!(code.get(), "\nHas");
+    h.advance(0.3);
+    assert_eq!(code.get(), "\nHashMap");
+    // A late reply does not apply twice.
+    let (item, reply) = resolves.borrow_mut().remove(0);
+    reply(item);
+    h.frames(1);
+    assert_eq!(code.get(), "\nHashMap");
 }
 
 #[test]
