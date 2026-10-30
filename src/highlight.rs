@@ -182,6 +182,22 @@ pub(crate) fn bracket_tokens(
     out
 }
 
+/// [`bracket_depth`] continued from `depth` over `text`.
+pub(crate) fn bracket_depth_from(depth: i64, text: &str, pairs: &[(char, char)]) -> i64 {
+    let mut d = depth;
+    for b in text.bytes() {
+        if b < 0x80 {
+            let c = b as char;
+            if pairs.iter().any(|p| p.0 == c) {
+                d += 1;
+            } else if pairs.iter().any(|p| p.1 == c) {
+                d = (d - 1).max(0);
+            }
+        }
+    }
+    d
+}
+
 /// Naive bracket depth after `prefix` (strings/comments not excluded — the prefix scan is
 /// an approximation; the visible window itself is token-aware).
 pub(crate) fn bracket_depth(prefix: &str, pairs: &[(char, char)]) -> i64 {

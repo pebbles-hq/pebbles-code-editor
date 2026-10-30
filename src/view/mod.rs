@@ -73,6 +73,8 @@ pub(crate) struct Frame<'a> {
     pub(crate) focused: bool,
     /// Highlight other occurrences of the selected word (off while the find bar is open).
     pub(crate) highlight_word_matches: bool,
+    /// Long-line mode: the rendered column window `[c0, c1)` (see `LONG_LINE`).
+    pub(crate) hclip: Option<(usize, usize)>,
     /// Gutter markers contributed by extensions (rendered as colored dots).
     pub(crate) ext_gutter_marks: &'a [GutterMark],
     /// The fold display-map (buffer line ↔ display row).
@@ -160,6 +162,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // `height` makes the editor a scroll viewport). Held in signals so they survive renders.
     let scroll = create_signal(ScrollHandle::new()).peek(); // vertical
     let hscroll = create_signal(ScrollHandle::new()).peek(); // horizontal
+    let scroll_left = create_signal(0.0_f64); // live horizontal offset (long-line clipping)
     let completion = create_signal::<Option<completion::Session>>(None); // autocomplete popup
     let hover_pos = create_signal::<Option<Offset>>(None); // pointer pos for hover tooltip
     let sig_help = create_signal::<Option<crate::providers::SignatureHelp>>(None); // signature help
@@ -1010,6 +1013,47 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         });
     }
 
+    // ---- long lines: horizontal virtualization ----
+    // When a visible line is longer than LONG_LINE columns (minified files) and soft wrap is
+    // off, only a column window around the horizontal scroll position (and the caret) is
+    // tokenized and rendered, so per-frame cost doesn't grow with the line length.
+    const LONG_LINE: usize = 4000;
+    let hclip: Option<(usize, usize)> = if wrap_cols == 0
+        && (first_line..=last_line).any(|l| li.char_lens().get(l).copied().unwrap_or(0) > LONG_LINE)
+    {
+        let view_cols = ((bounds.width().max(800.0)) / advance).ceil() as usize;
+        let margin = 128usize;
+        let sl_col =
+            ((scroll_left.get().max(hscroll.offset()) - pad_l) / advance).max(0.0) as usize;
+        let mut c0 = sl_col.saturating_sub(margin);
+        let mut c1 = sl_col + view_cols + margin;
+        if cc < c0 || cc >= c1 {
+            // The caret moved off the scrolled window (autoscroll lands next frame).
+            c0 = cc.saturating_sub(view_cols + margin);
+            c1 = cc + margin;
+        }
+        Some((c0, c1))
+    } else {
+        None
+    };
+    // Byte ranges of the visible text: one span for the window, or per-line column-clipped
+    // spans in long-line mode.
+    let vis_ranges: Vec<(usize, usize)> = match hclip {
+        None => vec![(
+            li.line_start_of(first_line),
+            line_end(&src, li.line_start_of(last_line)),
+        )],
+        Some((c0, c1)) => (first_line..=last_line)
+            .filter(|&l| !disp.is_hidden(l))
+            .map(|l| {
+                let len = li.char_lens().get(l).copied().unwrap_or(0);
+                (
+                    li.byte_at(&src, l, c0.min(len)),
+                    li.byte_at(&src, l, c1.min(len)),
+                )
+            })
+            .collect(),
+    };
     // ---- tokens (cached lexical + semantic overlay) ----
     // Large-file mode: past a line threshold, tokenize ONLY the visible window (lazily, each
     // render) and rebase to absolute offsets, instead of the whole document — so a 100k-line
@@ -1026,6 +1070,15 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             *slot = l.session().map(|s| (name, s));
         }
         let (_, sess) = slot.as_mut()?;
+        if hclip.is_some() {
+            let mut v = Vec::new();
+            for &(a, b) in &vis_ranges {
+                if b > a {
+                    v.extend(sess.highlight_range(&src, a..b));
+                }
+            }
+            return Some(Rc::new(v));
+        }
         const MARGIN: usize = 50;
         let lo = li.line_start_of(first_line.saturating_sub(MARGIN));
         let hi_line = (last_line + MARGIN).min(line_count.saturating_sub(1));
@@ -1078,8 +1131,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // Bracket-pair colorization over the rendered window: depth at the window start comes
     // from a cached prefix scan (re-scanned only when the text above the window changes).
     let tokens: Rc<Vec<Token>> = if p.bracket_pair_colorization {
-        let lo = li.line_start_of(first_line);
-        let hi = line_end(&src, li.line_start_of(last_line));
+        let lo = vis_ranges.first().map_or(0, |r| r.0);
         let cell = bracket_cache.peek();
         let mut c = cell.borrow_mut();
         let prefix = &src[..lo];
@@ -1088,7 +1140,19 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             c.0.clear();
             c.0.push_str(prefix);
         }
-        let br = crate::highlight::bracket_tokens(&src, lo, hi, c.1, &cfg.brackets, &tokens);
+        let mut depth = c.1;
+        let mut at = lo;
+        let mut br = Vec::new();
+        for &(a, b) in &vis_ranges {
+            if a > at {
+                // Skipped (clipped) text between ranges still nests.
+                depth = crate::highlight::bracket_depth_from(depth, &src[at..a], &cfg.brackets);
+            }
+            let part = crate::highlight::bracket_tokens(&src, a, b, depth, &cfg.brackets, &tokens);
+            depth = crate::highlight::bracket_depth_from(depth, &src[a..b], &cfg.brackets);
+            br.extend(part);
+            at = b;
+        }
         Rc::new(crate::highlight::overlay_split(&tokens, &br))
     } else {
         tokens
@@ -1146,6 +1210,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         caret_on,
         focused,
         highlight_word_matches: find.open.get() == 0,
+        hclip,
         ext_gutter_marks: &ext_gutter_marks,
         disp: disp.as_ref(),
         folds,
@@ -1554,6 +1619,11 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let content_area: AnyWidget = if content_w.is_some() {
         SingleChildScrollView::horizontal(click_area)
             .controller(hscroll.clone())
+            .on_scroll(move |n| {
+                if hclip.is_some() || scroll_left.peek() != 0.0 {
+                    scroll_left.set(n.metrics.pixels);
+                }
+            })
             .into_widget()
     } else {
         click_area.into_widget()

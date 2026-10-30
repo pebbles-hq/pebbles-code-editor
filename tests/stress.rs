@@ -365,3 +365,55 @@ fn hundred_thousand_lines_parse_and_edit_latency() {
         typed.median
     );
 }
+
+/// One very long line (minified-file shape): typing at its end must stay inside the frame
+/// budget — the view stops rendering a line after a fixed number of columns (VS Code
+/// `stopRenderingLineAfter`), so layout cost doesn't grow with the line.
+#[test]
+fn very_long_line_typing() {
+    let line: String = (0..20_000).map(|i| format!("a{i},")).collect(); // ~130k chars
+    let len = line.len();
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(line);
+    let mut b = Bench {
+        ui: Ui::new(),
+        env: TextEnv::new(),
+        code,
+        scrolled: Rc::new(Cell::new(0.0)),
+    };
+    let t = Instant::now();
+    b.ui.mount_root(
+        View::new(
+            Color::from_rgba8(255, 255, 255, 255),
+            code_editor(code)
+                .language(pebbles_code_editor::lang::by_name(
+                    &std::env::var("LONG_LANG").unwrap_or_else(|_| "json".into()),
+                ))
+                .height(660.0)
+                .autofocus(),
+        )
+        .into_widget(),
+    );
+    for _ in 0..3 {
+        b.frame();
+    }
+    println!(
+        "mount, 1 line of {len} chars          {:7.3} ms",
+        ms(t.elapsed())
+    );
+    b.mv(Motion::DocEnd, false, 1);
+    let typed = stats(
+        (0..30)
+            .map(|_| b.timed(KeyInput::Insert("x".into())))
+            .collect(),
+    );
+    report("type 30 chars at end of long line", &typed);
+    let (median_budget, _) = budget();
+    assert!(
+        typed.median < median_budget,
+        "long-line typing median {:?}",
+        typed.median
+    );
+    assert_eq!(b.code.get().len(), len + 30);
+}

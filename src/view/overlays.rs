@@ -270,9 +270,14 @@ fn code_text(f: &Frame, layers: &mut Vec<AnyWidget>) {
             continue;
         }
         for (row, seg) in f.segments(line) {
-            // Byte range of this row's char span [seg.start, seg.end).
-            let bs = f.li.byte_at(f.src, line, seg.start);
-            let be = f.li.byte_at(f.src, line, seg.end);
+            // Long-line mode renders only the clipped column window of the row.
+            let (cs, ce) = match f.hclip {
+                Some((c0, c1)) => (seg.start.max(c0).min(seg.end), seg.end.min(c1)),
+                None => (seg.start, seg.end),
+            };
+            // Byte range of this row's char span [cs, ce).
+            let bs = f.li.byte_at(f.src, line, cs);
+            let be = f.li.byte_at(f.src, line, ce);
             if be <= bs {
                 continue;
             }
@@ -284,7 +289,7 @@ fn code_text(f: &Frame, layers: &mut Vec<AnyWidget>) {
                         .line_height(f.lh as f32)
                         .letter_spacing(f.letter_spacing as f32),
                 )
-                .left(f.pad_l + seg.indent as f64 * f.advance)
+                .left(f.pad_l + (cs - seg.start + seg.indent) as f64 * f.advance)
                 .top(f.row_y(row))
                 .into_widget(),
             );
@@ -303,8 +308,12 @@ fn whitespace(f: &Frame, layers: &mut Vec<AnyWidget>) {
         }
         let len = f.li.line_char_len(line);
         for (row, seg) in f.segments(line) {
-            let bs = f.li.byte_at(f.src, line, seg.start);
-            let be = f.li.byte_at(f.src, line, seg.end);
+            let (cs, ce) = match f.hclip {
+                Some((c0, c1)) => (seg.start.max(c0).min(seg.end), seg.end.min(c1)),
+                None => (seg.start, seg.end),
+            };
+            let bs = f.li.byte_at(f.src, line, cs);
+            let be = f.li.byte_at(f.src, line, ce);
             let marks: String = f.src[bs..be]
                 .chars()
                 .map(|c| match c {
@@ -325,7 +334,7 @@ fn whitespace(f: &Frame, layers: &mut Vec<AnyWidget>) {
                         .line_height(f.lh as f32)
                         .letter_spacing(f.letter_spacing as f32),
                     )
-                    .left(f.pad_l + seg.indent as f64 * f.advance)
+                    .left(f.pad_l + (cs - seg.start + seg.indent) as f64 * f.advance)
                     .top(f.row_y(row))
                     .into_widget(),
                 );
