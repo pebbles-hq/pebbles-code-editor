@@ -209,7 +209,7 @@ fn selection(f: &Frame, layers: &mut Vec<AnyWidget>) {
                 if e < s || (e == s && !(extend_nl && is_last)) {
                     continue;
                 }
-                let x = f.pad_l + (s - seg.start) as f64 * f.advance;
+                let x = f.pad_l + (s - seg.start + seg.indent) as f64 * f.advance;
                 let mut w = (e - s) as f64 * f.advance;
                 if extend_nl && is_last {
                     w += f.advance;
@@ -284,7 +284,7 @@ fn code_text(f: &Frame, layers: &mut Vec<AnyWidget>) {
                         .line_height(f.lh as f32)
                         .letter_spacing(f.letter_spacing as f32),
                 )
-                .left(f.pad_l)
+                .left(f.pad_l + seg.indent as f64 * f.advance)
                 .top(f.row_y(row))
                 .into_widget(),
             );
@@ -325,7 +325,7 @@ fn whitespace(f: &Frame, layers: &mut Vec<AnyWidget>) {
                         .line_height(f.lh as f32)
                         .letter_spacing(f.letter_spacing as f32),
                     )
-                    .left(f.pad_l)
+                    .left(f.pad_l + seg.indent as f64 * f.advance)
                     .top(f.row_y(row))
                     .into_widget(),
                 );
@@ -340,7 +340,7 @@ fn whitespace(f: &Frame, layers: &mut Vec<AnyWidget>) {
                             .font_family(f.font_family)
                             .color(f.theme.whitespace),
                     )
-                    .left(f.pad_l + (len - seg.start) as f64 * f.advance)
+                    .left(f.pad_l + (len - seg.start + seg.indent) as f64 * f.advance)
                     .top(f.row_y(row))
                     .into_widget(),
                 );
@@ -377,7 +377,7 @@ fn diagnostics(f: &Frame, layers: &mut Vec<AnyWidget>) {
                 if e <= s {
                     continue;
                 }
-                let x = f.pad_l + (s - seg.start) as f64 * f.advance;
+                let x = f.pad_l + (s - seg.start + seg.indent) as f64 * f.advance;
                 let w = ((e - s) as f64 * f.advance).max(f.advance);
                 layers.push(
                     Positioned::new(

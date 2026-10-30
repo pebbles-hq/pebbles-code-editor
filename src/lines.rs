@@ -202,6 +202,11 @@ impl LineIndex {
     pub(crate) fn is_fold_head(&self, line: usize) -> bool {
         self.regions().binary_search_by_key(&line, |r| r.0).is_ok()
     }
+    /// Leading-whitespace width of every line in columns (0 for blank lines) — the soft-wrap
+    /// indent of continuation rows.
+    pub(crate) fn indent_cols(&self) -> Vec<usize> {
+        self.indents.iter().map(|i| i.unwrap_or(0)).collect()
+    }
     /// The widest line, in chars.
     pub(crate) fn max_cols(&self) -> usize {
         self.max_cols

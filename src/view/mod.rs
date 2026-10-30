@@ -946,17 +946,11 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         if wrap_cols == 0 && fset.is_empty() {
             return byte_at(text, row.min(nlines - 1), xcol);
         }
-        let clens: Vec<usize> = text.split('\n').map(|l| l.chars().count()).collect();
-        let regions = line_cache
-            .peek()
-            .borrow_mut()
-            .sync(text)
-            .regions()
-            .as_ref()
-            .clone();
-        let map = crate::fold::DisplayMap::new(nlines, &fset, &regions, &clens, wrap_cols, &[]);
+        let li = line_cache.peek().borrow_mut().sync(text);
+        let map = crate::fold::DisplayMap::for_index(&li, &fset, wrap_cols, &[]);
         let r = map.row_at(row);
-        let col = (r.start + xcol).min(clens.get(r.line).copied().unwrap_or(0));
+        let col = (r.start + xcol.saturating_sub(r.indent))
+            .min(li.char_lens().get(r.line).copied().unwrap_or(0));
         byte_at(text, r.line, col)
     };
 

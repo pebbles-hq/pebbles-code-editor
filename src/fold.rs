@@ -77,6 +77,8 @@ pub(crate) struct Row {
     pub end: usize,
     pub first: bool,
     pub gap: bool,
+    /// Wrap indent of a continuation row, in columns (its text starts this far right).
+    pub indent: usize,
 }
 
 /// Buffer-line ↔ visual-row mapping for a fold set + wrap width.
@@ -99,6 +101,7 @@ impl DisplayMap {
         char_lens: &[usize],
         wrap_cols: usize,
         gaps: &[usize],
+        wrap_indents: &[usize],
     ) -> Self {
         let mut hidden = vec![false; line_count];
         for &(head, last) in regions {
@@ -125,18 +128,25 @@ impl DisplayMap {
                     end: len,
                     first: true,
                     gap: false,
+                    indent: 0,
                 });
             } else {
                 let mut s = 0;
                 let mut first = true;
+                // Wrap indent (VS Code `wrappingIndent: same`): continuation rows start at
+                // the line's indentation, unless that would leave less than half the width.
+                let ind = wrap_indents.get(line).copied().unwrap_or(0);
+                let ind = if ind * 2 < wrap_cols { ind } else { 0 };
                 while s < len {
-                    let e = (s + wrap_cols).min(len);
+                    let width = if first { wrap_cols } else { wrap_cols - ind };
+                    let e = (s + width.max(1)).min(len);
                     rows.push(Row {
                         line,
                         start: s,
                         end: e,
                         first,
                         gap: false,
+                        indent: if first { 0 } else { ind },
                     });
                     s = e;
                     first = false;
@@ -150,6 +160,7 @@ impl DisplayMap {
                     end: 0,
                     first: false,
                     gap: true,
+                    indent: 0,
                 });
             }
         }
@@ -180,6 +191,11 @@ impl DisplayMap {
                 ident: Some(index.clone()),
             };
         }
+        let wrap_indents = if wrap_cols > 0 {
+            index.indent_cols()
+        } else {
+            Vec::new()
+        };
         DisplayMap::new(
             index.line_count(),
             folded,
@@ -187,6 +203,7 @@ impl DisplayMap {
             index.char_lens(),
             wrap_cols,
             gaps,
+            &wrap_indents,
         )
     }
 
@@ -220,6 +237,7 @@ impl DisplayMap {
                 end: ix.line_char_len(line),
                 first: true,
                 gap: false,
+                indent: 0,
             };
         }
         let row = row.min(self.rows.len().saturating_sub(1));
@@ -229,6 +247,7 @@ impl DisplayMap {
             end: 0,
             first: true,
             gap: false,
+            indent: 0,
         })
     }
 
@@ -262,8 +281,12 @@ impl DisplayMap {
         {
             i += 1;
         }
-        let start = self.rows.get(i).map(|r| r.start).unwrap_or(0);
-        (i, col.saturating_sub(start))
+        let (start, indent) = self
+            .rows
+            .get(i)
+            .map(|r| (r.start, r.indent))
+            .unwrap_or((0, 0));
+        (i, col.saturating_sub(start) + indent)
     }
 }
 
@@ -283,7 +306,7 @@ mod tests {
 
     #[test]
     fn folding_hides_lines() {
-        let m = DisplayMap::new(5, &folds(&[0]), &[(0, 2)], &[8, 6, 6, 1, 0], 0, &[]);
+        let m = DisplayMap::new(5, &folds(&[0]), &[(0, 2)], &[8, 6, 6, 1, 0], 0, &[], &[]);
         assert_eq!(m.rows(), 3);
         assert!(m.is_hidden(1) && m.is_hidden(2));
         assert_eq!(m.line_at_row(1), 3);
@@ -292,7 +315,7 @@ mod tests {
     #[test]
     fn wrapping_splits_a_long_line() {
         // One 25-char line, wrap at 10 → 3 rows.
-        let m = DisplayMap::new(1, &folds(&[]), &[], &[25], 10, &[]);
+        let m = DisplayMap::new(1, &folds(&[]), &[], &[25], 10, &[], &[]);
         assert_eq!(m.rows(), 3);
         assert_eq!(
             m.row_at(0),
@@ -301,7 +324,8 @@ mod tests {
                 start: 0,
                 end: 10,
                 first: true,
-                gap: false
+                gap: false,
+                indent: 0,
             }
         );
         assert_eq!(
@@ -311,7 +335,8 @@ mod tests {
                 start: 10,
                 end: 20,
                 first: false,
-                gap: false
+                gap: false,
+                indent: 0,
             }
         );
         assert_eq!(
@@ -321,7 +346,8 @@ mod tests {
                 start: 20,
                 end: 25,
                 first: false,
-                gap: false
+                gap: false,
+                indent: 0,
             }
         );
         // col 14 lands on row 1, x-col 4.
@@ -341,7 +367,7 @@ mod tests {
         for f in [folds(&[]), folds(&[5])] {
             let fast = DisplayMap::for_index(&ix, &f, 0, &[0; 6]);
             assert!(fast.ident.is_some());
-            let full = DisplayMap::new(lens.len(), &f, &regions, &lens, 0, &[]);
+            let full = DisplayMap::new(lens.len(), &f, &regions, &lens, 0, &[], &[]);
             assert_eq!(fast.rows(), full.rows());
             for r in 0..full.rows() + 3 {
                 assert_eq!(fast.line_at_row(r), full.line_at_row(r));
@@ -374,7 +400,7 @@ mod tests {
 
     #[test]
     fn no_wrap_is_one_row_per_line() {
-        let m = DisplayMap::new(3, &folds(&[]), &[], &[4, 4, 4], 0, &[]);
+        let m = DisplayMap::new(3, &folds(&[]), &[], &[4, 4, 4], 0, &[], &[]);
         assert_eq!(m.rows(), 3);
         assert_eq!(m.place(2, 3), (2, 3));
     }
@@ -402,5 +428,16 @@ mod tests {
         assert_eq!(region_at(&r, 0), Some((0, 6)));
         assert_eq!(nested_heads(&r, (0, 6)), vec![0, 1, 4]);
         assert_eq!(hidden_count(&r, 0), 6);
+    }
+
+    #[test]
+    fn soft_wrap_continuation_rows_keep_the_indent() {
+        // A 4-space-indented 20-char line wrapped at 10 columns.
+        let m = DisplayMap::new(1, &folds(&[]), &[], &[20], 10, &[], &[4]);
+        assert_eq!(m.rows(), 3); // 10 + 6 + 4
+        assert_eq!(m.row_at(1).indent, 4);
+        assert_eq!((m.row_at(1).start, m.row_at(1).end), (10, 16));
+        // Column 12 sits on row 1, drawn at x-col 4 + (12 - 10).
+        assert_eq!(m.place(0, 12), (1, 6));
     }
 }
