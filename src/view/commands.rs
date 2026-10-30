@@ -340,6 +340,8 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
         | C::FoldAllMarkerRegions
         | C::UnfoldAllMarkerRegions
         | C::FoldAllExcept
+        | C::FoldSelection
+        | C::RemoveManualFolds
         | C::FoldLevel1
         | C::FoldLevel2
         | C::FoldLevel3
@@ -495,6 +497,33 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
 
 /// The fold commands (they edit the fold set, never the text).
 fn run_fold(cmd: C, env: &Env, src: &str, line: usize, sels: &Selections) {
+    // Manual folding ranges: update the cache's set first so `regions` below includes them.
+    let sel_lines: Vec<(usize, usize)> = sels
+        .ranges()
+        .iter()
+        .map(|r| (line_of(src, r.min()), line_of(src, r.max())))
+        .collect();
+    let mut removed: Vec<usize> = Vec::new();
+    if matches!(cmd, C::FoldSelection | C::RemoveManualFolds) {
+        let cache = env.line_cache.peek();
+        let mut lc = cache.borrow_mut();
+        let mut manual = lc.sync(src).manual().to_vec();
+        if cmd == C::FoldSelection {
+            for &(h, l) in sel_lines.iter().filter(|(h, l)| l > h) {
+                manual.retain(|m| m.0 != h);
+                manual.push((h, l));
+            }
+        } else {
+            manual.retain(|m| {
+                let hit = sel_lines.iter().any(|&(h, l)| m.0 <= l && h <= m.1);
+                if hit {
+                    removed.push(m.0);
+                }
+                !hit
+            });
+        }
+        lc.set_manual(manual);
+    }
     let regions = env
         .line_cache
         .peek()
@@ -566,6 +595,14 @@ fn run_fold(cmd: C, env: &Env, src: &str, line: usize, sels: &Selections) {
                         f.remove(&r.0);
                     }
                 }
+            }
+        }
+        C::FoldSelection => {
+            f.extend(sel_lines.iter().filter(|(h, l)| l > h).map(|r| r.0));
+        }
+        C::RemoveManualFolds => {
+            for h in &removed {
+                f.remove(h);
             }
         }
         C::FoldAllExcept => {

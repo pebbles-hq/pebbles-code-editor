@@ -155,6 +155,11 @@ pub(crate) struct LineIndex {
     /// Parser-derived (syntax) regions merged with the marker regions, when the language
     /// has an incremental parser; they replace the indentation regions. Cleared on edit.
     syntax: Option<Rc<Vec<(usize, usize)>>>,
+    /// Manual folding ranges (VS Code "Create Folding Range from Selection"), as line
+    /// ranges shifted across edits; an edit inside one's head line removes it.
+    manual: Vec<(usize, usize)>,
+    /// `regions()` with the manual ranges merged in (`None` when there are none).
+    with_manual: Option<Rc<Vec<(usize, usize)>>>,
     max_cols: usize,
     len: usize,
 }
@@ -181,6 +186,8 @@ impl LineIndex {
             markers,
             regions,
             syntax: None,
+            manual: Vec::new(),
+            with_manual: None,
             max_cols,
             len: src.len(),
         }
@@ -196,7 +203,27 @@ impl LineIndex {
     }
     /// The foldable regions (same as `fold::foldable`).
     pub(crate) fn regions(&self) -> &Rc<Vec<(usize, usize)>> {
-        self.syntax.as_ref().unwrap_or(&self.regions)
+        self.with_manual
+            .as_ref()
+            .or(self.syntax.as_ref())
+            .unwrap_or(&self.regions)
+    }
+    /// The manual folding ranges.
+    pub(crate) fn manual(&self) -> &[(usize, usize)] {
+        &self.manual
+    }
+    /// Recompute the merged region list after the base regions or manual ranges change.
+    fn refresh_manual(&mut self) {
+        self.with_manual = (!self.manual.is_empty()).then(|| {
+            let base = self.syntax.as_ref().unwrap_or(&self.regions);
+            let mut v: Vec<(usize, usize)> = self.manual.clone();
+            v.extend(
+                base.iter()
+                    .filter(|r| !self.manual.iter().any(|m| m.0 == r.0)),
+            );
+            v.sort_unstable();
+            Rc::new(v)
+        });
     }
     /// Whether `line` heads a foldable region.
     pub(crate) fn is_fold_head(&self, line: usize) -> bool {
@@ -294,6 +321,21 @@ impl LineCache {
             merged.dedup_by_key(|x| x.0);
             Rc::new(merged)
         });
+        idx.refresh_manual();
+    }
+
+    /// Replace the manual folding ranges (line ranges, `head < last`).
+    pub(crate) fn set_manual(&mut self, mut ranges: Vec<(usize, usize)>) {
+        let n = self.index.line_count();
+        ranges.retain(|&(h, l)| h < l && l < n);
+        ranges.sort_unstable();
+        ranges.dedup_by_key(|r| r.0);
+        if ranges == self.index.manual {
+            return;
+        }
+        let idx = Rc::make_mut(&mut self.index);
+        idx.manual = ranges;
+        idx.refresh_manual();
     }
 
     /// Bring the index up to date with `new` and return it. Unchanged text is free (one
@@ -335,6 +377,7 @@ impl LineCache {
             inds.push(indent_of(l));
             marks.push(marker_of(l));
         }
+        let seg_n = lens.len();
         starts.push(start);
         starts.extend(seg.match_indices('\n').map(|(i, _)| start + i + 1));
         let removed_max = idx.char_lens[a..=b].iter().copied().max().unwrap_or(0);
@@ -358,6 +401,32 @@ impl LineCache {
         if folds_changed {
             idx.regions = Rc::new(regions_with_markers(&idx.indents, &idx.markers));
         }
+        if !idx.manual.is_empty() {
+            // Old lines a..=b became `idx.char_lens` lines a..a+new_n: shift ranges below,
+            // stretch ranges that enclose the edit, drop ranges whose head was edited
+            // (unless the line count is unchanged).
+            let d = seg_n as isize - (b + 1 - a) as isize;
+            let sh = |x: usize| (x as isize + d) as usize;
+            idx.manual = idx
+                .manual
+                .iter()
+                .filter_map(|&(h, l)| {
+                    if l < a {
+                        Some((h, l))
+                    } else if h > b {
+                        Some((sh(h), sh(l)))
+                    } else if h < a {
+                        let nl = if l > b { sh(l) } else { l.max(a) };
+                        (nl > h).then_some((h, nl))
+                    } else if d == 0 {
+                        Some((h, l))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+        }
+        idx.refresh_manual();
         self.text = new.to_string();
         self.index.clone()
     }

@@ -382,3 +382,35 @@ fn format_on_paste_formats_as_a_separate_undo_step() {
     h.key(KeyInput::Undo);
     assert_eq!(h.code.get(), "a  b", "undo restores the paste as-is");
 }
+
+#[test]
+fn fold_selection_creates_a_manual_range_and_remove_clears_it() {
+    // Flat lines (no indentation regions): a manual range from the selection folds them.
+    let mut h = harness("a\nb\nc\nd\ne\n");
+    h.caret(1, 0);
+    h.key(KeyInput::Move {
+        motion: Motion::Down,
+        extend: true,
+    });
+    h.key(KeyInput::Move {
+        motion: Motion::Down,
+        extend: true,
+    });
+    assert!(h.press("Ctrl+K"));
+    assert!(h.press("Ctrl+,"));
+    assert!(h.folds.get().contains(&1), "{:?}", h.folds.get());
+    // The range survives an edit above it (shifted down one line).
+    h.press("Ctrl+K");
+    h.press("Ctrl+J");
+    h.caret(0, 0);
+    h.key(KeyInput::Enter);
+    h.caret(2, 0);
+    h.press("Ctrl+Shift+[");
+    assert_eq!(h.folds.get(), BTreeSet::from([2]));
+    // Removing the manual range unfolds it, and it no longer folds.
+    assert!(h.press("Ctrl+K"));
+    assert!(h.press("Ctrl+."));
+    assert!(h.folds.get().is_empty(), "{:?}", h.folds.get());
+    h.press("Ctrl+Shift+[");
+    assert!(!h.folds.get().contains(&2), "{:?}", h.folds.get());
+}

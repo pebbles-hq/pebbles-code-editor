@@ -184,6 +184,10 @@ commands! {
     FoldAllMarkerRegions => "editor.foldAllMarkerRegions", "Fold All Regions", ["Ctrl+K Ctrl+8"];
     /// Unfold every `#region` marker region.
     UnfoldAllMarkerRegions => "editor.unfoldAllMarkerRegions", "Unfold All Regions", ["Ctrl+K Ctrl+9"];
+    /// Create a manual folding range from each selection and fold it.
+    FoldSelection => "editor.createFoldingRangeFromSelection", "Create Folding Range from Selection", ["Ctrl+K Ctrl+,"];
+    /// Remove the manual folding ranges touching the selections.
+    RemoveManualFolds => "editor.removeManualFoldingRanges", "Remove Manual Folding Ranges", ["Ctrl+K Ctrl+."];
     /// Fold all regions except the one containing the cursor.
     FoldAllExcept => "editor.foldAllExcept", "Fold All Except Selected", ["Ctrl+K Ctrl+-"];
     /// Fold level 1.
