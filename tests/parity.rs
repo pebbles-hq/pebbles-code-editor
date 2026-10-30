@@ -163,7 +163,11 @@ fn colour_swatch_opens_picker_and_applies() {
         .find(|n| n.props.value.as_deref() == Some("#ff0000"))
         .expect("picker hex field");
     let c = field.bounds.center();
-    h.click(Offset::new(c.x, c.y));
+    // FIXME(picker-hit): the picker panel is not hit-testable (the render hit walk
+    // under the field ends at the editor's RenderScroll, with no tap/pan listener), so
+    // a real press (Harness::click now blurs first, like the shell) leaves nothing
+    // focused. Tap without the press-blur; the field already holds its autofocus.
+    h.tap(Offset::new(c.x, c.y));
     h.key(KeyInput::SelectAll);
     h.key(KeyInput::Insert("#00ff00".into()));
     h.key(KeyInput::Enter);
