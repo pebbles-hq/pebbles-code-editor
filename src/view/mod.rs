@@ -144,6 +144,11 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     #[allow(clippy::type_complexity)]
     let token_cache: Signal<Rc<RefCell<(String, Rc<Vec<Token>>)>>> =
         create_signal(Rc::new(RefCell::new((String::new(), Rc::new(Vec::new())))));
+    // Incremental syntax session (tree-sitter languages), keyed by language name so a
+    // language switch starts a fresh parse. Survives re-renders.
+    #[allow(clippy::type_complexity)]
+    let syntax: Signal<Rc<RefCell<Option<(String, Box<dyn crate::lang::SyntaxSession>)>>>> =
+        create_signal(Rc::new(RefCell::new(None)));
     // Imperative scroll handles — drive caret-into-view autoscroll (only used when a fixed
     // `height` makes the editor a scroll viewport). Held in signals so they survive renders.
     let scroll = create_signal(ScrollHandle::new()).peek(); // vertical
@@ -841,7 +846,26 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // file re-highlights in screenful-sized work per edit/scroll. Tradeoff: a multi-line
     // construct (string/comment) that opens above the window may mis-color at the top edge.
     const LARGE_FILE_LINES: usize = 5000;
-    let tokens: Rc<Vec<Token>> = if line_count > LARGE_FILE_LINES {
+    // Incremental parser path (tree-sitter): one session per editor, re-parsed incrementally
+    // on change and queried for the visible window (plus a margin) only.
+    let session_tokens: Option<Rc<Vec<Token>>> = p.language.as_ref().and_then(|l| {
+        let cell = syntax.peek();
+        let mut slot = cell.borrow_mut();
+        let name = l.name().to_string();
+        if slot.as_ref().is_none_or(|(n, _)| *n != name) {
+            *slot = l.session().map(|s| (name, s));
+        }
+        let (_, sess) = slot.as_mut()?;
+        sess.update(&src);
+        const MARGIN: usize = 50;
+        let lo = li.line_start_of(first_line.saturating_sub(MARGIN));
+        let hi_line = (last_line + MARGIN).min(line_count.saturating_sub(1));
+        let hi = line_end(&src, li.line_start_of(hi_line));
+        Some(Rc::new(sess.highlight_range(&src, lo..hi)))
+    });
+    let tokens: Rc<Vec<Token>> = if let Some(t) = session_tokens {
+        t
+    } else if line_count > LARGE_FILE_LINES {
         let ls = li.line_start_of(first_line);
         let le = line_end(&src, li.line_start_of(last_line));
         let win = &src[ls..le];

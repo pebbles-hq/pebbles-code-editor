@@ -71,7 +71,7 @@ pub use extensions::{
     Snapshot, extension,
 };
 pub use keymap::{BuiltinCommand, Keymap};
-pub use lang::{Language, SyntaxNode, Token, TokenKind, bracket_tree};
+pub use lang::{Language, SyntaxNode, SyntaxSession, Token, TokenKind, bracket_tree};
 pub use providers::{
     CompletionContext, CompletionItem, CompletionKind, CompletionProvider, DefinitionProvider,
     Diagnostic, Diagnostics, FormatProvider, Hover, HoverProvider, InlayHint, InlayHints, Severity,

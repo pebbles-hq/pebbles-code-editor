@@ -78,6 +78,18 @@ pub struct HighlightStyle {
     pub punctuation: TokenStyle,
     /// Object/record properties.
     pub property: TokenStyle,
+    /// Escape sequences in strings / regexes.
+    pub escape: TokenStyle,
+    /// Markup tag names (HTML/JSX/XML).
+    pub tag: TokenStyle,
+    /// Module / namespace names.
+    pub namespace: TokenStyle,
+    /// Markdown headings.
+    pub heading: TokenStyle,
+    /// Links / URLs.
+    pub link: TokenStyle,
+    /// Emphasised markup (bold / italic).
+    pub emphasis: TokenStyle,
     /// Identifiers / whitespace / unclassified tokens.
     pub plain: TokenStyle,
 }
@@ -97,6 +109,12 @@ impl HighlightStyle {
             TokenKind::Constant => self.constant,
             TokenKind::Punctuation => self.punctuation,
             TokenKind::Property => self.property,
+            TokenKind::Escape => self.escape,
+            TokenKind::Tag => self.tag,
+            TokenKind::Namespace => self.namespace,
+            TokenKind::Heading => self.heading,
+            TokenKind::Link => self.link,
+            TokenKind::Emphasis => self.emphasis,
             TokenKind::Plain => self.plain,
         }
     }
@@ -121,6 +139,12 @@ impl HighlightStyle {
             constant: s(c(0xE9, 0x8A, 0x8A)),         // soft red
             punctuation: s(c(0x9A, 0xA4, 0xB8)),
             property: s(c(0x76, 0xB2, 0xF0)),
+            escape: s(c(0xE6, 0xB4, 0x73)),
+            tag: s(c(0x76, 0xB2, 0xF0)),
+            namespace: s(c(0x6C, 0xD1, 0xC0)),
+            heading: s(c(0x76, 0xB2, 0xF0)).bold(),
+            link: s(c(0x6C, 0xD1, 0xC0)).underline(),
+            emphasis: s(c(0xD7, 0xDC, 0xE6)).italic(),
             plain: s(c(0xD7, 0xDC, 0xE6)),
         }
     }
@@ -141,6 +165,12 @@ impl HighlightStyle {
             constant: s(c(0xC0, 0x3A, 0x4B)),
             punctuation: s(c(0x5A, 0x63, 0x72)),
             property: s(c(0x24, 0x5F, 0xC2)),
+            escape: s(c(0xB0, 0x6A, 0x14)),
+            tag: s(c(0x24, 0x5F, 0xC2)),
+            namespace: s(c(0x0F, 0x86, 0x8E)),
+            heading: s(c(0x24, 0x5F, 0xC2)).bold(),
+            link: s(c(0x0F, 0x86, 0x8E)).underline(),
+            emphasis: s(c(0x24, 0x29, 0x33)).italic(),
             plain: s(c(0x24, 0x29, 0x33)),
         }
     }

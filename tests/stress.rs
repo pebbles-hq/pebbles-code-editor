@@ -42,6 +42,11 @@ struct Bench {
 
 impl Bench {
     fn new(lines: usize) -> (Self, Duration) {
+        Self::with_language(lines, None)
+    }
+
+    /// [`new`](Self::new) with a language (by name, see `lang::by_name`).
+    fn with_language(lines: usize, lang: Option<&str>) -> (Self, Duration) {
         pebbles::widgets::overlay::init();
         pebbles::core::focus::init();
         pebbles::core::keyboard::set_modifiers(false, false, false, false);
@@ -55,13 +60,16 @@ impl Bench {
         };
         let t = Instant::now();
         b.ui.mount_root(
-            View::new(
-                Color::from_rgba8(255, 255, 255, 255),
-                code_editor(code)
+            View::new(Color::from_rgba8(255, 255, 255, 255), {
+                let ed = code_editor(code)
                     .height(660.0)
                     .autofocus()
-                    .on_scroll(move |px| scrolled.set(px)),
-            )
+                    .on_scroll(move |px| scrolled.set(px));
+                match lang {
+                    Some(l) => ed.language(pebbles_code_editor::lang::by_name(l)),
+                    None => ed,
+                }
+            })
             .into_widget(),
         );
         for _ in 0..3 {
@@ -276,5 +284,84 @@ fn keystroke_cost_does_not_scale_with_document_size() {
         "per-keystroke cost grows with document size: {ratio:.2}x (1k {:?}, 10k {:?})",
         s.median,
         l.median
+    );
+}
+
+/// Tree-sitter highlighting on 10,000 lines: the incremental reparse + viewport query must
+/// keep typing inside the same per-frame budget as the plain editor.
+#[test]
+fn ten_thousand_lines_tree_sitter_typing() {
+    const LINES: usize = 10_000;
+    let (median_budget, max_budget) = budget();
+    let (mut b, mount) = Bench::with_language(LINES, Some("rust"));
+    println!(
+        "mount + 3 frames, 10k lines, tree-sitter {:7.3} ms",
+        ms(mount)
+    );
+    let typed = typing(&mut b, LINES, 120);
+    report("type 120 chars, 10k, tree-sitter", &typed);
+    assert!(typed.median < median_budget, "median {:?}", typed.median);
+    assert!(typed.max < max_budget, "max {:?}", typed.max);
+}
+
+/// 100,000 lines: initial parse, then incremental edit latency (reparse + viewport
+/// highlight), and full editor frames while typing with tree-sitter on.
+#[test]
+fn hundred_thousand_lines_parse_and_edit_latency() {
+    use pebbles_code_editor::lang::{SyntaxSession, treesitter::Session};
+    const LINES: usize = 100_000;
+    let mut src = doc(LINES);
+    let mut s = Session::new("rust").expect("rust grammar");
+    let t = Instant::now();
+    s.update(&src);
+    let parse = t.elapsed();
+    println!("initial parse, 100k lines           {:7.3} ms", ms(parse));
+    let mid = src.len() / 2;
+    let mid = (mid..src.len()).find(|&i| src.is_char_boundary(i)).unwrap();
+    let mut edits = Vec::new();
+    for i in 0..60 {
+        src.insert(mid + i, 'x');
+        let t = Instant::now();
+        s.update(&src);
+        let toks = s.highlight_range(&src, mid.saturating_sub(3000)..mid + 3000);
+        edits.push(t.elapsed());
+        assert!(!toks.is_empty());
+    }
+    let e = stats(edits);
+    report("edit + reparse + viewport, 100k", &e);
+    let (median_budget, max_budget) = budget();
+    let parse_budget = if cfg!(debug_assertions) {
+        Duration::from_secs(5)
+    } else {
+        Duration::from_secs(1)
+    };
+    assert!(parse < parse_budget, "initial parse {parse:?}");
+    assert!(e.median < median_budget, "edit median {:?}", e.median);
+    assert!(e.max < max_budget, "edit max {:?}", e.max);
+
+    // Whole editor at 100k lines with tree-sitter: typing frames.
+    let (mut b, mount) = Bench::with_language(LINES, Some("rust"));
+    println!("mount + 3 frames, 100k, tree-sitter {:7.3} ms", ms(mount));
+    // (Navigate with Ctrl+End: 50k Down presses would dominate the test's runtime.)
+    b.mv(Motion::DocEnd, false, 1);
+    let typed = stats(
+        (0..40)
+            .map(|i| {
+                b.timed(KeyInput::Insert(
+                    char::from(b'a' + (i % 26) as u8).to_string(),
+                ))
+            })
+            .collect(),
+    );
+    report("type 40 chars, 100k, tree-sitter", &typed);
+    let frame_budget = if cfg!(debug_assertions) {
+        Duration::from_millis(400)
+    } else {
+        Duration::from_millis(50)
+    };
+    assert!(
+        typed.median < frame_budget,
+        "100k typing median {:?}",
+        typed.median
     );
 }
