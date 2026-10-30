@@ -148,6 +148,24 @@ pub(crate) struct InlineGhost {
     pub(crate) idx: usize,
 }
 
+/// The identifier (word chars) around byte `b`, if any.
+pub(crate) fn word_range_at(src: &str, b: usize) -> Option<(usize, usize)> {
+    let w = |c: char| c.is_alphanumeric() || c == '_';
+    let b = b.min(src.len());
+    let a = src[..b]
+        .char_indices()
+        .rev()
+        .take_while(|&(_, c)| w(c))
+        .last()
+        .map_or(b, |(i, _)| i);
+    let z = b + src[b..]
+        .chars()
+        .take_while(|&c| w(c))
+        .map(char::len_utf8)
+        .sum::<usize>();
+    (a < z).then_some((a, z))
+}
+
 /// The vertical scroll target, jumping or (with smooth scrolling) animating.
 #[derive(Clone)]
 pub(crate) struct VScroll {
@@ -1665,6 +1683,27 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             (decos, marks)
         };
     ext_decos.extend(diff_parts.decos);
+    // Ctrl/Cmd+hover: underline the link or the symbol with a definition under the pointer
+    // (the Ctrl+click target), as VS Code does.
+    if let Some(pos) = hover_pos.get()
+        && (pebbles::core::keyboard::ctrl_held() || pebbles::core::keyboard::meta_held())
+    {
+        let b = p2b(&src, pos);
+        let ls = line_start(&src, b);
+        let le = line_end(&src, ls);
+        let link = crate::scan_text::find_links(&src[ls..le])
+            .into_iter()
+            .find(|&(a, z)| ls + a <= b && b <= ls + z)
+            .map(|(a, z)| (ls + a, ls + z));
+        let target = link.or_else(|| {
+            let dp = p.definition.as_ref()?;
+            let (a, z) = word_range_at(&src, b)?;
+            dp(&src, b).map(|_| (a, z))
+        });
+        if let Some(r) = target {
+            ext_decos.push(Decoration::underline(r, theme.accent));
+        }
+    }
 
     // ---- the read-model the view builders share ----
     let frame = Frame {

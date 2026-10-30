@@ -323,3 +323,31 @@ fn side_by_side_diff_editor_scrolls_both_sides_together() {
     // Editing the modified side keeps the original untouched.
     assert!(original.get().contains("line 5\n"));
 }
+
+#[test]
+fn bracket_pair_guides_and_active_indent_guide_render() {
+    let count = |guides: bool, indent: bool| {
+        pebbles::widgets::overlay::init();
+        pebbles::core::focus::init();
+        let code = create_root_signal(String::from("fn a() {\n    if x {\n        y\n    }\n}\n"));
+        let ctrl = pebbles_code_editor::editor_controller();
+        let mut h = Harness::new().window(500.0, 300.0);
+        h.mount_widget(
+            code_editor(code)
+                .height(280.0)
+                .bracket_pair_guides(guides)
+                .indent_guides(indent)
+                .controller(ctrl)
+                .autofocus(),
+        );
+        h.frames(3);
+        ctrl.set_cursor(2, 8);
+        h.frames(2);
+        h.render_node_count()
+    };
+    assert!(
+        count(true, false) > count(false, false),
+        "bracket pair guides"
+    );
+    assert!(count(false, true) > count(false, false), "indent guides");
+}

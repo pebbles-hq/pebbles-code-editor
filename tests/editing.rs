@@ -1707,3 +1707,177 @@ fn inline_suggestion_cycles_and_escape_dismisses() {
     assert_ne!(code.get(), "fn main() {}");
     assert!(code.get().starts_with("fn"));
 }
+
+// ---------------------------------------------------------------------------
+// VS Code parity: mouse + highlights
+// ---------------------------------------------------------------------------
+
+#[test]
+fn middle_drag_makes_a_column_of_carets() {
+    let (mut ui, mut env, code) = mouse_harness("abc\ndef\nghi");
+    ui.dispatch_tertiary_down(at(0, 1));
+    ui.dispatch_tertiary_up(at(2, 1));
+    ui.rebuild_if_dirty();
+    ui.layout(&mut env, Size::new(600.0, 400.0));
+    key(&mut ui, &mut env, KeyInput::Insert("X".to_string()));
+    assert_eq!(code.get(), "aXbc\ndXef\ngXhi");
+}
+
+#[test]
+fn ctrl_wheel_zooms_the_font() {
+    let (mut ui, mut env, code) = mouse_harness("abcdefghijklmnop\ndef");
+    let before = ui.render_node_count();
+    pebbles::core::keyboard::set_modifiers(false, true, false, false);
+    let ev = pebbles::render::PointerScrollEvent {
+        position: at(0, 0),
+        global: at(0, 0),
+        delta: Offset::new(0.0, -120.0),
+        unit: pebbles::render::ScrollUnit::Pixels,
+    };
+    assert!(
+        ui.dispatch_pointer_signal(at(0, 0), ev),
+        "Ctrl+wheel is consumed"
+    );
+    pebbles::core::keyboard::set_modifiers(false, false, false, false);
+    ui.rebuild_if_dirty();
+    ui.layout(&mut env, Size::new(600.0, 400.0));
+    // Zoomed: the grid is wider, so clicking where column 10 was now lands on column 9.
+    click(&mut ui, &mut env, at(0, 10));
+    key(&mut ui, &mut env, KeyInput::Insert("X".to_string()));
+    assert_eq!(code.get(), "abcdefghiXjklmnop\ndef", "{before}");
+}
+
+#[test]
+fn ctrl_hover_underlines_the_definition_target() {
+    use std::rc::Rc;
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    pebbles::core::keyboard::set_modifiers(false, false, false, false);
+    let code = create_root_signal(String::from("foo bar"));
+    let def: pebbles_code_editor::DefinitionProvider = Rc::new(|_s: &str, _b: usize| Some(0));
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(
+        View::new(white(), code_editor(code).gutter(false).definition(def)).into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    let frame = |ui: &mut Ui, env: &mut TextEnv| {
+        ui.rebuild_if_dirty();
+        ui.layout(env, Size::new(600.0, 400.0));
+    };
+    ui.dispatch_hover(at(0, 5));
+    frame(&mut ui, &mut env);
+    let plain = ui.render_node_count();
+    pebbles::core::keyboard::set_modifiers(false, true, false, false);
+    ui.dispatch_hover(at(0, 6));
+    frame(&mut ui, &mut env);
+    let underlined = ui.render_node_count();
+    pebbles::core::keyboard::set_modifiers(false, false, false, false);
+    assert!(underlined > plain, "{plain} -> {underlined}");
+}
+
+#[test]
+fn occurrence_selection_and_current_line_highlights_render() {
+    // Caret inside "foo": the other "foo" gets an occurrence highlight; turning the
+    // feature off removes it. The current-line band is drawn either way.
+    let count = |on: bool| {
+        pebbles::widgets::overlay::init();
+        pebbles::core::focus::init();
+        let code = create_root_signal(String::from("foo x foo y foo"));
+        let mut ui = Ui::new();
+        let mut env = TextEnv::new();
+        ui.mount_root(
+            View::new(
+                white(),
+                code_editor(code).occurrences_highlight(on).autofocus(),
+            )
+            .into_widget(),
+        );
+        for _ in 0..3 {
+            ui.rebuild_if_dirty();
+            ui.layout(&mut env, Size::new(600.0, 400.0));
+        }
+        key(
+            &mut ui,
+            &mut env,
+            KeyInput::Move {
+                motion: Motion::Right,
+                extend: false,
+            },
+        );
+        ui.render_node_count()
+    };
+    assert!(count(true) > count(false));
+    // Selection highlight (occurrences off): selecting "foo" (Ctrl+D) draws the selection
+    // plus a box on each of the two other matches.
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from("foo x foo y foo"));
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(
+        View::new(
+            white(),
+            code_editor(code).occurrences_highlight(false).autofocus(),
+        )
+        .into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    let caret = ui.render_node_count();
+    key(&mut ui, &mut env, KeyInput::SelectNextOccurrence);
+    assert!(
+        ui.render_node_count() >= caret + 2,
+        "{caret} -> {}",
+        ui.render_node_count()
+    );
+}
+
+#[test]
+fn suggestion_preview_shows_ghost_text_and_tab_accepts() {
+    use pebbles_code_editor::{
+        CompletionContext, CompletionItem, CompletionKind, CompletionProvider,
+    };
+    use std::rc::Rc;
+    let mk = |preview: bool| {
+        pebbles::widgets::overlay::init();
+        pebbles::core::focus::init();
+        let code = create_root_signal(String::new());
+        let provider: CompletionProvider = Rc::new(|_ctx: &CompletionContext| {
+            vec![CompletionItem::new("println", CompletionKind::Function)]
+        });
+        let mut ui = Ui::new();
+        let mut env = TextEnv::new();
+        ui.mount_root(
+            View::new(
+                white(),
+                code_editor(code)
+                    .completion(provider)
+                    .suggest_preview(preview)
+                    .autofocus(),
+            )
+            .into_widget(),
+        );
+        for _ in 0..3 {
+            ui.rebuild_if_dirty();
+            ui.layout(&mut env, Size::new(600.0, 400.0));
+        }
+        key(&mut ui, &mut env, KeyInput::Insert("p".to_string()));
+        key(&mut ui, &mut env, KeyInput::Insert("r".to_string()));
+        (ui, env, code)
+    };
+    let (ui_off, _, _) = mk(false);
+    let (mut ui, mut env, code) = mk(true);
+    assert!(
+        ui.render_node_count() > ui_off.render_node_count(),
+        "ghost text drawn"
+    );
+    // Tab completion: Tab accepts the suggestion.
+    key(&mut ui, &mut env, KeyInput::Indent);
+    assert_eq!(code.get(), "println");
+}
