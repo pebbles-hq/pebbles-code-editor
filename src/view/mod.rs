@@ -212,10 +212,12 @@ pub(crate) fn popup_shield(f: &Frame, child: impl IntoWidget) -> AnyWidget {
 }
 
 /// The editor's popup layer: one fixed slot per popup kind (an empty slot is a zero-size
-/// placeholder), then the block widgets. It is a single KEYED child of the content stack, so
-/// it keeps its elements — and a popup field's focus — however many grid layers precede it
-/// (their count changes with editor state, e.g. the caret layers come and go with focus,
-/// and unkeyed children are matched by position, which rebuilt the popup from scratch).
+/// placeholder), then the block widgets. It is a sibling ABOVE the editor's click area, at a
+/// fixed index, so its elements — and a popup field's focus — survive rebuilds (unkeyed
+/// children are matched by position; inside the grid stack, whose layer count changes with
+/// editor state such as the caret layers coming and going with focus, a press rebuilt the
+/// popup from scratch and dropped its field's focus). The fixed slots keep one popup's
+/// position stable when another opens or closes.
 fn popup_layer(slots: Vec<Option<AnyWidget>>, blocks: Vec<AnyWidget>) -> AnyWidget {
     let mut kids: Vec<AnyWidget> = slots
         .into_iter()
@@ -229,13 +231,10 @@ fn popup_layer(slots: Vec<Option<AnyWidget>>, blocks: Vec<AnyWidget>) -> AnyWidg
         })
         .collect();
     kids.extend(blocks);
-    keyed(
-        "editor-popups",
-        stack(kids)
-            .fit(StackFit::Expand)
-            .alignment(Alignment::TOP_LEFT),
-    )
-    .into_widget()
+    stack(kids)
+        .fit(StackFit::Expand)
+        .alignment(Alignment::TOP_LEFT)
+        .into_widget()
 }
 
 /// The identifier (word chars) around byte `b`, if any.
@@ -2354,7 +2353,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             .into_widget(),
         );
     }
-    layers.push(popup_layer(
+    let popups = popup_layer(
         vec![
             picker_slot.pop(),
             completion_slot,
@@ -2363,7 +2362,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             sig_slot,
         ],
         blocks,
-    ));
+    );
     let grid = stack(layers)
         .fit(StackFit::Expand)
         .alignment(Alignment::TOP_LEFT);
@@ -2510,16 +2509,18 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             (pad_l * 2.0 + max_cols as f64 * advance).max(avail)
         })
     };
-    // The content box fills at least the viewport: popups anchored to a short document
+    // The popups' box fills at least the viewport: popups anchored to a short document
     // (colour picker, completion, hover, …) sit below the last line, and hit testing never
-    // reaches a child outside its parent's bounds (as Flutter). A press below the last line
-    // then also places the caret (VS Code). The scroll extent is unchanged: the box only
+    // reaches a child outside its parent's bounds (as Flutter). The click area itself stays
+    // the text's height, so the empty viewport below a short document claims no presses
+    // (a host overlay drawn there keeps them). The scroll extent is unchanged: the box only
     // grows when the document is shorter than the viewport.
     let box_h = content_h.max(p.height.unwrap_or(0.0));
-    let content_box = match content_w {
-        Some(w) => container().width(w).height(box_h).child(grid),
-        None => container().height(box_h).child(grid),
+    let sized = |h: f64, child: AnyWidget| match content_w {
+        Some(w) => container().width(w).height(h).child(child).into_widget(),
+        None => container().height(h).child(child).into_widget(),
     };
+    let content_box = sized(content_h, grid.into_widget());
     // Per-plugin pointer handlers: notify each extension's on_click with the byte under the
     // press. (The editor's own hit-testing above already placed the caret.)
     let click_exts = p.extensions.clone();
@@ -2663,6 +2664,14 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
 
     // Horizontal scroll: wrap the content (not the gutter) so long lines scroll sideways
     // while the line numbers stay put. Only when the editor is a bounded viewport.
+    // The popup layer over the click area (a sibling, in the same content coordinates).
+    let click_area = sized(
+        box_h,
+        stack(vec![click_area.into_widget(), sized(box_h, popups)])
+            .fit(StackFit::Loose)
+            .alignment(Alignment::TOP_LEFT)
+            .into_widget(),
+    );
     let content_area: AnyWidget = if content_w.is_some() {
         SingleChildScrollView::horizontal(click_area)
             .controller(hscroll.clone())
@@ -2673,7 +2682,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             })
             .into_widget()
     } else {
-        click_area.into_widget()
+        click_area
     };
 
     // Gutter to the left of the (horizontally-scrolling) content.
