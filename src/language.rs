@@ -850,6 +850,17 @@ impl SelectionRange {
     }
 }
 
+/// Ranges edited together (LSP `LinkedEditingRanges`), e.g. an element's open and close tag
+/// names.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LinkedEditingRanges {
+    /// The ranges (same length and content).
+    pub ranges: Vec<Range>,
+    /// The pattern a valid edit must match (informational; the editor accepts identifier
+    /// characters and `-_:.`).
+    pub word_pattern: Option<String>,
+}
+
 /// Formatting options (LSP `FormattingOptions`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FormattingOptions {
@@ -1269,6 +1280,15 @@ pub trait LanguageService {
         doc: &DocRef,
         positions: &[Position],
         reply: Reply<Vec<SelectionRange>>,
+    ) -> bool {
+        false
+    }
+    /// `textDocument/linkedEditingRange`.
+    fn linked_editing_range(
+        &self,
+        doc: &DocRef,
+        pos: Position,
+        reply: Reply<Option<LinkedEditingRanges>>,
     ) -> bool {
         false
     }

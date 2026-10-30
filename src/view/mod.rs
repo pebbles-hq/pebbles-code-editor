@@ -393,6 +393,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         }),
         inlay_default: p.inlay_hints_enabled,
         lens_default: p.code_lens,
+        linked_on: p.linked_editing,
     };
     create_effect(move || {
         let st = state.get();
@@ -424,6 +425,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             l.request_bulb();
             l.request_symbols();
             l.request_lenses();
+            l.request_linked();
         });
     }
 
@@ -702,6 +704,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     "HTML" | "XML" | "TSX" | "JavaScript" | "Markdown" | "Vue" | "Svelte"
                 )
             });
+        // The service's linked-editing ranges work in any language.
+        let linked_any = p.linked_editing;
         let inner = move |k: KeyInput, via_binding: bool| -> bool {
             // A built-in whose default chord the host disabled is declined, so the key
             // bubbles to the app's shortcuts. (A host `Keymap::bind` chord still runs it.)
@@ -1080,7 +1084,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             }
             // Linked editing (auto-rename tag): an edit inside a markup tag name is applied to
             // its partner tag's name too, as one transaction (a temporary second cursor).
-            let linked_pair = if linked_on && !read_only {
+            let linked_pair = if linked_any && !read_only {
                 let st = state.peek();
                 let sels = st.selection.clamped(&st.doc);
                 let pr = sels.primary();
@@ -1093,8 +1097,22 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 };
                 if name_key && !sels.is_multi() {
                     let text = st.text();
-                    crate::scan_text::linked_tag_names(&text, pr.min())
-                        .filter(|(here, _)| here.0 <= pr.min() && pr.max() <= here.1)
+                    // The service's ranges first; the markup tag pair otherwise.
+                    let groups: Option<Vec<(usize, usize)>> = lsp_k.linked_now().or_else(|| {
+                        linked_on
+                            .then(|| crate::scan_text::linked_tag_names(&text, pr.min()))
+                            .flatten()
+                            .map(|(a, b)| {
+                                let mut v = vec![a, b];
+                                v.sort();
+                                v
+                            })
+                    });
+                    groups
+                        .and_then(|g| {
+                            let here = *g.iter().find(|h| h.0 <= pr.min() && pr.max() <= h.1)?;
+                            Some((here, g))
+                        })
                         .filter(|(here, _)| {
                             !(matches!(k, KeyInput::Backspace)
                                 && pr.is_empty()
@@ -1103,9 +1121,16 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                         .filter(|(here, _)| {
                             !(matches!(k, KeyInput::Delete) && pr.is_empty() && pr.head == here.1)
                         })
-                        .map(|(here, other)| {
-                            let d = |p: usize| other.0 + (p - here.0);
-                            (pr, Selection::range(d(pr.anchor), d(pr.head)))
+                        .map(|(here, all)| {
+                            let mirrors: Vec<Selection> = all
+                                .iter()
+                                .filter(|o| **o != here)
+                                .map(|o| {
+                                    let d = |p: usize| o.0 + (p - here.0);
+                                    Selection::range(d(pr.anchor), d(pr.head))
+                                })
+                                .collect();
+                            (pr, mirrors, all)
                         })
                 } else {
                     None
@@ -1113,13 +1138,16 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             } else {
                 None
             };
-            if let Some((pr, mirror)) = linked_pair {
+            if let Some((pr, mirrors, all)) = linked_pair {
                 let cur = state.peek();
-                let primary_first = pr.min() < mirror.min();
-                let two = Selections::new(vec![pr, mirror], if primary_first { 0 } else { 1 });
+                let old_len = cur.doc.len_bytes();
+                let mut sels = vec![pr];
+                sels.extend(mirrors);
+                sels.sort_by_key(|s| s.min());
+                let idx = sels.iter().position(|s| *s == pr).unwrap_or(0);
                 state.set(EditorState {
                     doc: cur.doc.clone(),
-                    selection: two,
+                    selection: Selections::new(sels, idx),
                 });
                 apply_key(k, state, history, code, goal, read_only, &cfg);
                 let after = state.peek();
@@ -1128,6 +1156,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     doc: after.doc.clone(),
                     selection: Selections::single(keep),
                 });
+                if lsp_k.h.linked.peek().is_some() {
+                    lsp_k.shift_linked(&all, old_len);
+                }
             } else {
                 let was_paste = matches!(k, KeyInput::Paste);
                 let before = was_paste.then(|| state.peek().text());

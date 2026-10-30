@@ -150,6 +150,9 @@ pub(crate) struct Store {
     pub(crate) lens_ver: Cell<Option<u64>>,
     pub(crate) select_gate: RequestGate,
     pub(crate) hier_gate: RequestGate,
+    pub(crate) linked_gate: RequestGate,
+    /// The (caret, version) of the last linked-editing request.
+    pub(crate) linked_at: Cell<Option<(usize, u64)>>,
     last_doc: RefCell<Option<Rope>>,
 }
 
@@ -199,6 +202,9 @@ pub(crate) struct Hooks {
     pub(crate) lens_on: Signal<Option<bool>>,
     /// The call / type hierarchy peek.
     pub(crate) hier: Signal<Option<crate::view::hierarchy::HierView>>,
+    /// The service's linked-editing ranges at the caret, with the document version they
+    /// belong to.
+    pub(crate) linked: Signal<Option<(u64, Vec<(usize, usize)>)>>,
 }
 
 /// Create the hook signals (call unconditionally, once per render).
@@ -232,6 +238,7 @@ pub(crate) fn hooks() -> Hooks {
         lenses: create_signal(Rc::new(Vec::new())),
         lens_on: create_signal(None),
         hier: create_signal(None),
+        linked: create_signal(None),
         crumb_open: create_signal(None),
         crumb_menu: crate::view::extensions::Palette {
             open: create_signal(false),
@@ -270,6 +277,8 @@ pub(crate) struct Lsp {
     /// `code_lens`).
     pub(crate) inlay_default: bool,
     pub(crate) lens_default: bool,
+    /// Linked editing is on (`CodeEditor::linked_editing`).
+    pub(crate) linked_on: bool,
 }
 
 /// Map the old byte-range diagnostics onto the LSP form.
@@ -1188,6 +1197,75 @@ impl Lsp {
         }
     }
 
+    /// Ask for the linked-editing ranges at the caret (when it moved or the text changed).
+    pub(crate) fn request_linked(&self) {
+        if !self.linked_on || self.read_only {
+            return;
+        }
+        let Some(svc) = self.svc.clone() else { return };
+        let st = self.state.peek();
+        let head = st.primary().head;
+        let ver = self.version();
+        if self.store.linked_at.get() == Some((head, ver)) {
+            return;
+        }
+        self.store.linked_at.set(Some((head, ver)));
+        let sig = self.h.linked;
+        let me = self.clone();
+        let reply = self.guard(
+            &self.store.linked_gate,
+            move |r: Option<lsp::LinkedEditingRanges>| {
+                let text = me.state.peek().text();
+                let v = r.map(|r| {
+                    let mut v: Vec<(usize, usize)> = r
+                        .ranges
+                        .iter()
+                        .map(|g| lsp::range_to_bytes(&text, *g))
+                        .collect();
+                    v.sort();
+                    (ver, v)
+                });
+                sig.set(v.filter(|(_, v)| v.len() > 1));
+            },
+        );
+        let asked = self.with_doc(|doc, text| {
+            svc.linked_editing_range(doc, lsp::byte_to_position(text, head), reply)
+        });
+        if !asked && self.h.linked.peek().is_some() {
+            self.h.linked.set(None);
+        }
+    }
+
+    /// The service's linked ranges, if they belong to the current text.
+    pub(crate) fn linked_now(&self) -> Option<Vec<(usize, usize)>> {
+        let (v, r) = self.h.linked.peek()?;
+        (v == self.version()).then_some(r)
+    }
+
+    /// After a mirrored edit changed every linked range by the same amount, keep the ranges
+    /// valid for the new text until the service answers again.
+    pub(crate) fn shift_linked(&self, ranges: &[(usize, usize)], old_len: usize) {
+        let new_len = self.state.peek().doc.len_bytes();
+        let n = ranges.len() as isize;
+        let delta = (new_len as isize - old_len as isize) / n.max(1);
+        let mapped: Vec<(usize, usize)> = ranges
+            .iter()
+            .enumerate()
+            .map(|(i, &(a, b))| {
+                let shift = i as isize * delta;
+                (
+                    (a as isize + shift).max(0) as usize,
+                    (b as isize + shift + delta).max(0) as usize,
+                )
+            })
+            .collect();
+        let ver = self.version();
+        self.store
+            .linked_at
+            .set(Some((self.state.peek().primary().head, ver)));
+        self.h.linked.set(Some((ver, mapped)));
+    }
+
     // ---- diagnostics -------------------------------------------------------------------
 
     /// F8 / Shift+F8: move to the next / previous problem (wrapping) and show it inline.
@@ -2035,6 +2113,7 @@ impl LanguageService for Chained {
     fn rename(&self, d: &lsp::DocRef, p: lsp::Position, n: &str, r: lsp::Reply<Option<lsp::WorkspaceEdit>>) -> bool { self.main.rename(d, p, n, r) }
     fn inlay_hints(&self, d: &lsp::DocRef, g: lsp::Range, r: lsp::Reply<Vec<lsp::InlayHint>>) -> bool { self.main.inlay_hints(d, g, r) }
     fn selection_range(&self, d: &lsp::DocRef, p: &[lsp::Position], r: lsp::Reply<Vec<lsp::SelectionRange>>) -> bool { self.main.selection_range(d, p, r) }
+    fn linked_editing_range(&self, d: &lsp::DocRef, p: lsp::Position, r: lsp::Reply<Option<lsp::LinkedEditingRanges>>) -> bool { self.main.linked_editing_range(d, p, r) }
     fn resolve_inlay_hint(&self, h: lsp::InlayHint, r: lsp::Reply<lsp::InlayHint>) -> bool { self.main.resolve_inlay_hint(h, r) }
     fn prepare_call_hierarchy(&self, d: &lsp::DocRef, p: lsp::Position, r: lsp::Reply<Vec<lsp::CallHierarchyItem>>) -> bool { self.main.prepare_call_hierarchy(d, p, r) }
     fn incoming_calls(&self, i: &lsp::CallHierarchyItem, r: lsp::Reply<Vec<lsp::CallHierarchyIncomingCall>>) -> bool { self.main.incoming_calls(i, r) }

@@ -61,6 +61,9 @@ struct Fake {
     sel_positions: RefCell<Vec<Vec<Position>>>,
     /// Hierarchy items asked about (incoming / outgoing / supertypes / subtypes).
     hier_asked: RefCell<Vec<String>>,
+    /// Linked-editing ranges; their replies are held until the test delivers them.
+    linked: RefCell<Option<Vec<Range>>>,
+    linked_pending: RefCell<Vec<Reply<Option<LinkedEditingRanges>>>>,
 }
 
 fn item(name: &str, uri: &str, line: u32) -> CallHierarchyItem {
@@ -76,6 +79,18 @@ fn item(name: &str, uri: &str, line: u32) -> CallHierarchyItem {
 }
 
 impl LanguageService for Fake {
+    fn linked_editing_range(
+        &self,
+        _d: &DocRef,
+        _p: Position,
+        reply: Reply<Option<LinkedEditingRanges>>,
+    ) -> bool {
+        if self.linked.borrow().is_none() {
+            return false;
+        }
+        self.linked_pending.borrow_mut().push(reply);
+        true
+    }
     fn prepare_call_hierarchy(
         &self,
         _d: &DocRef,
@@ -1607,4 +1622,41 @@ fn call_and_type_hierarchy_peek_expands_navigates_and_toggles_direction() {
     tap_label(&mut h, "Show Subtypes");
     h.frames(1);
     assert!(h.find_text("Hierarchy Puppy"));
+}
+
+#[test]
+fn linked_editing_ranges_from_the_service_mirror_edits_until_the_next_reply() {
+    let fake = Rc::new(Fake::default());
+    *fake.linked.borrow_mut() = Some(vec![rng(0, 4, 0, 7), rng(0, 13, 0, 16), rng(0, 19, 0, 22)]);
+    let (mut h, code) = mount("let abc = 1; abc + abc;\n", fake.clone(), |e| e);
+    caret_at(&mut h, 5);
+    h.frames(1);
+    // Deliver the latest request's reply (older ones are stale and dropped).
+    let deliver = |fake: &Fake| {
+        let r = fake.linked_pending.borrow_mut().pop().unwrap();
+        fake.linked_pending.borrow_mut().clear();
+        r(Some(LinkedEditingRanges {
+            ranges: fake.linked.borrow().clone().unwrap(),
+            word_pattern: None,
+        }));
+    };
+    deliver(&fake);
+    h.frames(1);
+    h.key(KeyInput::Insert("Z".into()));
+    assert_eq!(code.get(), "let aZbc = 1; aZbc + aZbc;\n");
+    // The new request is still pending: the ranges were shifted with the edit, so the next
+    // keystroke still mirrors.
+    h.key(KeyInput::Insert("Y".into()));
+    assert_eq!(code.get(), "let aZYbc = 1; aZYbc + aZYbc;\n");
+    h.key(KeyInput::Backspace);
+    assert_eq!(code.get(), "let aZbc = 1; aZbc + aZbc;\n");
+    // A non-identifier character is typed only at the caret.
+    h.key(KeyInput::Insert(" ".into()));
+    assert_eq!(code.get(), "let aZ bc = 1; aZbc + aZbc;\n");
+    // Declined: plain editing (no markup language here, so no tag fallback).
+    h.key(KeyInput::Undo);
+    *fake.linked.borrow_mut() = None;
+    caret_at(&mut h, 6);
+    h.key(KeyInput::Insert("Q".into()));
+    assert_eq!(code.get(), "let aZQbc = 1; aZbc + aZbc;\n");
 }

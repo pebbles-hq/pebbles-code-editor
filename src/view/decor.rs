@@ -397,13 +397,21 @@ pub(crate) fn fold_badges(f: &Frame, layers: &mut Vec<AnyWidget>) {
 /// Linked-editing outlines: when the caret is in a markup tag name, outline it and its
 /// partner (they are edited together).
 pub(crate) fn linked_editing(f: &Frame, layers: &mut Vec<AnyWidget>) {
-    if !f.linked_editing_active || f.sels.is_multi() {
+    if f.sels.is_multi() {
         return;
     }
-    let Some((a, b)) = crate::scan_text::linked_tag_names(f.src, f.pcc) else {
-        return;
+    let ranges = match f.lsp.linked_now() {
+        Some(r) => r,
+        None if f.linked_editing_active => match crate::scan_text::linked_tag_names(f.src, f.pcc) {
+            Some((a, b)) => vec![a, b],
+            None => return,
+        },
+        None => return,
     };
-    for (s, e) in [a, b] {
+    if !ranges.iter().any(|r| r.0 <= f.pcc && f.pcc <= r.1) {
+        return;
+    }
+    for (s, e) in ranges {
         let line = f.li.line_of(f.src, s);
         if !f.line_visible(line) {
             continue;
