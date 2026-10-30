@@ -19,11 +19,36 @@ struct Fake {
     hovers: Pending<Option<Hover>>,
     sigs: Pending<Option<SignatureHelp>>,
     sig_cx: RefCell<Vec<SignatureHelpContext>>,
+    /// Locations answered (synchronously) for definition / implementation / references.
+    defs: RefCell<Vec<Location>>,
+    impls: RefCell<Vec<Location>>,
+    /// Other documents' text (for peek previews).
+    files: RefCell<Vec<(String, String)>>,
+    opened: RefCell<Vec<Location>>,
 }
 
 impl LanguageService for Fake {
     fn hover(&self, _doc: &DocRef, pos: Position, reply: Reply<Option<Hover>>) -> bool {
         self.hovers.borrow_mut().push((pos, reply));
+        true
+    }
+    fn definition(&self, _doc: &DocRef, _pos: Position, reply: Reply<Vec<Location>>) -> bool {
+        reply(self.defs.borrow().clone());
+        true
+    }
+    fn implementation(&self, _doc: &DocRef, _pos: Position, reply: Reply<Vec<Location>>) -> bool {
+        reply(self.impls.borrow().clone());
+        true
+    }
+    fn read_text(&self, uri: &str) -> Option<String> {
+        self.files
+            .borrow()
+            .iter()
+            .find(|(u, _)| u == uri)
+            .map(|(_, t)| t.clone())
+    }
+    fn open_location(&self, loc: &Location) -> bool {
+        self.opened.borrow_mut().push(loc.clone());
         true
     }
     fn signature_help(
@@ -246,4 +271,107 @@ fn signature_help_triggers_retriggers_cycles_overloads_and_closes() {
     h.key(KeyInput::Escape);
     assert!(!h.find_text("\u{2039} 1/2 \u{203a}  f(a: i32, b: i32)"));
     assert!(fake.sigs.borrow().is_empty());
+}
+
+fn loc(uri: &str, line: u32, col: u32) -> Location {
+    Location {
+        uri: uri.into(),
+        range: Range::new(Position::new(line, col), Position::new(line, col + 3)),
+    }
+}
+
+#[test]
+fn navigation_reveals_peeks_and_opens_other_files() {
+    let fake = Rc::new(Fake::default());
+    fake.files.borrow_mut().push((
+        "file:///w/lib.rs".into(),
+        "// lib\n\npub fn helper() {}\n".into(),
+    ));
+    let (mut h, code) = mount(
+        "use lib;\nfn main() {\n    helper();\n}\n",
+        fake.clone(),
+        |e| e,
+    );
+    // F12 with one same-document result moves the caret there.
+    *fake.defs.borrow_mut() = vec![loc("file:///w/main.rs", 1, 3)];
+    h.press("F12");
+    h.key(KeyInput::Insert("X".into()));
+    assert_eq!(code.get(), "use lib;\nfn Xmain() {\n    helper();\n}\n");
+    h.key(KeyInput::Undo);
+    // A result in another document goes through the host's open_location.
+    *fake.defs.borrow_mut() = vec![loc("file:///w/lib.rs", 2, 7)];
+    h.press("F12");
+    assert_eq!(fake.opened.borrow().len(), 1);
+    assert_eq!(fake.opened.borrow()[0].uri, "file:///w/lib.rs");
+    // Alt+F12 peeks even a single result: an inline preview read through read_text.
+    h.press("Alt+F12");
+    h.frames(2);
+    assert!(h.find_text("Definition"), "peek title");
+    assert!(
+        h.find_text("pub fn helper() {}"),
+        "embedded preview of the other file"
+    );
+    h.key(KeyInput::Escape);
+    h.frames(1);
+    assert!(!h.find_text("pub fn helper() {}"));
+    // Several implementations (Ctrl+F12) open the peek with a file list; Down + Enter opens
+    // the second one.
+    *fake.impls.borrow_mut() = vec![
+        loc("file:///w/main.rs", 2, 4),
+        loc("file:///w/lib.rs", 2, 7),
+    ];
+    h.press("Ctrl+F12");
+    h.frames(2);
+    assert!(h.find_text("Implementations"));
+    assert!(h.find_text("2 results"));
+    assert!(h.find_text("main.rs:3"), "file list entry");
+    assert!(h.find_text("lib.rs:3"), "file list entry");
+    assert!(
+        h.find_text("    helper();"),
+        "preview of the selected result"
+    );
+    h.key(KeyInput::Move {
+        motion: Motion::Down,
+        extend: false,
+    });
+    h.frames(1);
+    assert!(
+        h.find_text("pub fn helper() {}"),
+        "preview follows the selection"
+    );
+    h.key(KeyInput::Enter);
+    h.frames(1);
+    assert_eq!(fake.opened.borrow().len(), 2);
+    assert!(!h.find_text("2 results"), "opening closes the peek");
+    assert_eq!(
+        code.get(),
+        "use lib;\nfn main() {\n    helper();\n}\n",
+        "Enter did not edit"
+    );
+}
+
+#[test]
+fn ctrl_hover_underlines_through_the_service_and_ctrl_click_navigates() {
+    let fake = Rc::new(Fake::default());
+    *fake.defs.borrow_mut() = vec![loc("file:///w/main.rs", 0, 0)];
+    let (mut h, code) = mount("alpha beta\n", fake.clone(), |e| e.gutter(false));
+    pebbles::core::keyboard::set_modifiers(false, false, false, false);
+    let at = Offset::new(14.0 + 7.5 * 8.4, 18.0);
+    h.hover(at);
+    let plain = h.render_node_count();
+    pebbles::core::keyboard::set_modifiers(false, true, false, false);
+    h.hover(Offset::new(at.x + 1.0, at.y));
+    h.frames(1);
+    assert!(
+        h.render_node_count() > plain,
+        "underline under the Ctrl+hovered symbol"
+    );
+    h.click(Offset::new(at.x + 1.0, at.y));
+    pebbles::core::keyboard::set_modifiers(false, false, false, false);
+    h.key(KeyInput::Insert("X".into()));
+    assert_eq!(
+        code.get(),
+        "Xalpha beta\n",
+        "Ctrl+click went to the definition"
+    );
 }

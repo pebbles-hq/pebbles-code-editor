@@ -18,6 +18,7 @@ use ropey::Rope;
 use crate::edit::{EditorState, History};
 use crate::language::{self as lsp, LanguageService, RequestGate};
 use crate::view::Frame;
+use crate::view::chrome::with_alpha;
 
 /// A diagnostic resolved to byte offsets in the current text.
 #[derive(Clone, Debug, PartialEq)]
@@ -55,11 +56,44 @@ pub(crate) struct SigView {
     pub(crate) active: usize,
 }
 
+/// Which navigation request to make.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Nav {
+    Definition,
+    Declaration,
+    TypeDefinition,
+    Implementation,
+    References,
+}
+
+impl Nav {
+    fn title(self) -> &'static str {
+        match self {
+            Nav::Definition => "Definition",
+            Nav::Declaration => "Declaration",
+            Nav::TypeDefinition => "Type Definition",
+            Nav::Implementation => "Implementations",
+            Nav::References => "References",
+        }
+    }
+}
+
+/// An open peek view: the locations shown inline below `line`.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PeekView {
+    pub(crate) line: usize,
+    pub(crate) title: String,
+    pub(crate) locs: Vec<lsp::Location>,
+    pub(crate) sel: usize,
+}
+
 /// Non-reactive per-editor state (gates, caches, the document version counter).
 #[derive(Default)]
 pub(crate) struct Store {
     pub(crate) hover_gate: RequestGate,
     pub(crate) sig_gate: RequestGate,
+    pub(crate) nav_gate: RequestGate,
+    pub(crate) link_gate: RequestGate,
     /// Hover replies per (byte, document version).
     pub(crate) hover_cache: RefCell<HashMap<(usize, u64), Option<lsp::Hover>>>,
     ver: Cell<u64>,
@@ -73,6 +107,9 @@ pub(crate) struct Hooks {
     /// The pointer is over the hover widget (it stays while it is).
     pub(crate) hover_sticky: Signal<bool>,
     pub(crate) sig: Signal<Option<SigView>>,
+    pub(crate) peek: Signal<Option<PeekView>>,
+    /// The Ctrl+hover link: the word range with a definition under the pointer.
+    pub(crate) link: Signal<Option<(usize, usize)>>,
     pub(crate) store: Signal<Rc<Store>>,
 }
 
@@ -82,6 +119,8 @@ pub(crate) fn hooks() -> Hooks {
         hover: create_signal(None),
         hover_sticky: create_signal(false),
         sig: create_signal(None),
+        peek: create_signal(None),
+        link: create_signal(None),
         store: create_signal(Rc::new(Store::default())),
     }
 }
@@ -649,6 +688,313 @@ impl Lsp {
         };
         let top = (y - f.line_px * (1.0 + extra) - 6.0).max(0.0);
         Some(Positioned::new(panel).left(x).top(top).into_widget())
+    }
+
+    // ---- navigation + peek ---------------------------------------------------------------
+
+    /// Navigate from the caret (F12, Ctrl+F12, …). One result is revealed (another document
+    /// through the host's `open_location`); several open the peek view, as does `peek`.
+    /// `false` when there is no service or it declines the request.
+    pub(crate) fn navigate(&self, kind: Nav, peek: bool) -> bool {
+        let head = self.state.peek().primary().head;
+        self.navigate_at(head, kind, peek)
+    }
+
+    /// Navigate from byte `at` (Ctrl+click uses the pointer's byte).
+    pub(crate) fn navigate_at(&self, at: usize, kind: Nav, peek: bool) -> bool {
+        let Some(svc) = self.svc.clone() else {
+            return false;
+        };
+        let line = crate::geometry::line_of(&self.state.peek().text(), at);
+        let me = self.clone();
+        let reply = self.guard(&self.store.nav_gate, move |locs: Vec<lsp::Location>| {
+            me.show_locations(kind.title(), locs, peek, line);
+        });
+        self.with_doc(|doc, text| {
+            let pos = lsp::byte_to_position(text, at);
+            match kind {
+                Nav::Definition => svc.definition(doc, pos, reply),
+                Nav::Declaration => svc.declaration(doc, pos, reply),
+                Nav::TypeDefinition => svc.type_definition(doc, pos, reply),
+                Nav::Implementation => svc.implementation(doc, pos, reply),
+                Nav::References => svc.references(doc, pos, true, reply),
+            }
+        })
+    }
+
+    /// Reveal one location, or peek several (or always, with `peek`).
+    pub(crate) fn show_locations(
+        &self,
+        title: &str,
+        locs: Vec<lsp::Location>,
+        peek: bool,
+        line: usize,
+    ) {
+        match locs.len() {
+            0 => {}
+            1 if !peek => self.go_to(&locs[0]),
+            _ => self.h.peek.set(Some(PeekView {
+                line,
+                title: title.to_string(),
+                locs,
+                sel: 0,
+            })),
+        }
+    }
+
+    /// Close the peek view.
+    pub(crate) fn close_peek(&self) {
+        if self.h.peek.peek().is_some() {
+            self.h.peek.set(None);
+        }
+    }
+
+    /// Keys while the peek is open: Up/Down pick a result, Enter opens it, Escape closes.
+    /// Returns whether the key was consumed.
+    pub(crate) fn peek_key(&self, k: &KeyInput) -> bool {
+        let Some(mut v) = self.h.peek.peek() else {
+            return false;
+        };
+        match k {
+            KeyInput::Escape => self.close_peek(),
+            KeyInput::Enter => {
+                self.close_peek();
+                if let Some(l) = v.locs.get(v.sel) {
+                    self.go_to(l);
+                }
+            }
+            KeyInput::Move {
+                motion: Motion::Down | Motion::Up,
+                ..
+            } => {
+                let n = v.locs.len();
+                let d = if matches!(
+                    k,
+                    KeyInput::Move {
+                        motion: Motion::Down,
+                        ..
+                    }
+                ) {
+                    1
+                } else {
+                    n - 1
+                };
+                v.sel = (v.sel + d) % n;
+                self.h.peek.set(Some(v));
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// The text of `uri`: this document's, or the host's `read_text`.
+    fn text_of(&self, uri: &str) -> Option<String> {
+        if uri == &*self.uri {
+            return Some(self.state.peek().text());
+        }
+        self.svc.as_ref()?.read_text(uri)
+    }
+
+    /// The peek view as a block widget below its line.
+    pub(crate) fn peek_block(
+        &self,
+        theme: &crate::theme::EditorTheme,
+        fs: f64,
+        line_px: f64,
+        mono: &str,
+    ) -> Option<crate::extensions::BlockWidget> {
+        const ROWS: usize = 10;
+        let v = self.h.peek.get()?;
+        let t = theme;
+        let sel = v.sel.min(v.locs.len().saturating_sub(1));
+        let loc = v.locs.get(sel)?.clone();
+        let file = |u: &str| u.rsplit('/').next().unwrap_or(u).to_string();
+        let peek = self.h.peek;
+        let mut header: Vec<AnyWidget> = vec![
+            t.ui_text(v.title.clone(), 0.0)
+                .color(t.foreground)
+                .into_widget(),
+            gap_w(8.0).into_widget(),
+            t.ui_text(
+                format!("{} \u{2014} {}", file(&loc.uri), loc.range.start.line + 1),
+                0.0,
+            )
+            .color(t.muted)
+            .into_widget(),
+            expanded(gap_w(1.0)).into_widget(),
+        ];
+        if v.locs.len() > 1 {
+            header.push(
+                t.ui_text(format!("{} results", v.locs.len()), 0.0)
+                    .color(t.muted)
+                    .into_widget(),
+            );
+            header.push(gap_w(6.0).into_widget());
+        }
+        header.push(
+            icon_button(IconKind::Close)
+                .size(16.0)
+                .on_pressed(move || peek.set(None))
+                .into_widget(),
+        );
+        // The embedded read-only preview around the target.
+        let mut preview: Vec<AnyWidget> = Vec::new();
+        match self.text_of(&loc.uri) {
+            Some(src) => {
+                let lines: Vec<&str> = src.split('\n').collect();
+                let first = (loc.range.start.line as usize).saturating_sub(2);
+                for n in first..(first + ROWS).min(lines.len()) {
+                    let target =
+                        n >= loc.range.start.line as usize && n <= loc.range.end.line as usize;
+                    let bg = if target {
+                        with_alpha(t.accent, 0.16)
+                    } else {
+                        Color::from_rgba8(0, 0, 0, 0)
+                    };
+                    preview.push(
+                        container()
+                            .height(line_px)
+                            .decoration(BoxDecoration::new().color(bg))
+                            .child(
+                                row(vec![
+                                    container()
+                                        .width(fs * 3.2)
+                                        .child(
+                                            text(format!("{}", n + 1))
+                                                .size((fs * 0.85) as f32)
+                                                .font_family(mono)
+                                                .color(t.muted),
+                                        )
+                                        .into_widget(),
+                                    text(lines[n].to_string())
+                                        .size(fs as f32)
+                                        .font_family(mono)
+                                        .color(t.foreground)
+                                        .soft_wrap(false)
+                                        .into_widget(),
+                                ])
+                                .cross_axis_alignment(CrossAxisAlignment::Center),
+                            )
+                            .into_widget(),
+                    );
+                }
+            }
+            None => preview.push(
+                t.ui_text("(preview unavailable)", 0.0)
+                    .color(t.muted)
+                    .into_widget(),
+            ),
+        }
+        let me = self.clone();
+        let open = loc.clone();
+        let preview = GestureDetector::new(
+            container()
+                .clip()
+                .child(column(preview).main_axis_size(MainAxisSize::Min)),
+        )
+        .on_double_tap(action(move || {
+            me.close_peek();
+            me.go_to(&open);
+        }));
+        let mut body: Vec<AnyWidget> = vec![expanded(preview).into_widget()];
+        if v.locs.len() > 1 {
+            let mut list: Vec<AnyWidget> = Vec::new();
+            for (i, l) in v.locs.iter().enumerate().take(ROWS) {
+                let bg = if i == sel {
+                    t.selection
+                } else {
+                    Color::from_rgba8(0, 0, 0, 0)
+                };
+                let (me, l2) = (self.clone(), l.clone());
+                list.push(
+                    GestureDetector::new(
+                        container()
+                            .height(line_px)
+                            .padding(EdgeInsets::symmetric(6.0, 0.0))
+                            .decoration(BoxDecoration::new().color(bg))
+                            .alignment(Alignment::CENTER_LEFT)
+                            .child(
+                                t.ui_text(
+                                    format!("{}:{}", file(&l.uri), l.range.start.line + 1),
+                                    0.0,
+                                )
+                                .color(t.foreground),
+                            ),
+                    )
+                    .cursor(Cursor::Pointer)
+                    .on_tap(action(move || {
+                        if let Some(mut v) = peek.peek() {
+                            v.sel = i;
+                            peek.set(Some(v));
+                        }
+                    }))
+                    .on_double_tap(action(move || {
+                        me.close_peek();
+                        me.go_to(&l2);
+                    }))
+                    .into_widget(),
+                );
+            }
+            body.push(
+                container()
+                    .width(220.0)
+                    .decoration(BoxDecoration::new().border(Border::new(t.border, 1.0)))
+                    .child(column(list).main_axis_size(MainAxisSize::Min))
+                    .into_widget(),
+            );
+        }
+        let height = line_px * (ROWS as f64 + 1.6) + 12.0;
+        let panel = container()
+            .height(height)
+            .padding(EdgeInsets::all(6.0))
+            .decoration(
+                BoxDecoration::new()
+                    .color(t.overlay_bg)
+                    .border(Border::new(t.accent, 1.0)),
+            )
+            .child(
+                column(vec![
+                    row(header)
+                        .cross_axis_alignment(CrossAxisAlignment::Center)
+                        .into_widget(),
+                    expanded(row(body).cross_axis_alignment(CrossAxisAlignment::Start))
+                        .into_widget(),
+                ])
+                .cross_axis_alignment(CrossAxisAlignment::Stretch),
+            );
+        Some(crate::extensions::BlockWidget {
+            line: v.line,
+            height,
+            widget: panel.into_widget(),
+        })
+    }
+
+    /// Ctrl/Cmd+hover over `byte`: ask for its definition and underline the word when there
+    /// is one (the Ctrl+click target).
+    pub(crate) fn request_link(&self, byte: usize) {
+        if self
+            .h
+            .link
+            .peek()
+            .is_some_and(|(a, b)| a <= byte && byte <= b)
+        {
+            return;
+        }
+        let Some(svc) = self.svc.clone() else { return };
+        let word = crate::view::word_range_at(&self.state.peek().text(), byte);
+        let link = self.h.link;
+        let Some(w) = word else {
+            link.set(None);
+            return;
+        };
+        let reply = self.guard(&self.store.link_gate, move |locs: Vec<lsp::Location>| {
+            link.set((!locs.is_empty()).then_some(w));
+        });
+        let asked = self
+            .with_doc(|doc, text| svc.definition(doc, lsp::byte_to_position(text, byte), reply));
+        if !asked {
+            link.set(None);
+        }
     }
 
     /// Reveal `loc`: in this document move the caret to its start; elsewhere ask the host.

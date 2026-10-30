@@ -617,7 +617,6 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 .and_then(|l| l.line_comment().map(str::to_string)),
         });
         let inline_provider = p.inline_suggestions.clone();
-        let definition = p.definition.clone();
         let format = p.format.clone();
         let format_on_paste = p.format_on_paste;
         let emmet_tab = p.emmet;
@@ -652,6 +651,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             }
             if !preedit.peek().is_empty() {
                 preedit.set(String::new());
+            }
+            // The peek view takes Up/Down/Enter/Escape while open.
+            if lsp_k.peek_key(&k) {
+                return true;
             }
             // Any key closes the hover (Escape is consumed by it).
             if lsp_k.h.hover.peek().is_some() {
@@ -881,24 +884,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     completer.request(state, completion, true, Default::default());
                     return true;
                 }
-                // F12: jump the caret to the provider's target (autoscroll follows).
+                // F12: reveal the definition (several results open the peek).
                 KeyInput::GoToDefinition => {
-                    if definition.is_none() {
-                        return false; // no provider: bubble
-                    }
-                    if let Some(dp) = &definition {
-                        let cur = state.peek();
-                        if let Some(target) = dp(&cur.text(), cur.primary().head) {
-                            state.set(EditorState {
-                                doc: cur.doc.clone(),
-                                selection: Selections::single(Selection::caret(
-                                    target.min(cur.len()),
-                                )),
-                            });
-                            history.peek().borrow_mut().break_group();
-                        }
-                    }
-                    return true;
+                    return lsp_k.navigate(lsp::Nav::Definition, false);
                 }
                 // Shift+Alt+F: replace the document with the formatter's output (one undo step).
                 KeyInput::Format => {
@@ -1515,6 +1503,12 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             }
         }
     }
+    // The language-service peek (definitions / references) is an internal block widget.
+    if let Some(b) = lsp_ctl.peek_block(&p.theme, eff_fs, eff_fs * p.lh, &p.font_family)
+        && b.line < line_count
+    {
+        block_widgets.push(b);
+    }
     // Diff editor (side-by-side / inline): word highlights, removed rows, filler rows.
     let diff_parts = diffview::parts(p, &src, eff_fs, line_px);
     block_widgets.extend(
@@ -1862,9 +1856,11 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             .find(|&(a, z)| ls + a <= b && b <= ls + z)
             .map(|(a, z)| (ls + a, ls + z));
         let target = link.or_else(|| {
-            let dp = p.definition.as_ref()?;
-            let (a, z) = word_range_at(&src, b)?;
-            dp(&src, b).map(|_| (a, z))
+            lsp_ctl
+                .h
+                .link
+                .get()
+                .filter(|&(a, z)| a <= b && b <= z && z <= src.len())
         });
         if let Some(r) = target {
             ext_decos.push(Decoration::underline(r, theme.accent));
@@ -2234,7 +2230,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // press. (The editor's own hit-testing above already placed the caret.)
     let click_exts = p.extensions.clone();
     let click_link = p.on_open_link.clone();
-    let click_def = p.definition.clone();
+    let click_lsp = lsp_ctl.clone();
     let click_area = GestureDetector::new(content_box)
         .on_pointer_down(action_event(move |e| {
             focus.request_focus();
@@ -2268,16 +2264,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 match (link, &click_link) {
                     (Some(url), Some(open)) => open(&url),
                     _ => {
-                        if let Some(dp) = &click_def
-                            && let Some(target) = dp(&text, b)
-                        {
-                            state.set(EditorState {
-                                doc: cur.doc.clone(),
-                                selection: Selections::single(Selection::caret(
-                                    target.min(cur.len()),
-                                )),
-                            });
-                        }
+                        click_lsp.navigate_at(b, lsp::Nav::Definition, false);
                     }
                 }
             }
@@ -2363,7 +2350,13 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             move |e| {
                 hover_pos.set(Some(e.position));
                 let text = state.peek().text();
-                l.pointer_moved(p2b(&text, e.position), e.position);
+                let b = p2b(&text, e.position);
+                if pebbles::core::keyboard::ctrl_held() || pebbles::core::keyboard::meta_held() {
+                    l.request_link(b);
+                } else if l.h.link.peek().is_some() {
+                    l.h.link.set(None);
+                }
+                l.pointer_moved(b, e.position);
             }
         }))
         .on_hover_exit(action({

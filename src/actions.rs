@@ -240,6 +240,18 @@ commands! {
     ShrinkSelection => "editor.action.smartSelect.shrink", "Shrink Selection", ["Shift+Alt+Left"];
     /// Show the hover for the symbol at the caret.
     ShowHover => "editor.action.showHover", "Show or Focus Hover", ["Ctrl+K Ctrl+I"];
+    /// Go to the definition of the symbol at the caret.
+    GoToDefinition => "editor.action.revealDefinition", "Go to Definition", ["F12"];
+    /// Go to the declaration of the symbol at the caret.
+    GoToDeclaration => "editor.action.revealDeclaration", "Go to Declaration", [];
+    /// Go to the type definition of the symbol at the caret.
+    GoToTypeDefinition => "editor.action.goToTypeDefinition", "Go to Type Definition", [];
+    /// Go to the implementations of the symbol at the caret.
+    GoToImplementation => "editor.action.goToImplementation", "Go to Implementations", ["Ctrl+F12"];
+    /// Peek the definition inline.
+    PeekDefinition => "editor.action.peekDefinition", "Peek Definition", ["Alt+F12"];
+    /// Peek the implementations inline.
+    PeekImplementation => "editor.action.peekImplementation", "Peek Implementations", ["Ctrl+Shift+F12"];
     /// Show signature help (parameter hints) for the call at the caret.
     TriggerParameterHints => "editor.action.triggerParameterHints", "Trigger Parameter Hints", ["Ctrl+Shift+Space"];
 }
@@ -262,6 +274,14 @@ pub(crate) fn key_table(km: &crate::Keymap) -> Vec<(Vec<Stroke>, EditorCommand)>
     let mut out = Vec::new();
     for &cmd in EditorCommand::ALL {
         if km.unbound.contains(&cmd) {
+            continue;
+        }
+        // A disabled built-in key (F12, Shift+Alt+F) stays disabled for its command too.
+        let builtin = match cmd {
+            EditorCommand::GoToDefinition => Some(crate::keymap::BuiltinCommand::GoToDefinition),
+            _ => None,
+        };
+        if builtin.is_some_and(|b| km.is_disabled(b)) {
             continue;
         }
         for k in cmd.default_keys() {

@@ -159,6 +159,18 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
             env.lsp.show_hover_at_caret();
             true
         }
+        C::GoToDefinition => env.lsp.navigate(crate::view::lsp::Nav::Definition, false),
+        C::GoToDeclaration => env.lsp.navigate(crate::view::lsp::Nav::Declaration, false),
+        C::GoToTypeDefinition => env
+            .lsp
+            .navigate(crate::view::lsp::Nav::TypeDefinition, false),
+        C::GoToImplementation => env
+            .lsp
+            .navigate(crate::view::lsp::Nav::Implementation, false),
+        C::PeekDefinition => env.lsp.navigate(crate::view::lsp::Nav::Definition, true),
+        C::PeekImplementation => env
+            .lsp
+            .navigate(crate::view::lsp::Nav::Implementation, true),
         C::TriggerParameterHints => {
             env.lsp
                 .request_signature(crate::language::SignatureHelpTriggerKind::Invoked, None);
