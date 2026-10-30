@@ -610,7 +610,12 @@ impl Lsp {
                 sticky.set(false);
                 me.pointer_left();
             }));
-        Some(Positioned::new(panel).left(x).top(y).into_widget())
+        Some(
+            Positioned::new(crate::view::popup_shield(f, panel))
+                .left(x)
+                .top(y)
+                .into_widget(),
+        )
     }
 
     /// A diagnostic as shown in the hover / problem peek: severity, message, code / source
@@ -858,7 +863,12 @@ impl Lsp {
             1.0
         };
         let top = (y - f.line_px * (1.0 + extra) - 6.0).max(0.0);
-        Some(Positioned::new(panel).left(x).top(top).into_widget())
+        Some(
+            Positioned::new(crate::view::popup_shield(f, panel))
+                .left(x)
+                .top(top)
+                .into_widget(),
+        )
     }
 
     // ---- navigation + peek ---------------------------------------------------------------
@@ -1855,7 +1865,7 @@ impl Lsp {
                     .main_axis_size(MainAxisSize::Min),
             );
         Some(
-            Positioned::new(panel)
+            Positioned::new(crate::view::popup_shield(f, panel))
                 .left((x - 4.0).max(0.0))
                 .top((y - 4.0).max(0.0))
                 .into_widget(),

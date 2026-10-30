@@ -154,25 +154,56 @@ fn colour_swatch_opens_picker_and_applies() {
     // The swatch sits just left of the literal (column 11).
     let adv = 13.5 * 0.6;
     let sz = (LINE * 0.55).min(adv * 1.2);
-    h.tap(Offset::new(14.0 + 11.0 * adv - sz / 2.0 - 1.0, row_y(0)));
+    let swatch = Offset::new(14.0 + 11.0 * adv - sz / 2.0 - 1.0, row_y(0));
+    let field_of = |h: &mut Harness, hex: &str| {
+        h.semantics_tree()
+            .into_iter()
+            .find(|n| n.props.value.as_deref() == Some(hex))
+            .map(|n| n.bounds)
+    };
+    // Open, press into the hex field (a real click: the press blurs first, like the shell),
+    // then Escape dismisses without applying.
+    h.click(swatch);
     h.frames(2);
-    // The picker's hex field: focus it, replace the value, submit.
-    let field = h
-        .semantics_tree()
-        .into_iter()
-        .find(|n| n.props.value.as_deref() == Some("#ff0000"))
-        .expect("picker hex field");
-    let c = field.bounds.center();
-    // FIXME(picker-hit): the picker panel is not hit-testable (the render hit walk
-    // under the field ends at the editor's RenderScroll, with no tap/pan listener), so
-    // a real press (Harness::click now blurs first, like the shell) leaves nothing
-    // focused. Tap without the press-blur; the field already holds its autofocus.
-    h.tap(Offset::new(c.x, c.y));
+    let f = field_of(&mut h, "#ff0000").expect("picker hex field");
+    h.click(Offset::new(f.center().x, f.center().y));
+    h.frames(1);
+    // The press focused the field (typing edits the field, not the document).
+    h.key(KeyInput::Insert("z".into()));
+    h.frames(1);
+    assert!(
+        field_of(&mut h, "#ff0000z").is_some(),
+        "the click focused the hex field"
+    );
+    assert_eq!(code.get(), "a { color: #ff0000; }");
+    h.key(KeyInput::Escape);
+    h.frames(2);
+    assert!(
+        field_of(&mut h, "#ff0000").is_none(),
+        "Escape closes the picker"
+    );
+    assert_eq!(code.get(), "a { color: #ff0000; }");
+    // Reopen, click the field, replace the value, submit.
+    h.click(swatch);
+    h.frames(2);
+    let f = field_of(&mut h, "#ff0000").expect("picker hex field");
+    h.click(Offset::new(f.center().x, f.center().y));
     h.key(KeyInput::SelectAll);
     h.key(KeyInput::Insert("#00ff00".into()));
     h.key(KeyInput::Enter);
     h.frames(2);
     assert_eq!(code.get(), "a { color: #00ff00; }");
+    // Reopen and click the first preset in the swatch grid (below the field row).
+    h.click(swatch);
+    h.frames(2);
+    let f = field_of(&mut h, "#00ff00").expect("picker hex field");
+    let panel_left = 14.0 + 11.0 * adv;
+    h.click(Offset::new(
+        panel_left + 8.0 + 2.0 + 8.0,
+        f.y1 + 6.0 + 2.0 + 8.0,
+    ));
+    h.frames(2);
+    assert_eq!(code.get(), "a { color: #f44336; }");
 }
 
 #[test]

@@ -739,11 +739,12 @@ pub(crate) fn popup(s: &Session, f: &crate::view::Frame) -> AnyWidget {
                 .into_widget(),
         );
     }
-    Positioned::new(
+    Positioned::new(crate::view::popup_shield(
+        f,
         row(parts)
             .cross_axis_alignment(CrossAxisAlignment::Start)
             .main_axis_size(MainAxisSize::Min),
-    )
+    ))
     .left(x)
     .top(y)
     .into_widget()

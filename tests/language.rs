@@ -145,6 +145,16 @@ fn trigger_character_async_reply_docs_pane_and_auto_import() {
         "markdown paragraph"
     );
     assert!(h.find_text("let n = v.len();"), "highlighted code block");
+    // A real click on the docs pane stays with the popup: it stays open, the caret and
+    // focus stay in the editor, so Enter still accepts.
+    let id = h.find_all_text("fn len(&self) -> usize")[0];
+    let (o, sz) = {
+        let rt = h.ui.render_tree();
+        (rt.absolute_offset(id), rt.size_of(id))
+    };
+    h.click(Offset::new(o.x + sz.width / 2.0, o.y + sz.height / 2.0));
+    h.frames(1);
+    assert!(h.find_text("fn len(&self) -> usize"), "popup still open");
     h.key(KeyInput::Enter);
     h.frames(1);
     assert_eq!(code.get(), "use std::vec::Vec;\nlet v = x.len");

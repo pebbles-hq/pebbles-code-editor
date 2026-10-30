@@ -507,7 +507,17 @@ pub(crate) fn color_picker(
     let field = text_field()
         .bind(draft)
         .autofocus()
-        .on_submit(move |v| apply_field(v.to_string()));
+        .on_submit(move |v| apply_field(v.to_string()))
+        // Escape dismisses the picker without applying (VS Code).
+        .on_nav(move |k| {
+            if matches!(k, KeyInput::Escape) {
+                picker.set(None);
+                draft.set(String::new());
+                true
+            } else {
+                false
+            }
+        });
     let current = Color::from_rgba8(lit.rgba[0], lit.rgba[1], lit.rgba[2], lit.rgba[3]);
     let panel = container()
         .width(220.0)
@@ -541,7 +551,7 @@ pub(crate) fn color_picker(
         );
     let (x, y) = f.xy(line, text[..lit.start].chars().count());
     layers.push(
-        Positioned::new(panel)
+        Positioned::new(crate::view::popup_shield(f, panel))
             .left(x)
             .top(y + f.line_px + 2.0)
             .into_widget(),

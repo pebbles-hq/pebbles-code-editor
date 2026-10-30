@@ -92,6 +92,8 @@ pub(crate) struct Frame<'a> {
     pub(crate) overtype: bool,
     /// The colour-picker anchor (byte of the colour literal being edited).
     pub(crate) color_picker: Signal<Option<usize>>,
+    /// The editor's focus node (popups hand focus back to it, see `popup_shield`).
+    pub(crate) focus: pebbles::core::focus::FocusNode,
     /// The open change-peek hunk (gutter change bars set it).
     pub(crate) change_peek: Signal<Option<usize>>,
     /// Whether the editor currently holds keyboard focus (drives active vs inactive selection).
@@ -187,6 +189,53 @@ pub(crate) struct InlineGhost {
     pub(crate) at: usize,
     pub(crate) items: Vec<String>,
     pub(crate) idx: usize,
+}
+
+/// Wrap an in-editor popup (colour picker, completion, hover, rename box, signature help,
+/// block widget) so it owns the pointer over its area. The popups are layered inside the
+/// editor's click area, and pointer-down / hover go to the topmost listener under the
+/// pointer — without this, a press on a popup reached the editor, which took focus back
+/// from the popup's field and moved the caret (and hovering it re-ran the editor hover).
+/// A press that focused nothing inside the popup (a button, a lens, a swatch) hands focus
+/// back to the editor instead, as VS Code keeps the editor focused around its widgets.
+pub(crate) fn popup_shield(f: &Frame, child: impl IntoWidget) -> AnyWidget {
+    let focus = f.focus;
+    GestureDetector::new(child)
+        .on_pointer_down(action_event(move |_| {
+            // A field in the popup takes focus on the drag start, before this fires.
+            if pebbles::core::focus::focus_signal().peek().is_none() {
+                focus.request_focus();
+            }
+        }))
+        .on_hover_move(action_event(|_| {}))
+        .into_widget()
+}
+
+/// The editor's popup layer: one fixed slot per popup kind (an empty slot is a zero-size
+/// placeholder), then the block widgets. It is a single KEYED child of the content stack, so
+/// it keeps its elements — and a popup field's focus — however many grid layers precede it
+/// (their count changes with editor state, e.g. the caret layers come and go with focus,
+/// and unkeyed children are matched by position, which rebuilt the popup from scratch).
+fn popup_layer(slots: Vec<Option<AnyWidget>>, blocks: Vec<AnyWidget>) -> AnyWidget {
+    let mut kids: Vec<AnyWidget> = slots
+        .into_iter()
+        .map(|s| {
+            s.unwrap_or_else(|| {
+                Positioned::new(SizedBox::shrink())
+                    .left(0.0)
+                    .top(0.0)
+                    .into_widget()
+            })
+        })
+        .collect();
+    kids.extend(blocks);
+    keyed(
+        "editor-popups",
+        stack(kids)
+            .fit(StackFit::Expand)
+            .alignment(Alignment::TOP_LEFT),
+    )
+    .into_widget()
 }
 
 /// The identifier (word chars) around byte `b`, if any.
@@ -2101,6 +2150,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 )
             }),
         color_picker,
+        focus,
         change_peek,
         highlight_word_matches: find.open.get() == 0,
         doc_highlights: lsp_ctl.h.highlights.get(),
@@ -2158,7 +2208,11 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 .into_widget(),
         );
     }
-    decor::color_picker(&frame, &mut layers, state, history, code, color_draft);
+    // Interactive popups go to `popup_layer` (fixed slots above every grid layer), not
+    // `layers`; see there.
+    let mut picker_slot: Vec<AnyWidget> = Vec::new();
+    decor::color_picker(&frame, &mut picker_slot, state, history, code, color_draft);
+    let mut blocks: Vec<AnyWidget> = Vec::new();
     if let Some(g) = &ghost_text {
         let first = g.split('\n').next().unwrap_or("");
         let l = li.line_of(&src, primary.head);
@@ -2191,12 +2245,15 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 let off = used.entry(bw.line).or_insert(0.0);
                 let y = frame.row_y(grow) + *off;
                 *off += bw.height;
-                layers.push(
-                    Positioned::new(container().height(bw.height).child(bw.widget))
-                        .left(pad_l)
-                        .right(0.0)
-                        .top(y)
-                        .into_widget(),
+                blocks.push(
+                    Positioned::new(popup_shield(
+                        &frame,
+                        container().height(bw.height).child(bw.widget),
+                    ))
+                    .left(pad_l)
+                    .right(0.0)
+                    .top(y)
+                    .into_widget(),
                 );
             }
         }
@@ -2205,21 +2262,16 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         let cur = find.idx.peek().min(search_matches.len() - 1);
         layers.extend(search::match_layers(&frame, &search_matches, cur));
     }
+    let mut completion_slot = None;
     if let Some(sess) = completion.peek() {
-        layers.push(completion::popup(&sess, &frame));
+        completion_slot = Some(completion::popup(&sess, &frame));
     }
     // Hover (service-driven, shown after the pointer dwells or by Ctrl+K Ctrl+I).
-    if let Some(l) = lsp_ctl.hover_layer(&frame) {
-        layers.push(l);
-    }
+    let hover_slot = lsp_ctl.hover_layer(&frame);
     // The inline rename box (F2).
-    if let Some(l) = lsp_ctl.rename_layer(&frame) {
-        layers.push(l);
-    }
+    let rename_slot = lsp_ctl.rename_layer(&frame);
     // Signature help: a panel just above the caret line while typing a call.
-    if let Some(l) = lsp_ctl.sig_layer(&frame) {
-        layers.push(l);
-    }
+    let sig_slot = lsp_ctl.sig_layer(&frame);
     // IME composition: the in-progress preedit text, tinted + underlined at the caret.
     let pre = preedit.get();
     if !pre.is_empty() {
@@ -2302,6 +2354,16 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             .into_widget(),
         );
     }
+    layers.push(popup_layer(
+        vec![
+            picker_slot.pop(),
+            completion_slot,
+            hover_slot,
+            rename_slot,
+            sig_slot,
+        ],
+        blocks,
+    ));
     let grid = stack(layers)
         .fit(StackFit::Expand)
         .alignment(Alignment::TOP_LEFT);
@@ -2448,9 +2510,15 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             (pad_l * 2.0 + max_cols as f64 * advance).max(avail)
         })
     };
+    // The content box fills at least the viewport: popups anchored to a short document
+    // (colour picker, completion, hover, …) sit below the last line, and hit testing never
+    // reaches a child outside its parent's bounds (as Flutter). A press below the last line
+    // then also places the caret (VS Code). The scroll extent is unchanged: the box only
+    // grows when the document is shorter than the viewport.
+    let box_h = content_h.max(p.height.unwrap_or(0.0));
     let content_box = match content_w {
-        Some(w) => container().width(w).height(content_h).child(grid),
-        None => container().height(content_h).child(grid),
+        Some(w) => container().width(w).height(box_h).child(grid),
+        None => container().height(box_h).child(grid),
     };
     // Per-plugin pointer handlers: notify each extension's on_click with the byte under the
     // press. (The editor's own hit-testing above already placed the caret.)

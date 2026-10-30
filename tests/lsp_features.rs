@@ -1905,3 +1905,90 @@ fn controller_refresh_re_requests_inlay_hints_and_code_lenses() {
     ctrl.refresh(Refresh::SemanticTokens); // no legend: a no-op, must not panic
     h.frames(2);
 }
+
+/// The centre of the first rendered text run containing `text`.
+fn text_center(h: &Harness, text: &str) -> Offset {
+    let id = *h
+        .find_all_text(text)
+        .first()
+        .unwrap_or_else(|| panic!("no text {text:?}"));
+    let rt = h.ui.render_tree();
+    let (o, s) = (rt.absolute_offset(id), rt.size_of(id));
+    Offset::new(o.x + s.width / 2.0, o.y + s.height / 2.0)
+}
+
+/// A real click (the press blurs first, like the shell) on an in-editor popup stays with the
+/// popup: it neither moves the caret nor leaves the editor unfocused, and the rename box's
+/// field takes focus from it.
+#[test]
+fn clicks_on_hover_signature_help_and_rename_popups_stay_with_the_popup() {
+    let fake = Rc::new(Fake::default());
+    let (mut h, code) = mount("f\nlet foo = 1;\n", fake.clone(), |e| e);
+    h.key(KeyInput::Move {
+        motion: Motion::Right,
+        extend: false,
+    });
+    // Signature help: click its panel, then keep typing at the caret.
+    h.key(KeyInput::Insert("(".into()));
+    let (_, r) = take(&fake.sigs);
+    r(Some(overloads(None, 0)));
+    h.frames(2);
+    let at = text_center(&h, "Adds two numbers.");
+    h.click(at);
+    h.frames(1);
+    h.key(KeyInput::Insert("1".into()));
+    h.frames(1);
+    assert_eq!(code.get(), "f(1)\nlet foo = 1;\n", "caret kept, editor focused");
+    h.key(KeyInput::Escape);
+    // Hover (Ctrl+K Ctrl+I): click inside it; the caret stays.
+    h.press("Ctrl+K");
+    h.press("Ctrl+I");
+    let (_, r) = take(&fake.hovers);
+    r(Some(Hover {
+        contents: MarkupContent::plain("hover body text"),
+        range: None,
+    }));
+    h.frames(2);
+    let at = text_center(&h, "hover body text");
+    h.click(at);
+    h.frames(1);
+    h.key(KeyInput::Insert("2".into()));
+    h.frames(1);
+    assert_eq!(code.get(), "f(12)\nlet foo = 1;\n", "caret kept, editor focused");
+    // Rename box: click its field and type into it (not the document).
+    h.key(KeyInput::Move {
+        motion: Motion::Down,
+        extend: false,
+    });
+    h.key(KeyInput::Move {
+        motion: Motion::LineStart,
+        extend: false,
+    });
+    for _ in 0..5 {
+        h.key(KeyInput::Move {
+            motion: Motion::Right,
+            extend: false,
+        });
+    }
+    *fake.prepare.borrow_mut() = Some(Some(Range::new(Position::new(1, 4), Position::new(1, 7))));
+    h.press("F2");
+    h.frames(2);
+    let field = h
+        .semantics_tree()
+        .into_iter()
+        .find(|n| n.props.value.as_deref() == Some("foo"))
+        .expect("rename field");
+    let c = field.bounds.center();
+    h.click(Offset::new(c.x, c.y));
+    h.frames(1);
+    h.key(KeyInput::Insert("z".into()));
+    h.frames(1);
+    assert!(
+        h.semantics_tree()
+            .into_iter()
+            .any(|n| n.props.value.as_deref().is_some_and(|v| v.contains('z') && v.len() <= 4)),
+        "the click focused the rename field"
+    );
+    assert_eq!(code.get(), "f(12)\nlet foo = 1;\n");
+    h.key(KeyInput::Escape);
+}
