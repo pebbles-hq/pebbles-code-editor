@@ -260,6 +260,10 @@ commands! {
     NextProblem => "editor.action.marker.next", "Go to Next Problem (Error, Warning, Info)", ["F8", "Alt+F8"];
     /// Go to the previous problem.
     PreviousProblem => "editor.action.marker.prev", "Go to Previous Problem (Error, Warning, Info)", ["Shift+F8", "Shift+Alt+F8"];
+    /// Format the document through the language service.
+    FormatDocument => "editor.action.formatDocument", "Format Document", ["Shift+Alt+F"];
+    /// Format the selection (or the caret's line).
+    FormatSelection => "editor.action.formatSelection", "Format Selection", ["Ctrl+K Ctrl+F"];
     /// Show the code actions (quick fixes, refactors) at the caret.
     QuickFix => "editor.action.quickFix", "Quick Fix...", ["Ctrl+."];
     /// Apply the preferred quick fix at the caret.
@@ -293,6 +297,7 @@ pub(crate) fn key_table(km: &crate::Keymap) -> Vec<(Vec<Stroke>, EditorCommand)>
         // A disabled built-in key (F12, Shift+Alt+F) stays disabled for its command too.
         let builtin = match cmd {
             EditorCommand::GoToDefinition => Some(crate::keymap::BuiltinCommand::GoToDefinition),
+            EditorCommand::FormatDocument => Some(crate::keymap::BuiltinCommand::Format),
             _ => None,
         };
         if builtin.is_some_and(|b| km.is_disabled(b)) {

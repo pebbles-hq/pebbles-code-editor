@@ -127,6 +127,9 @@ pub(crate) struct Store {
     pub(crate) hl_gate: RequestGate,
     pub(crate) rename_gate: RequestGate,
     pub(crate) action_gate: RequestGate,
+    pub(crate) fmt_gate: RequestGate,
+    /// Formatting options (the resolved indentation, set each render).
+    pub(crate) fmt: Cell<Option<lsp::FormattingOptions>>,
     pub(crate) bulb_gate: RequestGate,
     bulb_at: Cell<Option<(usize, u64)>>,
     /// The (caret, version) of the last document-highlight request.
@@ -1365,6 +1368,88 @@ impl Lsp {
         } else {
             apply(a);
         }
+    }
+
+    // ---- formatting --------------------------------------------------------------------
+
+    fn fmt_options(&self) -> lsp::FormattingOptions {
+        self.store.fmt.get().unwrap_or(lsp::FormattingOptions {
+            tab_size: 4,
+            insert_spaces: true,
+        })
+    }
+
+    /// Shift+Alt+F: format the whole document (one undo step, cursors kept).
+    pub(crate) fn format_document(&self) -> bool {
+        let Some(svc) = self.svc.clone() else {
+            return false;
+        };
+        if self.read_only {
+            return false;
+        }
+        let me = self.clone();
+        let reply = self.guard(&self.store.fmt_gate, move |e: Vec<lsp::TextEdit>| {
+            me.apply_text_edits(&e);
+        });
+        let opts = self.fmt_options();
+        self.with_doc(|doc, _| svc.formatting(doc, opts, reply))
+    }
+
+    /// Format bytes `from..to` (range formatting; the whole document when the service has
+    /// none).
+    pub(crate) fn format_range(&self, from: usize, to: usize) -> bool {
+        let Some(svc) = self.svc.clone() else {
+            return false;
+        };
+        if self.read_only {
+            return false;
+        }
+        let me = self.clone();
+        let reply = self.guard(&self.store.fmt_gate, move |e: Vec<lsp::TextEdit>| {
+            me.apply_text_edits(&e);
+        });
+        let opts = self.fmt_options();
+        let asked = self.with_doc(|doc, text| {
+            svc.range_formatting(doc, lsp::bytes_to_range(text, from, to), opts, reply)
+        });
+        asked || self.format_document()
+    }
+
+    /// Ctrl+K Ctrl+F: format the selection (the caret's line when nothing is selected).
+    pub(crate) fn format_selection(&self) -> bool {
+        let st = self.state.peek();
+        let text = st.text();
+        let p = st.primary();
+        let (a, b) = if p.is_empty() {
+            let ls = text[..p.head].rfind('\n').map_or(0, |i| i + 1);
+            let le = text[p.head..].find('\n').map_or(text.len(), |i| p.head + i);
+            (ls, le)
+        } else {
+            (p.min(), p.max())
+        };
+        self.format_range(a, b)
+    }
+
+    /// After typing `ch`: on-type formatting when it is one of the service's triggers (its
+    /// own undo step).
+    pub(crate) fn format_on_type(&self, ch: &str) {
+        let Some(svc) = self.svc.clone() else { return };
+        if !svc
+            .on_type_formatting_trigger_characters()
+            .iter()
+            .any(|t| t == ch)
+        {
+            return;
+        }
+        let head = self.state.peek().primary().head;
+        let me = self.clone();
+        let reply = self.guard(&self.store.fmt_gate, move |e: Vec<lsp::TextEdit>| {
+            me.apply_text_edits(&e);
+        });
+        let opts = self.fmt_options();
+        self.with_doc(|doc, text| {
+            svc.on_type_formatting(doc, lsp::byte_to_position(text, head), ch, opts, reply)
+        });
     }
 
     // ---- edits ---------------------------------------------------------------------------

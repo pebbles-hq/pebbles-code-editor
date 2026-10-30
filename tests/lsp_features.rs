@@ -39,6 +39,11 @@ struct Fake {
     actions: RefCell<Vec<CodeAction>>,
     action_cx: RefCell<Vec<CodeActionContext>>,
     commands: RefCell<Vec<String>>,
+    /// Formatting replies: whole document, range (records the range), on type.
+    fmt: RefCell<Vec<TextEdit>>,
+    range_fmt: RefCell<Option<Vec<TextEdit>>>,
+    fmt_ranges: RefCell<Vec<Range>>,
+    type_fmt: RefCell<Vec<(String, Position, FormattingOptions)>>,
 }
 
 impl LanguageService for Fake {
@@ -137,6 +142,46 @@ impl LanguageService for Fake {
             )],
         });
         reply(a);
+        true
+    }
+    fn on_type_formatting_trigger_characters(&self) -> Vec<String> {
+        vec!["}".into()]
+    }
+    fn formatting(
+        &self,
+        _doc: &DocRef,
+        _options: FormattingOptions,
+        reply: Reply<Vec<TextEdit>>,
+    ) -> bool {
+        reply(self.fmt.borrow().clone());
+        true
+    }
+    fn range_formatting(
+        &self,
+        _doc: &DocRef,
+        range: Range,
+        _options: FormattingOptions,
+        reply: Reply<Vec<TextEdit>>,
+    ) -> bool {
+        let Some(e) = self.range_fmt.borrow().clone() else {
+            return false;
+        };
+        self.fmt_ranges.borrow_mut().push(range);
+        reply(e);
+        true
+    }
+    fn on_type_formatting(
+        &self,
+        _doc: &DocRef,
+        pos: Position,
+        ch: &str,
+        options: FormattingOptions,
+        reply: Reply<Vec<TextEdit>>,
+    ) -> bool {
+        self.type_fmt
+            .borrow_mut()
+            .push((ch.to_string(), pos, options));
+        reply(vec![edit(0, 0, 0, "    ")]);
         true
     }
     fn execute_command(&self, command: &LspCommand) -> bool {
@@ -880,5 +925,84 @@ fn code_actions_lightbulb_menu_preferred_resolve_and_auto_fix() {
             .iter()
             .any(|c| c.only == vec!["quickfix".to_string()]),
         "auto fix asks for quick fixes only"
+    );
+}
+
+#[test]
+fn formatting_document_selection_on_type_and_paste_keep_cursors_in_one_undo_step() {
+    let fake = Rc::new(Fake::default());
+    // Document formatting: two edits, one before each of two cursors.
+    *fake.fmt.borrow_mut() = vec![edit(0, 0, 0, "  "), edit(1, 0, 0, "  ")];
+    let (mut h, code) = mount("ab\ncd\n", fake.clone(), |e| {
+        e.format_on_type(true).format_on_paste(true).tab_size(2)
+    });
+    h.key(KeyInput::Move {
+        motion: Motion::Right,
+        extend: false,
+    });
+    h.press("Ctrl+Alt+Down"); // a second cursor below
+    h.press("Shift+Alt+F");
+    assert_eq!(code.get(), "  ab\n  cd\n");
+    h.key(KeyInput::Insert("X".into()));
+    assert_eq!(
+        code.get(),
+        "  aXb\n  cXd\n",
+        "both cursors mapped through the edits"
+    );
+    h.key(KeyInput::Undo);
+    h.key(KeyInput::Undo);
+    assert_eq!(code.get(), "ab\ncd\n", "the format was one undo step");
+    h.key(KeyInput::Escape);
+    // Format selection: the selected range goes to range formatting.
+    *fake.range_fmt.borrow_mut() = Some(vec![edit(1, 0, 2, "CD")]);
+    h.key(KeyInput::Move {
+        motion: Motion::DocStart,
+        extend: false,
+    });
+    h.key(KeyInput::Move {
+        motion: Motion::Down,
+        extend: false,
+    });
+    h.key(KeyInput::Move {
+        motion: Motion::LineEnd,
+        extend: true,
+    });
+    h.press("Ctrl+K");
+    h.press("Ctrl+F");
+    assert_eq!(code.get(), "ab\nCD\n");
+    assert_eq!(
+        fake.fmt_ranges.borrow().last(),
+        Some(&Range::new(Position::new(1, 0), Position::new(1, 2)))
+    );
+    h.key(KeyInput::Undo);
+    // On type: `}` is a trigger character; the format is its own undo step.
+    h.key(KeyInput::Move {
+        motion: Motion::DocEnd,
+        extend: false,
+    });
+    h.key(KeyInput::Insert("}".into()));
+    {
+        let t = fake.type_fmt.borrow();
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].0, "}");
+        assert_eq!(t[0].1, Position::new(2, 1));
+        assert_eq!(t[0].2.tab_size, 2);
+    }
+    assert_eq!(code.get(), "    ab\ncd\n}");
+    h.key(KeyInput::Undo);
+    assert_eq!(
+        code.get(),
+        "ab\ncd\n}",
+        "undo removes only the on-type format"
+    );
+    // Paste: the pasted range is range-formatted.
+    *fake.range_fmt.borrow_mut() = Some(vec![]);
+    pebbles::core::clipboard::write("xy");
+    h.key(KeyInput::Paste);
+    assert_eq!(code.get(), "ab\ncd\n}xy");
+    assert_eq!(
+        fake.fmt_ranges.borrow().last(),
+        Some(&Range::new(Position::new(2, 1), Position::new(2, 3))),
+        "the pasted text's range"
     );
 }

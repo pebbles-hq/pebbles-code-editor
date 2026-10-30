@@ -479,6 +479,13 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             .unwrap_or((p.insert_spaces, p.tab_size)),
         false => (p.insert_spaces, p.tab_size),
     };
+    lsp_ctl
+        .store
+        .fmt
+        .set(Some(crate::language::FormattingOptions {
+            tab_size: tab_size.max(1) as u32,
+            insert_spaces,
+        }));
     let indent_unit: String = if insert_spaces {
         " ".repeat(tab_size)
     } else {
@@ -638,8 +645,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 .and_then(|l| l.line_comment().map(str::to_string)),
         });
         let inline_provider = p.inline_suggestions.clone();
-        let format = p.format.clone();
         let format_on_paste = p.format_on_paste;
+        let format_on_type = p.format_on_type;
         let emmet_tab = p.emmet;
         let emmet_env = cmd_env.clone();
         let ro_exts = p.extensions.clone(); // for read-only-range veto
@@ -913,30 +920,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 KeyInput::GoToDefinition => {
                     return lsp_k.navigate(lsp::Nav::Definition, false);
                 }
-                // Shift+Alt+F: replace the document with the formatter's output (one undo step).
+                // Shift+Alt+F: format the document through the service (one undo step).
                 KeyInput::Format => {
-                    if format.is_none() {
-                        return false; // no provider: bubble
-                    }
-                    if let Some(fp) = &format {
-                        let cur = state.peek();
-                        let old = cur.text();
-                        let new = fp(&old);
-                        if new != old {
-                            let caret = cur.primary().head.min(new.len());
-                            dispatch(
-                                state,
-                                history,
-                                code,
-                                Transaction::change_and_select(
-                                    ChangeSet::replace(0, old.len(), new),
-                                    Selections::single(Selection::caret(caret)),
-                                ),
-                                Coalesce::Never,
-                            );
-                        }
-                    }
-                    return true;
+                    return lsp_k.format_document();
                 }
                 _ => {}
             }
@@ -1102,35 +1088,17 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 });
             } else {
                 let was_paste = matches!(k, KeyInput::Paste);
+                let before = was_paste.then(|| state.peek().text());
                 apply_key(k, state, history, code, goal, read_only, &cfg);
-                // Format on paste: a separate undo step after the paste.
-                if was_paste
+                // Format on paste: the pasted range (the whole document when the service
+                // has no range formatting), a separate undo step after the paste.
+                if let Some(old) = before
                     && format_on_paste
                     && !read_only
-                    && let Some(fp) = &format
                 {
-                    let cur = state.peek();
-                    let old = cur.text();
-                    let new = fp(&old);
-                    if new != old {
-                        // Keep the caret on the same line/column-from-end of its line.
-                        let head = cur.primary().head;
-                        let tail = old.len() - head;
-                        let caret = new.len().saturating_sub(tail);
-                        let mut caret = caret.min(new.len());
-                        while !new.is_char_boundary(caret) {
-                            caret -= 1;
-                        }
-                        dispatch(
-                            state,
-                            history,
-                            code,
-                            Transaction::change_and_select(
-                                ChangeSet::replace(0, old.len(), new),
-                                Selections::single(Selection::caret(caret)),
-                            ),
-                            Coalesce::Never,
-                        );
+                    let new = state.peek().text();
+                    if let Some(e) = crate::collab::diff(&old, &new) {
+                        lsp_k.format_range(e.from, e.from + e.insert.len());
                     }
                 }
             }
@@ -1192,6 +1160,13 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 lsp_k.close_signature();
             } else {
                 lsp_k.signature_after_key(typed_char.as_deref());
+            }
+            // Format on type: the service's trigger characters (VS Code formatOnType).
+            if format_on_type
+                && !read_only
+                && let Some(t) = typed_char.as_deref()
+            {
+                lsp_k.format_on_type(t);
             }
             true
         };
