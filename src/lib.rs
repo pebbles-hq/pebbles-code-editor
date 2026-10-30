@@ -55,6 +55,7 @@ mod commands;
 mod config;
 mod controller;
 mod diff;
+mod diff_editor;
 mod fold;
 mod geometry;
 mod highlight;
@@ -71,6 +72,7 @@ pub use collab::Edit;
 pub use config::{CodeEditor, CursorBlinking, CursorStyle, LineNumbers, code_editor};
 pub use controller::{EditorController, editor_controller};
 pub use diff::{ChangeHunk, ChangeKind};
+pub use diff_editor::{DiffEditor, DiffSideConfig, diff_editor};
 pub use edit::{ChangeSet, EditorState, History, Selection, Selections, Transaction};
 pub use extensions::{
     BlockWidget, Command, ConfigPatch, DecoStyle, Decoration, EditContext, Extension, GutterMark,

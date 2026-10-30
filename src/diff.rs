@@ -203,6 +203,85 @@ pub(crate) fn revert_hunk(base: &str, cur: &str, hunk: &ChangeHunk) -> (usize, u
     (from, to, base_text)
 }
 
+/// Split a line into diff tokens: runs of word chars, runs of whitespace, single others.
+fn word_tokens(s: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut it = s.char_indices().peekable();
+    while let Some((i, c)) = it.next() {
+        let class = |c: char| {
+            if c.is_alphanumeric() || c == '_' {
+                0
+            } else if c.is_whitespace() {
+                1
+            } else {
+                2
+            }
+        };
+        let k = class(c);
+        let mut end = i + c.len_utf8();
+        if k != 2 {
+            while let Some(&(j, d)) = it.peek() {
+                if class(d) != k {
+                    break;
+                }
+                end = j + d.len_utf8();
+                it.next();
+            }
+        }
+        out.push((i, end));
+    }
+    out
+}
+
+/// Word-level changes between two versions of a line (VS Code's inner-line diff): the byte
+/// ranges of `a` that were removed and of `b` that were inserted, from an LCS over word
+/// tokens (adjacent ranges merged). Very long lines fall back to one whole-line change.
+pub(crate) fn word_changes(a: &str, b: &str) -> (Vec<(usize, usize)>, Vec<(usize, usize)>) {
+    let (ta, tb) = (word_tokens(a), word_tokens(b));
+    let (n, m) = (ta.len(), tb.len());
+    if n * m > 250_000 {
+        let r = |s: &str| {
+            if s.is_empty() {
+                vec![]
+            } else {
+                vec![(0, s.len())]
+            }
+        };
+        return (r(a), r(b));
+    }
+    let eq = |i: usize, j: usize| a[ta[i].0..ta[i].1] == b[tb[j].0..tb[j].1];
+    let mut dp = vec![0u32; (n + 1) * (m + 1)];
+    let w = m + 1;
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            dp[i * w + j] = if eq(i, j) {
+                dp[(i + 1) * w + j + 1] + 1
+            } else {
+                dp[(i + 1) * w + j].max(dp[i * w + j + 1])
+            };
+        }
+    }
+    let (mut rem, mut ins): (Vec<(usize, usize)>, Vec<(usize, usize)>) = (vec![], vec![]);
+    let push = |v: &mut Vec<(usize, usize)>, r: (usize, usize)| match v.last_mut() {
+        Some(l) if l.1 == r.0 => l.1 = r.1,
+        _ => v.push(r),
+    };
+    let (mut i, mut j) = (0, 0);
+    while i < n || j < m {
+        if i < n && j < m && eq(i, j) {
+            i += 1;
+            j += 1;
+        } else if j < m && (i == n || dp[i * w + j + 1] >= dp[(i + 1) * w + j]) {
+            push(&mut ins, tb[j]);
+            j += 1;
+        } else {
+            push(&mut rem, ta[i]);
+            i += 1;
+        }
+    }
+    (rem, ins)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,5 +342,15 @@ mod tests {
             s.replace_range(f..t, &ins);
             assert_eq!(s, base, "revert {cur:?}");
         }
+    }
+
+    #[test]
+    fn word_changes_find_the_changed_words() {
+        let (rem, ins) = word_changes("let x = foo(1);", "let y = foo(2);");
+        assert_eq!(rem, vec![(4, 5), (12, 13)]);
+        assert_eq!(ins, vec![(4, 5), (12, 13)]);
+        let (rem, ins) = word_changes("a b", "a new b");
+        assert!(rem.is_empty());
+        assert_eq!(&"a new b"[ins[0].0..ins[0].1], "new ");
     }
 }

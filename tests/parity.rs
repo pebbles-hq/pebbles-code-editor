@@ -288,3 +288,38 @@ fn breakpoint_margin_toggles_and_breakpoints_follow_edits() {
     h.frames(2);
     assert_eq!(bps.get(), BTreeSet::from([2]));
 }
+
+#[test]
+fn side_by_side_diff_editor_scrolls_both_sides_together() {
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let base: String = (0..200).map(|i| format!("line {i}\n")).collect();
+    let cur = base.replace("line 5\n", "line five\n");
+    let original = create_root_signal(base);
+    let modified = create_root_signal(cur);
+    let offsets = Rc::new(RefCell::new(Vec::<f64>::new()));
+    let o2 = offsets.clone();
+    let mut h = Harness::new().window(800.0, 300.0);
+    // (A component root needs the shell's `View` for pointer routing in the harness.)
+    h.mount_widget(View::new(
+        Color::from_rgba8(255, 255, 255, 255),
+        pebbles_code_editor::diff_editor(original, modified)
+            .height(280.0)
+            .configure(move |e| {
+                let o = o2.clone();
+                e.on_scroll(move |y| o.borrow_mut().push(y))
+            }),
+    ));
+    h.frames(3);
+    // Wheel over the left (original) side.
+    pebbles::core::keyboard::set_modifiers(false, false, false, false);
+    h.scroll(Offset::new(200.0, 150.0), 200.0);
+    h.advance(1.0);
+    h.frames(3);
+    let o = offsets.borrow();
+    let moved: Vec<f64> = o.iter().copied().filter(|&y| y > 1.0).collect();
+    assert!(moved.len() >= 2, "both sides scrolled: {o:?}");
+    assert!(moved.windows(2).any(|w| (w[0] - w[1]).abs() < 0.5), "{o:?}");
+    // Editing the modified side keeps the original untouched.
+    assert!(original.get().contains("line 5\n"));
+}

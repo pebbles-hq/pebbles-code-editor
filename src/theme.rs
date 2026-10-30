@@ -324,6 +324,12 @@ pub struct EditorTheme {
     pub diff_added: Color,
     /// Inline-diff marker for a removed line.
     pub diff_removed: Color,
+    /// Diff editor: background of removed lines (`diffEditor.removedLineBackground`).
+    pub diff_removed_line: Color,
+    /// Diff editor: inserted words (`diffEditor.insertedTextBackground`).
+    pub diff_inserted_text: Color,
+    /// Diff editor: removed words (`diffEditor.removedTextBackground`).
+    pub diff_removed_text: Color,
     /// Gutter change bar: added lines (VS Code `editorGutter.addedBackground`).
     pub change_added: Color,
     /// Gutter change bar: modified lines (`editorGutter.modifiedBackground`).
@@ -422,6 +428,9 @@ impl EditorTheme {
             diff_added: a(0x6C, 0xD1, 0x8A, 0x22),
             diff_removed: a(0xE9, 0x6A, 0x6A, 0xC0),
             change_added: a(0x2E, 0xA0, 0x43, 0xFF),
+            diff_removed_line: a(0xFF, 0x00, 0x00, 0x26),
+            diff_inserted_text: a(0x9C, 0xCC, 0x2C, 0x40),
+            diff_removed_text: a(0xFF, 0x00, 0x00, 0x40),
             change_modified: a(0x00, 0x78, 0xD4, 0xFF),
             change_deleted: a(0xF8, 0x51, 0x49, 0xFF),
             overview_cursor: a(0xA0, 0xA0, 0xA0, 0xCC),
@@ -472,6 +481,9 @@ impl EditorTheme {
             diff_added: a(0x3E, 0x8A, 0x3E, 0x1F),
             diff_removed: a(0xC0, 0x3A, 0x4B, 0xB0),
             change_added: a(0x2E, 0xA0, 0x43, 0xFF),
+            diff_removed_line: a(0xFF, 0x00, 0x00, 0x26),
+            diff_inserted_text: a(0x9C, 0xCC, 0x2C, 0x40),
+            diff_removed_text: a(0xFF, 0x00, 0x00, 0x40),
             change_modified: a(0x00, 0x5F, 0xB8, 0xFF),
             change_deleted: a(0xF8, 0x51, 0x49, 0xFF),
             overview_cursor: a(0x60, 0x60, 0x60, 0xCC),
@@ -523,6 +535,9 @@ impl EditorTheme {
             diff_added: a(0x33, 0xFF, 0x2E, 0x33),
             diff_removed: a(0xFF, 0x00, 0x8F, 0xC0),
             change_added: c(0x48, 0x79, 0x2C),
+            diff_removed_line: a(0xFF, 0x00, 0x00, 0x26),
+            diff_inserted_text: a(0x9C, 0xCC, 0x2C, 0x40),
+            diff_removed_text: a(0xFF, 0x00, 0x00, 0x40),
             change_modified: c(0x1B, 0x81, 0xA8),
             change_deleted: c(0xF4, 0x87, 0x71),
             overview_cursor: c(0xFF, 0xFF, 0xFF),
@@ -574,6 +589,9 @@ impl EditorTheme {
             diff_added: a(0x37, 0x4E, 0x06, 0x33),
             diff_removed: a(0xAD, 0x07, 0x07, 0xC0),
             change_added: c(0x37, 0x4E, 0x06),
+            diff_removed_line: a(0xFF, 0x00, 0x00, 0x26),
+            diff_inserted_text: a(0x9C, 0xCC, 0x2C, 0x40),
+            diff_removed_text: a(0xFF, 0x00, 0x00, 0x40),
             change_modified: c(0x0F, 0x4A, 0x85),
             change_deleted: c(0xAD, 0x07, 0x07),
             overview_cursor: c(0x29, 0x29, 0x29),

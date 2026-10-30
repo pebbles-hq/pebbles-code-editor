@@ -11,6 +11,7 @@ mod chrome;
 mod commands;
 mod completion;
 mod decor;
+mod diffview;
 mod extensions;
 mod gutter;
 mod minimap;
@@ -245,6 +246,19 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         handle: scroll.clone(),
         smooth: p.smooth_scrolling.then_some(smooth_y),
     };
+    // Side-by-side diff: follow the other side's scroll offset.
+    {
+        let h = scroll.clone();
+        let link = p.scroll_link;
+        create_effect(move || {
+            let Some(l) = link else { return };
+            let y = l.get();
+            if (h.offset() - y).abs() > 0.5 {
+                h.scroll_to(y);
+                scroll_top.set(y);
+            }
+        });
+    }
     {
         let h = scroll.clone();
         let started = std::cell::Cell::new(false);
@@ -1251,6 +1265,14 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             }
         }
     }
+    // Diff editor (side-by-side / inline): word highlights, removed rows, filler rows.
+    let diff_parts = diffview::parts(p, &src, eff_fs, line_px);
+    block_widgets.extend(
+        diff_parts
+            .blocks
+            .into_iter()
+            .filter(|b| b.line < line_count),
+    );
     let mut block_gaps = Vec::new();
     if !block_widgets.is_empty() {
         block_gaps = vec![0usize; line_count];
@@ -1535,7 +1557,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
 
     // ---- extension contributions for this frame ----
     // Decorations + gutter markers are recomputed from the current snapshot each render.
-    let (ext_decos, ext_gutter_marks): (Vec<Decoration>, Vec<GutterMark>) =
+    let (mut ext_decos, ext_gutter_marks): (Vec<Decoration>, Vec<GutterMark>) =
         if p.extensions.is_empty() {
             (Vec::new(), Vec::new())
         } else {
@@ -1558,6 +1580,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 .collect();
             (decos, marks)
         };
+    ext_decos.extend(diff_parts.decos);
 
     // ---- the read-model the view builders share ----
     let frame = Frame {
@@ -2147,12 +2170,18 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let code_area: AnyWidget = match p.height {
         Some(h) => {
             let on_scroll_cb = p.on_scroll.clone();
+            let scroll_link = p.scroll_link;
             let scroller = scroll_view(body)
                 .controller(scroll.clone())
                 // Re-render the visible window as the viewport scrolls, and report the offset so
                 // the caller can persist/restore it (view state).
                 .on_scroll(move |n| {
                     scroll_top.set(n.metrics.pixels);
+                    if let Some(l) = scroll_link
+                        && (l.peek() - n.metrics.pixels).abs() > 0.5
+                    {
+                        l.set(n.metrics.pixels);
+                    }
                     if let Some(cb) = &on_scroll_cb {
                         cb(n.metrics.pixels);
                     }

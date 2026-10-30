@@ -113,6 +113,10 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         controller: None,
         suggest_preview: false,
         format_on_paste: false,
+        inline_diff: false,
+        diff_original_of: None,
+        diff_align: false,
+        scroll_link: None,
         inline_suggestions: None,
         line_numbers: LineNumbers::On,
         smooth_caret: false,
@@ -201,6 +205,10 @@ pub struct CodeEditor {
     inline_suggestions: Option<crate::providers::InlineSuggestionProvider>,
     suggest_preview: bool,
     format_on_paste: bool,
+    inline_diff: bool,
+    diff_original_of: Option<Signal<String>>,
+    diff_align: bool,
+    scroll_link: Option<Signal<f64>>,
 }
 
 /// Fired after each change with the minimal [`Edit`] delta; `remote` is true when the change
@@ -589,6 +597,29 @@ impl CodeEditor {
         self.format_on_paste = v;
         self
     }
+    /// Inline diff view against [`diff_base`](Self::diff_base): removed base lines are shown
+    /// as red rows above their position and changed words are highlighted (VS Code's inline
+    /// diff editor). See [`diff_editor`](crate::diff_editor) for side-by-side.
+    pub fn inline_diff(mut self, v: bool) -> Self {
+        self.inline_diff = v;
+        self
+    }
+    /// Diff editor, original side: this editor shows the base text; `modified` is the other
+    /// side (removed lines and words are highlighted).
+    pub(crate) fn diff_original_of(mut self, modified: Signal<String>) -> Self {
+        self.diff_original_of = Some(modified);
+        self
+    }
+    /// Diff editor: reserve filler rows so both sides stay line-aligned.
+    pub(crate) fn diff_align(mut self, v: bool) -> Self {
+        self.diff_align = v;
+        self
+    }
+    /// Share the vertical scroll offset with another editor (side-by-side diff).
+    pub(crate) fn scroll_link(mut self, link: Signal<f64>) -> Self {
+        self.scroll_link = Some(link);
+        self
+    }
 }
 
 impl IntoWidget for CodeEditor {
@@ -675,6 +706,10 @@ pub(crate) struct Props {
     pub(crate) inline_suggestions: Option<crate::providers::InlineSuggestionProvider>,
     pub(crate) suggest_preview: bool,
     pub(crate) format_on_paste: bool,
+    pub(crate) inline_diff: bool,
+    pub(crate) diff_original_of: Option<Signal<String>>,
+    pub(crate) diff_align: bool,
+    pub(crate) scroll_link: Option<Signal<f64>>,
 }
 
 impl From<CodeEditor> for Props {
@@ -764,6 +799,10 @@ impl From<CodeEditor> for Props {
             controller: e.controller,
             suggest_preview: e.suggest_preview,
             format_on_paste: e.format_on_paste,
+            inline_diff: e.inline_diff,
+            diff_original_of: e.diff_original_of,
+            diff_align: e.diff_align,
+            scroll_link: e.scroll_link,
             inline_suggestions: e.inline_suggestions,
             line_numbers: e.line_numbers,
             smooth_caret: e.smooth_caret,
