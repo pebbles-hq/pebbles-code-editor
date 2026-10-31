@@ -341,6 +341,17 @@ impl Selections {
         Selections::new(ranges, self.primary)
     }
 
+    /// [`Selections::clamped`] against a plain `&str` document.
+    pub(crate) fn clamped_str(&self, src: &str) -> Selections {
+        let f = |p| crate::geometry::floor_char_boundary(src, p);
+        let ranges = self
+            .ranges
+            .iter()
+            .map(|s| Selection::range(f(s.anchor), f(s.head)))
+            .collect();
+        Selections::new(ranges, self.primary)
+    }
+
     /// Clamp every range into the document, snapping each end onto a char boundary.
     pub fn clamped(&self, doc: &Rope) -> Selections {
         let ranges = self.ranges.iter().map(|s| s.clamped(doc)).collect();

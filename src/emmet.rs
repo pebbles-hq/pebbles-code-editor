@@ -23,6 +23,7 @@ const VOID: &[&str] = &[
 /// The abbreviation ending at `caret`: back to whitespace (outside `{…}` / `[…]`) or the
 /// line start. Returns its start byte.
 pub(crate) fn abbreviation_start(src: &str, caret: usize) -> usize {
+    let caret = crate::geometry::floor_char_boundary(src, caret);
     let mut depth = 0i32;
     let mut start = caret;
     for (i, c) in src[..caret].char_indices().rev() {

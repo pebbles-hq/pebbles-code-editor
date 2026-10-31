@@ -95,6 +95,7 @@ fn shift_sels(sels: &Selections, moves: &[(usize, usize, isize)]) -> Selections 
 
 /// Move the selected lines up (`up`) or down one line (Alt+Up / Alt+Down).
 pub(crate) fn move_lines(src: &str, sels: &Selections, up: bool) -> Option<Transaction> {
+    let sels = &sels.clamped_str(src);
     let n = line_count(src);
     let bl = blocks(src, sels, true);
     if bl
@@ -138,6 +139,7 @@ pub(crate) fn move_lines(src: &str, sels: &Selections, up: bool) -> Option<Trans
 /// Duplicate the selected lines above (`up`, the cursor stays on the upper copy) or below
 /// (the cursor moves to the lower copy) — Shift+Alt+Up / Shift+Alt+Down.
 pub(crate) fn copy_lines(src: &str, sels: &Selections, up: bool) -> Option<Transaction> {
+    let sels = &sels.clamped_str(src);
     let bl = blocks(src, sels, false);
     let mut changes = Vec::new();
     let mut moves = Vec::new();
@@ -194,11 +196,13 @@ pub(crate) fn copy_lines(src: &str, sels: &Selections, up: bool) -> Option<Trans
 /// Delete the selected lines entirely (Ctrl+Shift+K). Carets land at the same column on the
 /// line that moves up into place.
 pub(crate) fn delete_lines(src: &str, sels: &Selections) -> Option<Transaction> {
+    let sels = &sels.clamped_str(src);
     let bl = blocks(src, sels, false);
     let n = line_count(src);
     let mut changes = Vec::new();
     let mut carets = Vec::new();
     let mut removed: usize = 0;
+    let mut prev_to = 0;
     for &(a, b) in &bl {
         let (bs, be) = lines_range(src, a, b);
         let (from, to) = if b + 1 < n {
@@ -208,6 +212,11 @@ pub(crate) fn delete_lines(src: &str, sels: &Selections) -> Option<Transaction> 
         } else {
             (bs, be)
         };
+        // Adjacent blocks (the last line's leading newline is the previous block's trailing
+        // one): never emit overlapping changes.
+        let from = from.max(prev_to);
+        let to = to.max(from);
+        prev_to = to;
         let col = sels
             .ranges()
             .iter()
@@ -219,7 +228,7 @@ pub(crate) fn delete_lines(src: &str, sels: &Selections) -> Option<Transaction> 
             insert: String::new(),
         });
         // Caret position in the NEW text: the line now at `from`.
-        let new_from = from - removed;
+        let new_from = from.saturating_sub(removed);
         removed += to - from;
         carets.push((new_from, col, b + 1 >= n && a > 0));
     }
@@ -241,6 +250,7 @@ pub(crate) fn delete_lines(src: &str, sels: &Selections) -> Option<Transaction> 
 /// Join each selection's lines (or the caret line with the next) into one, replacing each
 /// line break + surrounding indentation with a single space (Ctrl+J).
 pub(crate) fn join_lines(src: &str, sels: &Selections) -> Option<Transaction> {
+    let sels = &sels.clamped_str(src);
     let n = line_count(src);
     let mut changes = Vec::new();
     let mut carets = Vec::new();
@@ -285,6 +295,7 @@ pub(crate) fn join_lines(src: &str, sels: &Selections) -> Option<Transaction> {
 
 /// Duplicate each selection right after itself (an empty selection duplicates its line).
 pub(crate) fn duplicate_selection(src: &str, sels: &Selections) -> Option<Transaction> {
+    let sels = &sels.clamped_str(src);
     if sels.ranges().iter().all(Selection::is_empty) {
         return copy_lines(src, sels, false);
     }
@@ -310,6 +321,7 @@ pub(crate) fn duplicate_selection(src: &str, sels: &Selections) -> Option<Transa
 
 /// Sort the selected lines (the whole document when only a caret) ascending or descending.
 pub(crate) fn sort_lines(src: &str, sels: &Selections, descending: bool) -> Option<Transaction> {
+    let sels = &sels.clamped_str(src);
     let bl: Vec<(usize, usize)> = if sels.is_empty() {
         vec![(0, line_count(src) - 1)]
     } else {
@@ -346,6 +358,7 @@ pub(crate) fn sort_lines(src: &str, sels: &Selections, descending: bool) -> Opti
 /// Swap the characters around each caret (transposeLetters). At line end, swaps the two
 /// characters before the caret.
 pub(crate) fn transpose(src: &str, sels: &Selections) -> Option<Transaction> {
+    let sels = &sels.clamped_str(src);
     let mut changes = Vec::new();
     let mut carets = Vec::new();
     for r in sels.ranges() {
@@ -392,6 +405,7 @@ fn indent_of(src: &str, byte: usize) -> &str {
 /// Insert an empty line below (Ctrl+Enter) or above (Ctrl+Shift+Enter) each caret's line,
 /// keeping its indentation, and move the caret there.
 pub(crate) fn insert_line(src: &str, sels: &Selections, above: bool) -> Option<Transaction> {
+    let sels = &sels.clamped_str(src);
     let mut changes = Vec::new();
     let mut carets = Vec::new();
     let mut delta: isize = 0;
@@ -630,6 +644,7 @@ fn transform(s: &str, case: Case) -> String {
 
 /// Transform each selection's case (a caret transforms the word under it).
 pub(crate) fn transform_case(src: &str, sels: &Selections, case: Case) -> Option<Transaction> {
+    let sels = &sels.clamped_str(src);
     let mut changes = Vec::new();
     let mut out = Vec::new();
     let mut delta: isize = 0;
@@ -669,6 +684,7 @@ pub(crate) fn transform_case(src: &str, sels: &Selections, case: Case) -> Option
 /// Remove trailing whitespace from every line (editor.action.trimTrailingWhitespace /
 /// `files.trimTrailingWhitespace` on save).
 pub(crate) fn trim_trailing_whitespace(src: &str, sels: &Selections) -> Option<Transaction> {
+    let sels = &sels.clamped_str(src);
     let mut changes = Vec::new();
     let mut at = 0;
     for line in src.split('\n') {
@@ -695,6 +711,7 @@ pub(crate) fn trim_trailing_whitespace(src: &str, sels: &Selections) -> Option<T
 
 /// Ensure the document ends with exactly one newline (`files.insertFinalNewline`).
 pub(crate) fn insert_final_newline(src: &str, sels: &Selections) -> Option<Transaction> {
+    let sels = &sels.clamped_str(src);
     if src.is_empty() || src.ends_with('\n') {
         return None;
     }
@@ -748,6 +765,7 @@ pub(crate) fn convert_line_endings(src: &str, to: LineEnding) -> Option<Transact
 /// Add a caret one line above/below every cursor (Ctrl+Alt+Up / Ctrl+Alt+Down), at the same
 /// column (clamped to the line).
 pub(crate) fn add_cursor_vertical(src: &str, sels: &Selections, down: bool) -> Option<Transaction> {
+    let sels = &sels.clamped_str(src);
     let n = line_count(src);
     let mut ranges = sels.ranges().to_vec();
     let mut primary_new = None;
@@ -795,6 +813,7 @@ fn occurrence_needle(src: &str, sels: &Selections) -> Option<(String, bool)> {
 
 /// Select every occurrence of the selection / word under the caret (Ctrl+Shift+L).
 pub(crate) fn select_all_occurrences(src: &str, sels: &Selections) -> Option<Transaction> {
+    let sels = &sels.clamped_str(src);
     let (needle, whole) = occurrence_needle(src, sels)?;
     let opts = crate::search::Options {
         case_sensitive: true,
@@ -819,6 +838,7 @@ pub(crate) fn select_all_occurrences(src: &str, sels: &Selections) -> Option<Tra
 
 /// Place a caret at the end of every line each selection covers (Shift+Alt+I).
 pub(crate) fn cursors_at_line_ends(src: &str, sels: &Selections) -> Option<Transaction> {
+    let sels = &sels.clamped_str(src);
     let mut out = Vec::new();
     for r in sels.ranges() {
         let (a, b) = (line_of(src, r.min()), line_of(src, r.max()));
@@ -841,6 +861,7 @@ pub(crate) fn cursors_at_line_ends(src: &str, sels: &Selections) -> Option<Trans
 
 /// Extend the selection to whole lines, adding the next line on repeat (Ctrl+L).
 pub(crate) fn expand_line_selection(src: &str, sels: &Selections) -> Option<Transaction> {
+    let sels = &sels.clamped_str(src);
     let ranges = sels
         .ranges()
         .iter()
@@ -932,6 +953,7 @@ pub(crate) fn enclosing_pair(
 /// Jump to the matching bracket (Ctrl+Shift+\): from a bracket to its partner, else to the
 /// closer of the enclosing pair.
 pub(crate) fn jump_to_bracket(src: &str, sels: &Selections, cfg: &OpCfg) -> Option<Transaction> {
+    let sels = &sels.clamped_str(src);
     let ranges: Vec<Selection> = sels
         .ranges()
         .iter()
@@ -957,6 +979,7 @@ pub(crate) fn jump_to_bracket(src: &str, sels: &Selections, cfg: &OpCfg) -> Opti
 
 /// Select to the enclosing brackets, including them (editor.action.selectToBracket).
 pub(crate) fn select_to_bracket(src: &str, sels: &Selections, cfg: &OpCfg) -> Option<Transaction> {
+    let sels = &sels.clamped_str(src);
     let ranges: Vec<Selection> = sels
         .ranges()
         .iter()
@@ -994,6 +1017,7 @@ fn class(ch: char) -> u8 {
 
 /// The next subword boundary after `pos` (camelCase humps, `snake_case` parts, digits).
 pub(crate) fn next_subword(src: &str, pos: usize) -> usize {
+    let pos = crate::geometry::floor_char_boundary(src, pos);
     let mut it = src[pos.min(src.len())..].char_indices().peekable();
     let base = pos.min(src.len());
     // Skip separators/whitespace first.
@@ -1042,6 +1066,7 @@ pub(crate) fn next_subword(src: &str, pos: usize) -> usize {
 
 /// The previous subword boundary before `pos`.
 pub(crate) fn prev_subword(src: &str, pos: usize) -> usize {
+    let pos = crate::geometry::floor_char_boundary(src, pos);
     let pos = pos.min(src.len());
     let chars: Vec<(usize, char)> = src[..pos].char_indices().collect();
     let mut i = chars.len();
@@ -1079,6 +1104,7 @@ pub(crate) fn prev_subword(src: &str, pos: usize) -> usize {
 /// Smart Home: the first non-whitespace column of the line, or the line start when already
 /// there.
 pub(crate) fn smart_home(src: &str, pos: usize) -> usize {
+    let pos = crate::geometry::floor_char_boundary(src, pos);
     let ls = line_start(src, pos);
     let first = ls + indent_of(src, pos).len();
     if pos == first { ls } else { first }

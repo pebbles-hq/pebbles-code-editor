@@ -97,7 +97,8 @@ pub(crate) fn line_start_of(src: &str, line: usize) -> usize {
 
 /// The byte offset one char before `byte`.
 pub(crate) fn prev_char(src: &str, byte: usize) -> usize {
-    src.get(..byte.min(src.len()))
+    let byte = floor_char_boundary(src, byte);
+    src.get(..byte)
         .and_then(|s| s.chars().next_back())
         .map(|ch| byte - ch.len_utf8())
         .unwrap_or(0)
@@ -233,4 +234,15 @@ pub(crate) fn pos_to_grid(
     let col = (((pos.x - pad_l) / advance).round()).max(0.0) as usize;
     let last = src.split('\n').count().saturating_sub(1);
     (line.min(last), col)
+}
+
+/// `pos` clamped to `src.len()` and moved back to the nearest char boundary, so a stale or
+/// mid-character offset (LSP edit, external change, byte-walking scanner) can always be used
+/// to slice `src` without panicking.
+pub(crate) fn floor_char_boundary(src: &str, pos: usize) -> usize {
+    let mut p = pos.min(src.len());
+    while !src.is_char_boundary(p) {
+        p -= 1;
+    }
+    p
 }

@@ -255,7 +255,7 @@ pub(crate) fn word_provider() -> CompletionProvider {
 
 /// The identifier prefix start immediately before `caret`.
 pub(crate) fn prefix_start(src: &str, caret: usize) -> usize {
-    let mut b = caret;
+    let mut b = crate::geometry::floor_char_boundary(src, caret);
     while b > 0 {
         let p = prev_char(src, b);
         if src[p..b].chars().next().is_some_and(is_word) {

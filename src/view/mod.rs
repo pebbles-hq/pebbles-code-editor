@@ -242,7 +242,7 @@ fn popup_layer(slots: Vec<Option<AnyWidget>>, blocks: Vec<AnyWidget>) -> AnyWidg
 /// The identifier (word chars) around byte `b`, if any.
 pub(crate) fn word_range_at(src: &str, b: usize) -> Option<(usize, usize)> {
     let w = |c: char| c.is_alphanumeric() || c == '_';
-    let b = b.min(src.len());
+    let b = crate::geometry::floor_char_boundary(src, b);
     let a = src[..b]
         .char_indices()
         .rev()

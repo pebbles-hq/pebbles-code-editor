@@ -456,7 +456,8 @@ pub(crate) fn shift_line(
     if x <= a {
         Some(x)
     } else if x > b {
-        Some(x + n - (b + 1 - a))
+        // Checked: a host-supplied line (fold, breakpoint) may be absurdly large.
+        x.checked_add(n)?.checked_sub(b + 1 - a)
     } else if keep_inside {
         Some(a)
     } else {

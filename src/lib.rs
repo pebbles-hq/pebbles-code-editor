@@ -59,6 +59,8 @@ mod controller;
 mod diff;
 mod diff_editor;
 mod fold;
+#[cfg(test)]
+mod fuzz_tests;
 mod geometry;
 mod highlight;
 mod lines;
