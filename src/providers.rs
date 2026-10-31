@@ -108,6 +108,10 @@ pub struct Hover {
 /// A hover source: given `(src, byte)`, return hover info or `None`.
 pub type HoverProvider = Rc<dyn Fn(&str, usize) -> Option<Hover>>;
 
+/// Inline (ghost-text) suggestion provider: `(text, caret) -> candidates`, each the text to
+/// insert at the caret (may span lines). The first is shown; Alt+] / Alt+[ cycle.
+pub type InlineSuggestionProvider = Rc<dyn Fn(&str, usize) -> Vec<String>>;
+
 /// Signature help for the call being typed.
 #[derive(Clone, Debug)]
 pub struct SignatureHelp {

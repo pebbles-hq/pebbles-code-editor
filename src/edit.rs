@@ -484,6 +484,40 @@ const MAX_UNDO: usize = 10_000;
 pub struct History {
     undo: Vec<Revision>,
     redo: Vec<Revision>,
+    /// Fingerprint of the text the stacks apply to, kept by a mounted editor so a
+    /// [`DocumentHistory`] re-attached to a document that changed meanwhile is discarded
+    /// instead of replaying stale offsets.
+    pub(crate) synced: Option<u64>,
+}
+
+/// A document's undo/redo history, owned by the host's document model so it outlives any
+/// one editor view (VS Code: the stack belongs to the text model, not the editor widget).
+/// Pass the same handle to every editor showing the document — switching tabs, remounting,
+/// or showing it in two split groups — via [`CodeEditor::history`](crate::CodeEditor::history).
+#[derive(Clone, Default)]
+pub struct DocumentHistory(pub(crate) std::rc::Rc<std::cell::RefCell<History>>);
+
+impl DocumentHistory {
+    /// A fresh, empty history.
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// Whether there is anything to undo.
+    pub fn can_undo(&self) -> bool {
+        !self.0.borrow().undo.is_empty()
+    }
+    /// Whether there is anything to redo.
+    pub fn can_redo(&self) -> bool {
+        !self.0.borrow().redo.is_empty()
+    }
+}
+
+/// Cheap fingerprint of a document's text (see [`History::synced`]).
+pub(crate) fn text_fingerprint(text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut h);
+    h.finish()
 }
 
 impl History {

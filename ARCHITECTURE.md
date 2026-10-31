@@ -28,17 +28,32 @@ src/
                  C/C++/C#/Java/Kotlin/Swift/PHP/Ruby/Shell/YAML/TOML.
     python.rs    The Python highlighter.
     json.rs      The JSON highlighter.
+    treesitter.rs Incremental tree-sitter highlighting (16 bundled grammars + injections),
+                 viewport-limited queries, syntax fold ranges, smart-select node ladder.
                  (All pure functions of source text; panic-free on any input.)
 
   # ── coordinate + text helpers (pure, shared) ───────────────────────────
   geometry.rs    Buffer navigation (byte ↔ line/column, word/line motions) and the
                  monospace-grid ↔ pixel mapping. Pure functions over a `&str` snapshot.
   brackets.rs    Default bracket pairs + nesting-aware match finding.
+  lines.rs       The maintained per-line index (line starts, char lengths, indentation,
+                 fold regions incl. syntax + manual ranges), updated by edit delta; records
+                 line shifts so folds / breakpoints follow edits.
+  scan_text.rs   Pure in-text scanners: Unicode highlighting, links, colour literals,
+                 linked-editing tag pairs.
   highlight.rs   Token → themed rich-text spans; slice-to-window + semantic-overlay merges.
 
   # ── input (controller) ─────────────────────────────────────────────────
   commands.rs    The command engine: KeyInput → Transaction → dispatch. Multi-cursor edits,
                  motions, auto-close, comment toggle, smart indent. Owns no widgets.
+  actions.rs     The command list: every EditorCommand with its VS Code id, title and default
+                 chord(s); chord parsing + multi-stroke resolution.
+  keymap.rs      Host overrides: disable/rebind built-in intents and commands.
+  ops.rs         Pure editing operations behind the command list (line ops, comments, case,
+                 subword, smart paste, indentation detection, line endings).
+  controller.rs  EditorController — host-driven caret / selection / scroll / commands.
+  emmet.rs       Emmet abbreviation expansion for HTML and CSS (pure).
+  snippets.rs    Built-in per-language snippets + user snippets, merged into completion.
 
   # ── IntelliSense providers (dev-supplied) ──────────────────────────────
   providers.rs   The provider trait/data types (completion, hover, signature, diagnostics,
@@ -55,8 +70,10 @@ src/
                  zero rows; a wrapped line contributes several. Pure, no widgets.
 
   # ── inline diff (public API) ───────────────────────────────────────────
-  diff.rs        LCS line-diff against a base text → added lines + removed-line markers, for
-                 the `.diff_base()` git-gutter overlay. Pure, no widgets.
+  diff.rs        Bounded hunk line-diff against a base text (change bars, inline bands, hunk
+                 revert) + the word-level token LCS used by the diff editor. Pure, no widgets.
+  diff_editor.rs The public `diff_editor(original, modified)` widget: side-by-side (two
+                 line-aligned, scroll-linked editors) or inline.
 
   # ── collaboration (public API) ─────────────────────────────────────────
   collab.rs      The `Edit` delta type + pure `diff(old,new)` / `map_pos` — the OT/CRDT-ready
@@ -86,11 +103,23 @@ src/
     overlays.rs  The stacked grid layers: current-line band, rulers, indent guides, selection
                  rects, bracket-match boxes, highlighted text, inlay hints, diagnostic
                  underlines, whitespace markers, carets.
-    completion.rs The autocomplete popup: session state, trigger/accept, snippet expansion.
+    completion.rs The autocomplete popup: session state, trigger/accept, snippet expansion,
+                 word-based suggestions.
+    commands.rs  Runs EditorCommands against the live view (folding incl. manual ranges,
+                 wrap, zoom, scrolling, find navigation, cursor history, inline suggestions,
+                 overtype / tab-focus modes, Emmet).
+    decor.rs     VS Code surface decorations: occurrences, active indent guide, bracket-pair
+                 guides, Unicode marks, links, colour swatches + picker, fold badge with the
+                 hidden-lines preview, linked-editing outlines.
+    diffview.rs  Diff-editor contributions: removed-line bands, word highlights, filler rows,
+                 inline removed rows.
+    peek.rs      The change peek (click a change bar): base lines, Revert, Stage, prev/next.
+    ruler.rs     The overview ruler in the scrollbar lane.
     search.rs    The find/replace bar widget + match-highlight overlay layers.
     extensions.rs Extension rendering: decoration overlay layers (background/underline/line)
-                 + the command-palette overlay (Ctrl+P).
-    gutter.rs    The virtualized line-number gutter (+ diagnostic & extension marker dots).
+                 + the command-palette overlay (Ctrl+Shift+P).
+    gutter.rs    The virtualized gutter: breakpoint area, change bars, diagnostic & extension
+                 dots, line numbers (absolute/relative), fold arrows.
     minimap.rs   The scaled document overview (one canvas node) + click/drag-to-scroll.
     sticky.rs    Sticky scroll — indentation-derived pinned scope headers.
     chrome.rs    Small shared view helpers: status bar, line band, tooltip, alpha tweak.

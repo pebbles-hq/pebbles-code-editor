@@ -9,7 +9,7 @@
 //! compiler front end — good enough is exactly what a highlighter needs.
 
 /// The semantic class of a token. Themes map each of these to a color.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum TokenKind {
     /// Language keyword (`fn`, `let`, `if`, `return`, …).
     Keyword,
@@ -31,8 +31,25 @@ pub enum TokenKind {
     Constant,
     /// An operator or punctuation.
     Punctuation,
-    /// A JSON object key.
+    /// An object/record property or field (a JSON key, `obj.field`).
     Property,
+    /// An escape sequence inside a string (`\n`, `\u{1F600}`) or a regex.
+    Escape,
+    /// A markup tag name (`div` in `<div>`).
+    Tag,
+    /// A module / namespace path segment.
+    Namespace,
+    /// A Markdown heading.
+    Heading,
+    /// A link / URL.
+    Link,
+    /// Emphasised markup (bold / italic / strikethrough).
+    Emphasis,
+    /// A bracket at nesting depth `n` (bracket-pair colorization; the theme cycles its
+    /// bracket palette).
+    Bracket(u8),
+    /// A closing bracket with no opener.
+    BracketUnmatched,
     /// Anything else (plain identifiers, whitespace).
     Plain,
 }
@@ -98,6 +115,43 @@ pub trait Language {
     /// attached where scanning left them). Override for a real parse tree. Never panics.
     fn tree(&self, src: &str) -> SyntaxNode {
         bracket_tree(src, self.brackets())
+    }
+
+    /// The block-comment delimiters (`/*`, `*/`), if the language has them. Used by the
+    /// toggle-block-comment command (Shift+Alt+A) and as the line-comment fallback.
+    fn block_comment(&self) -> Option<(&str, &str)> {
+        None
+    }
+
+    /// A stateful, **incremental** highlighting session (a parse tree that is re-parsed
+    /// incrementally on edits and queried per viewport). `None` (the default) means the
+    /// editor calls [`highlight`](Self::highlight) on the whole text instead.
+    fn session(&self) -> Option<Box<dyn SyntaxSession>> {
+        None
+    }
+}
+
+/// An incremental highlighter bound to one document — see [`Language::session`]. The editor
+/// keeps one per open document and calls [`update`](Self::update) with the current text on
+/// every change (the session derives the edit itself), then
+/// [`highlight_range`](Self::highlight_range) for the visible window only.
+pub trait SyntaxSession {
+    /// Bring the parse up to date with `src` (incremental when a previous parse exists).
+    fn update(&mut self, src: &str);
+    /// Highlight tokens intersecting `range` (bytes), sorted and non-overlapping.
+    fn highlight_range(&mut self, src: &str, range: std::ops::Range<usize>) -> Vec<Token>;
+    /// Syntax-derived foldable regions as `(head_line, last_line)`, one per head line.
+    fn fold_ranges(&mut self) -> Vec<(usize, usize)> {
+        Vec::new()
+    }
+    /// The syntax nodes enclosing `[from, to)`, innermost first, as byte ranges — the
+    /// smart-select (expand/shrink selection) ladder. Empty when unsupported.
+    fn enclosing_nodes(&mut self, _from: usize, _to: usize) -> Vec<(usize, usize)> {
+        Vec::new()
+    }
+    /// A counter bumped on every reparse (for caching derived data).
+    fn version(&self) -> u64 {
+        0
     }
 }
 
@@ -183,6 +237,61 @@ pub use clike::{
 pub use json::Json;
 pub use python::Python;
 pub use rust::Rust;
+
+#[cfg(feature = "tree-sitter")]
+pub mod treesitter;
+#[cfg(feature = "tree-sitter")]
+pub use treesitter::TreeSitter;
+
+/// The best available [`Language`] for `name` — a language name (`"Rust"`, `"TypeScript"`),
+/// grammar id, fenced-code info string or file extension (`"rs"`, `"tsx"`, `"yml"`).
+/// Incremental tree-sitter highlighting when the grammar is bundled (feature `tree-sitter`,
+/// default), else the hand-written scanner for that language, else [`Plain`] — so this never
+/// fails and plain text is the universal fallback.
+pub fn by_name(name: &str) -> Box<dyn Language> {
+    #[cfg(feature = "tree-sitter")]
+    if let Some(ts) = TreeSitter::new(name) {
+        return Box::new(ts);
+    }
+    scanner_by_name(name)
+}
+
+/// [`by_name`] for a file path: resolves by extension (and a few well-known file names such
+/// as `Makefile`, `Dockerfile`, `.bashrc`).
+pub fn for_path(path: &str) -> Box<dyn Language> {
+    let file = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let lower = file.to_ascii_lowercase();
+    let ext = match lower.as_str() {
+        ".bashrc" | ".zshrc" | ".profile" | ".bash_profile" | "pkgbuild" => "sh",
+        "cargo.lock" => "toml",
+        _ => lower.rsplit_once('.').map_or("", |(_, e)| e),
+    };
+    by_name(ext)
+}
+
+/// The hand-written scanner for `name` (the fallback when no parser grammar is available).
+pub fn scanner_by_name(name: &str) -> Box<dyn Language> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "rust" | "rs" => Box::new(Rust),
+        "python" | "py" | "pyi" | "pyw" => Box::new(Python),
+        "json" | "jsonc" => Box::new(Json),
+        "c" | "h" => Box::new(c_lang()),
+        "c++" | "cpp" | "cc" | "cxx" | "hpp" | "hh" => Box::new(cpp()),
+        "c#" | "csharp" | "cs" => Box::new(csharp()),
+        "go" | "golang" => Box::new(go()),
+        "java" => Box::new(java()),
+        "javascript" | "js" | "jsx" | "mjs" | "cjs" => Box::new(javascript()),
+        "typescript" | "ts" | "tsx" | "mts" | "cts" => Box::new(typescript()),
+        "kotlin" | "kt" | "kts" => Box::new(kotlin()),
+        "php" => Box::new(php()),
+        "ruby" | "rb" => Box::new(ruby()),
+        "swift" => Box::new(swift()),
+        "toml" => Box::new(toml()),
+        "yaml" | "yml" => Box::new(yaml()),
+        "shell" | "bash" | "sh" | "zsh" => Box::new(bash()),
+        _ => Box::new(Plain),
+    }
+}
 
 #[cfg(test)]
 mod tests {

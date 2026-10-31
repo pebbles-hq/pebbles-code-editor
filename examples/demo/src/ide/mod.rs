@@ -65,6 +65,7 @@ pub fn ide() -> AnyWidget {
                     inlays,
                     scroll: create_signal(0.0),
                     folds: create_signal(std::collections::BTreeSet::new()),
+                    breakpoints: create_signal(std::collections::BTreeSet::new()),
                 }
             })
             .collect(),
@@ -321,7 +322,7 @@ fn menu_bar(ws: Workspace, s: Settings, problems_open: Signal<bool>) -> AnyWidge
             })
             .into(),
         menu_item("Command Palette")
-            .shortcut("Ctrl+P")
+            .shortcut("Ctrl+Shift+P")
             .on_select(|| {
                 dispatch_key(KeyInput::CommandPalette);
             })
@@ -336,14 +337,20 @@ fn menu_bar(ws: Workspace, s: Settings, problems_open: Signal<bool>) -> AnyWidge
     ];
 
     let (mm, sk, gd) = (s.minimap, s.sticky, s.guides);
-    let (wp, lt) = (s.whitespace, s.light);
+    let wp = s.whitespace;
     let view_menu = vec![
         menu_check("Minimap", mm.get(), move |v| mm.set(v)),
         menu_check("Sticky scroll", sk.get(), move |v| sk.set(v)),
         menu_check("Indent guides", gd.get(), move |v| gd.set(v)),
         menu_check("Whitespace", wp.get(), move |v| wp.set(v)),
         menu_separator(),
-        menu_check("Light theme", lt.get(), move |v| lt.set(v)),
+        menu_check("Light theme", !theme().dark, |light| {
+            set_theme_mode(if light {
+                ThemeMode::Light
+            } else {
+                ThemeMode::Dark
+            })
+        }),
         menu_check("Problems panel", problems_open.get(), move |v| {
             problems_open.set(v)
         }),
@@ -361,12 +368,9 @@ fn menu_bar(ws: Workspace, s: Settings, problems_open: Signal<bool>) -> AnyWidge
         .alignment(Alignment::CENTER_LEFT)
         .child(
             row(children![
-                container().padding(EdgeInsets::symmetric(8.0, 0.0)).child(
-                    text("Pebbles IDE")
-                        .size(12.5)
-                        .weight(700.0)
-                        .color(c.foreground)
-                ),
+                container()
+                    .padding(EdgeInsets::symmetric(8.0, 0.0))
+                    .child(text("Pebbles IDE").size(12.5).weight(700.0)),
                 menubar()
                     .menu("File", file_menu)
                     .menu("Edit", edit_menu)

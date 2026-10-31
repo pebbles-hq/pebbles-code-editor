@@ -6,10 +6,8 @@
 use pebbles::prelude::*;
 
 use crate::brackets::{DEFAULT_BRACKETS, find_bracket_match};
-use crate::geometry::{byte_at, col_of, line_char_len, line_end, line_of, line_start_of};
+use crate::geometry::line_end;
 use crate::highlight::{slice_tokens, to_spans};
-use crate::providers::Severity;
-use crate::theme::EditorTheme;
 use crate::view::Frame;
 use crate::view::chrome::{band, with_alpha};
 
@@ -18,27 +16,28 @@ pub(crate) fn build(f: &Frame) -> Vec<AnyWidget> {
     let mut layers: Vec<AnyWidget> = Vec::new();
     diff_bands(f, &mut layers);
     current_line(f, &mut layers);
+    f.lsp.preview_layers(f, &mut layers);
     rulers(f, &mut layers);
     indent_guides(f, &mut layers);
+    crate::view::decor::active_indent_guide(f, &mut layers);
+    crate::view::decor::bracket_pair_guide(f, &mut layers);
     word_occurrences(f, &mut layers);
+    crate::view::decor::occurrences(f, &mut layers);
+    crate::view::decor::snippet_placeholders(f, &mut layers);
     selection(f, &mut layers);
     bracket_match(f, &mut layers);
+    crate::view::decor::linked_editing(f, &mut layers);
     code_text(f, &mut layers);
+    crate::view::decor::unicode(f, &mut layers);
+    crate::view::decor::links(f, &mut layers);
+    crate::view::decor::color_swatches(f, &mut layers, f.color_picker);
+    crate::view::decor::fold_badges(f, &mut layers);
     inlay_hints(f, &mut layers);
+    f.lsp.inlay_layers(f, &mut layers);
     diagnostics(f, &mut layers);
     whitespace(f, &mut layers);
     carets(f, &mut layers);
     layers
-}
-
-/// The underline color for a diagnostic severity (mapped from the theme palette).
-pub(crate) fn severity_color(theme: &EditorTheme, sev: Severity) -> Color {
-    match sev {
-        Severity::Error => theme.diag_error,
-        Severity::Warning => theme.diag_warning,
-        Severity::Info => theme.diag_info,
-        Severity::Hint => theme.diag_hint,
-    }
 }
 
 /// Inline-diff bands: a green full-width band on each added line's rows, and a red 2px marker
@@ -104,13 +103,14 @@ fn indent_guides(f: &Frame, layers: &mut Vec<AnyWidget>) {
         if f.disp.is_hidden(line) {
             continue;
         }
-        let ls = line_start_of(f.src, line);
+        let ls = f.li.line_start_of(line);
         let le = line_end(f.src, ls);
         let lead = f.src[ls..le]
             .chars()
             .take_while(|c| *c == ' ' || *c == '\t')
             .count();
-        let mut gcol = step;
+        // VS Code draws a guide at every indent level the line is indented past, from column 0.
+        let mut gcol = 0;
         while gcol < lead {
             layers.push(
                 Positioned::new(
@@ -145,8 +145,8 @@ fn word_occurrences(f: &Frame, layers: &mut Vec<AnyWidget>) {
         return;
     }
     let color = with_alpha(f.theme.gutter_active_fg, 0.18);
-    let window_start = line_start_of(f.src, f.first_line);
-    let window_end = line_end(f.src, line_start_of(f.src, f.last_line));
+    let window_start = f.li.line_start_of(f.first_line);
+    let window_end = line_end(f.src, f.li.line_start_of(f.last_line));
     let mut from = window_start;
     while let Some(rel) = f.src[from..window_end].find(word) {
         let start = from + rel;
@@ -154,11 +154,11 @@ fn word_occurrences(f: &Frame, layers: &mut Vec<AnyWidget>) {
         if start == lo {
             continue; // skip the actual selection
         }
-        let line = line_of(f.src, start);
+        let line = f.li.line_of(f.src, start);
         if !f.line_visible(line) {
             continue;
         }
-        let (x, y) = f.xy(line, col_of(f.src, start));
+        let (x, y) = f.xy(line, f.li.col_of(f.src, start));
         let w = word.chars().count() as f64 * f.advance;
         layers.push(
             Positioned::new(
@@ -187,8 +187,8 @@ fn selection(f: &Frame, layers: &mut Vec<AnyWidget>) {
         if lo == hi {
             continue;
         }
-        let (la, ca) = (line_of(f.src, lo), col_of(f.src, lo));
-        let (lb, cb) = (line_of(f.src, hi), col_of(f.src, hi));
+        let (la, ca) = (f.li.line_of(f.src, lo), f.li.col_of(f.src, lo));
+        let (lb, cb) = (f.li.line_of(f.src, hi), f.li.col_of(f.src, hi));
         for line in la.max(f.first_line)..=lb.min(f.last_line) {
             if f.disp.is_hidden(line) {
                 continue;
@@ -197,7 +197,7 @@ fn selection(f: &Frame, layers: &mut Vec<AnyWidget>) {
             let end_col = if line == lb {
                 cb
             } else {
-                line_char_len(f.src, line)
+                f.li.line_char_len(line)
             };
             let extend_nl = line != lb; // hint the wrapped newline on the line's last segment
             let segs = f.segments(line);
@@ -209,8 +209,12 @@ fn selection(f: &Frame, layers: &mut Vec<AnyWidget>) {
                 if e < s || (e == s && !(extend_nl && is_last)) {
                     continue;
                 }
-                let x = f.pad_l + (s - seg.start) as f64 * f.advance;
-                let mut w = (e - s) as f64 * f.advance;
+                let x = if e > s {
+                    f.seg_char_x(&seg, s)
+                } else {
+                    f.seg_x(&seg, s)
+                };
+                let mut w = (f.seg_x(&seg, e) - x).max(0.0);
                 if extend_nl && is_last {
                     w += f.advance;
                 }
@@ -242,9 +246,9 @@ fn bracket_match(f: &Frame, layers: &mut Vec<AnyWidget>) {
             .unwrap_or(DEFAULT_BRACKETS);
     if let Some((a, b)) = find_bracket_match(f.src, brs, f.pcc) {
         for pos in [a, b] {
-            let l = line_of(f.src, pos);
+            let l = f.li.line_of(f.src, pos);
             if f.line_visible(l) {
-                let (x, y) = f.xy(l, col_of(f.src, pos));
+                let (x, y) = f.xy(l, f.li.col_of(f.src, pos));
                 layers.push(
                     Positioned::new(
                         container()
@@ -270,24 +274,39 @@ fn code_text(f: &Frame, layers: &mut Vec<AnyWidget>) {
             continue;
         }
         for (row, seg) in f.segments(line) {
-            // Byte range of this row's char span [seg.start, seg.end).
-            let bs = byte_at(f.src, line, seg.start);
-            let be = byte_at(f.src, line, seg.end);
-            if be <= bs {
-                continue;
+            // Long-line mode renders only the clipped column window of the row.
+            let (cs, ce) = match f.hclip {
+                Some((c0, c1)) => (seg.start.max(c0).min(seg.end), seg.end.min(c1)),
+                None => (seg.start, seg.end),
+            };
+            // One run per piece between inlay hints (a single run when the line has none).
+            for (a, b) in f.inlay_pieces(line, cs, ce) {
+                // Byte range of this piece's char span [a, b).
+                let bs = f.li.byte_at(f.src, line, a);
+                let be = f.li.byte_at(f.src, line, b);
+                if be <= bs {
+                    continue;
+                }
+                let toks = slice_tokens(f.tokens, bs, be);
+                let spans = to_spans(
+                    &f.src[bs..be],
+                    &toks,
+                    f.theme,
+                    f.fs,
+                    f.font_family,
+                    f.font_weight,
+                );
+                layers.push(
+                    Positioned::new(
+                        text_rich(spans)
+                            .line_height(f.lh as f32)
+                            .letter_spacing(f.letter_spacing as f32),
+                    )
+                    .left(f.seg_char_x(&seg, a))
+                    .top(f.row_y(row))
+                    .into_widget(),
+                );
             }
-            let toks = slice_tokens(f.tokens, bs, be);
-            let spans = to_spans(&f.src[bs..be], &toks, f.theme, f.fs, f.font_family);
-            layers.push(
-                Positioned::new(
-                    text_rich(spans)
-                        .line_height(f.lh as f32)
-                        .letter_spacing(f.letter_spacing as f32),
-                )
-                .left(f.pad_l)
-                .top(f.row_y(row))
-                .into_widget(),
-            );
         }
     }
 }
@@ -301,34 +320,40 @@ fn whitespace(f: &Frame, layers: &mut Vec<AnyWidget>) {
         if f.disp.is_hidden(line) {
             continue;
         }
-        let len = line_char_len(f.src, line);
+        let len = f.li.line_char_len(line);
         for (row, seg) in f.segments(line) {
-            let bs = byte_at(f.src, line, seg.start);
-            let be = byte_at(f.src, line, seg.end);
-            let marks: String = f.src[bs..be]
-                .chars()
-                .map(|c| match c {
-                    ' ' => '·',
-                    '\t' => '→',
-                    _ => ' ',
-                })
-                .collect();
-            if !marks.trim().is_empty() {
-                layers.push(
-                    Positioned::new(
-                        text_rich(vec![
-                            span(marks)
-                                .size(f.fs as f32)
-                                .font_family(f.font_family)
-                                .color(f.theme.whitespace),
-                        ])
-                        .line_height(f.lh as f32)
-                        .letter_spacing(f.letter_spacing as f32),
-                    )
-                    .left(f.pad_l)
-                    .top(f.row_y(row))
-                    .into_widget(),
-                );
+            let (cs, ce) = match f.hclip {
+                Some((c0, c1)) => (seg.start.max(c0).min(seg.end), seg.end.min(c1)),
+                None => (seg.start, seg.end),
+            };
+            for (a, b) in f.inlay_pieces(line, cs, ce) {
+                let bs = f.li.byte_at(f.src, line, a);
+                let be = f.li.byte_at(f.src, line, b);
+                let marks: String = f.src[bs..be]
+                    .chars()
+                    .map(|c| match c {
+                        ' ' => '·',
+                        '\t' => '→',
+                        _ => ' ',
+                    })
+                    .collect();
+                if !marks.trim().is_empty() {
+                    layers.push(
+                        Positioned::new(
+                            text_rich(vec![
+                                span(marks)
+                                    .size(f.fs as f32)
+                                    .font_family(f.font_family)
+                                    .color(f.theme.whitespace),
+                            ])
+                            .line_height(f.lh as f32)
+                            .letter_spacing(f.letter_spacing as f32),
+                        )
+                        .left(f.seg_char_x(&seg, a))
+                        .top(f.row_y(row))
+                        .into_widget(),
+                    );
+                }
             }
             // ¶ at the true line end (only on the line's last segment).
             if seg.end == len {
@@ -340,7 +365,7 @@ fn whitespace(f: &Frame, layers: &mut Vec<AnyWidget>) {
                             .font_family(f.font_family)
                             .color(f.theme.whitespace),
                     )
-                    .left(f.pad_l + (len - seg.start) as f64 * f.advance)
+                    .left(f.seg_char_x(&seg, len))
                     .top(f.row_y(row))
                     .into_widget(),
                 );
@@ -349,17 +374,35 @@ fn whitespace(f: &Frame, layers: &mut Vec<AnyWidget>) {
     }
 }
 
-/// Diagnostic underlines: a thin severity-colored line under each diagnostic range, per
-/// line-segment, clipped to the visible window. Reads the reactive diagnostics list.
+/// Diagnostics: a severity-colored squiggle under each range (a short dotted mark under the
+/// start for hints), unnecessary code faded and deprecated code struck through — per
+/// line-segment, clipped to the visible window.
 fn diagnostics(f: &Frame, layers: &mut Vec<AnyWidget>) {
-    let Some(sig) = f.p.diagnostics else {
-        return;
-    };
-    for d in sig.get() {
-        let (lo, hi) = d.range;
-        let color = severity_color(f.theme, d.severity);
-        let (la, ca) = (line_of(f.src, lo), col_of(f.src, lo));
-        let (lb, cb) = (line_of(f.src, hi), col_of(f.src, hi));
+    use crate::language::{DiagnosticSeverity as S, DiagnosticTag as T};
+    for d in f.diags.iter() {
+        let (lo, hi) = (d.from.min(f.src.len()), d.to.min(f.src.len()));
+        let sev = d.d.severity();
+        let color = crate::view::lsp::severity_color(f.theme, sev);
+        let unnecessary = d.has(T::Unnecessary);
+        let deprecated = d.has(T::Deprecated);
+        let (la, ca) = (f.li.line_of(f.src, lo), f.li.col_of(f.src, lo));
+        let (lb, cb) = (f.li.line_of(f.src, hi), f.li.col_of(f.src, hi));
+        if sev == S::Hint && !unnecessary && !deprecated {
+            // VS Code draws hints as three dots under the start.
+            if f.line_visible(la) {
+                let (x, y) = f.xy(la, ca);
+                for i in 0..3 {
+                    layers.push(rect_at(
+                        x + i as f64 * 3.0,
+                        y + f.line_px - 2.0,
+                        2.0,
+                        2.0,
+                        color,
+                    ));
+                }
+            }
+            continue;
+        }
         for line in la.max(f.first_line)..=lb.min(f.last_line) {
             if f.disp.is_hidden(line) {
                 continue;
@@ -368,46 +411,64 @@ fn diagnostics(f: &Frame, layers: &mut Vec<AnyWidget>) {
             let end_col = if line == lb {
                 cb
             } else {
-                line_char_len(f.src, line)
+                f.li.line_char_len(line)
             };
-            // Underline per visual segment so it follows wrapped rows.
+            // Per visual segment so it follows wrapped rows.
             for (row, seg) in f.segments(line) {
                 let s = start_col.max(seg.start);
                 let e = end_col.min(seg.end);
-                if e <= s {
+                if e <= s && !(lo == hi && line == la) {
                     continue;
                 }
-                let x = f.pad_l + (s - seg.start) as f64 * f.advance;
-                let w = ((e - s) as f64 * f.advance).max(f.advance);
-                layers.push(
-                    Positioned::new(
-                        container()
-                            .width(w)
-                            .height(2.0)
-                            .decoration(BoxDecoration::new().color(color)),
-                    )
-                    .left(x)
-                    .top(f.row_y(row) + f.line_px - 2.0)
-                    .into_widget(),
-                );
+                let x = f.seg_char_x(&seg, s);
+                let w = (f.seg_x(&seg, e) - x).max(f.advance);
+                let y = f.row_y(row);
+                if unnecessary {
+                    layers.push(rect_at(
+                        x,
+                        y,
+                        w,
+                        f.line_px,
+                        with_alpha(f.theme.background, 0.5),
+                    ));
+                }
+                if deprecated {
+                    layers.push(rect_at(x, y + f.line_px / 2.0, w, 1.0, f.theme.foreground));
+                }
+                if !(unnecessary && sev == S::Hint) && !(deprecated && sev == S::Hint) {
+                    layers.push(rect_at(x, y + f.line_px - 2.0, w, 2.0, color));
+                }
             }
         }
     }
 }
 
-/// Inlay hints: faded inline labels anchored at a byte offset (visible window only). On the
-/// fixed grid these overlay at the column rather than reflowing the line, so they read best
-/// as end-of-line / at-boundary annotations (type hints, parameter names).
+fn rect_at(x: f64, y: f64, w: f64, h: f64, color: Color) -> AnyWidget {
+    Positioned::new(
+        container()
+            .width(w)
+            .height(h)
+            .decoration(BoxDecoration::new().color(color)),
+    )
+    .left(x)
+    .top(y)
+    .into_widget()
+}
+
+/// Host-provided inlay hints: faded inline labels in the columns reserved for them (the
+/// display map shifts the rest of the line right, like VS Code's injected text).
 fn inlay_hints(f: &Frame, layers: &mut Vec<AnyWidget>) {
     let Some(sig) = f.p.inlay_hints else {
         return;
     };
-    for h in sig.get() {
-        let line = line_of(f.src, h.at);
+    for (k, h) in sig.get().iter().enumerate() {
+        let Some(Some((line, col, _, off))) = f.inlay_slots.props.get(k).copied() else {
+            continue;
+        };
         if !f.line_visible(line) {
             continue;
         }
-        let (x, y) = f.xy(line, col_of(f.src, h.at));
+        let (x, y) = f.xy(line, col);
         layers.push(
             Positioned::new(
                 text(h.label.clone())
@@ -416,7 +477,7 @@ fn inlay_hints(f: &Frame, layers: &mut Vec<AnyWidget>) {
                     .font_family(f.font_family)
                     .color(f.theme.muted),
             )
-            .left(x)
+            .left(x + (off as f64 + 0.25) * f.advance)
             .top(y)
             .into_widget(),
         );
@@ -425,25 +486,79 @@ fn inlay_hints(f: &Frame, layers: &mut Vec<AnyWidget>) {
 
 /// One blinking caret per cursor head in the visible window (all in phase).
 fn carets(f: &Frame, layers: &mut Vec<AnyWidget>) {
+    use crate::config::{CursorBlinking as B, CursorStyle as S};
     if !f.caret_on {
         return;
     }
+    // Blink shaping: smooth/phase fade the alpha, expand scales the height.
+    let wave = 0.5 + 0.5 * (std::f64::consts::TAU * f.caret_phase).cos();
+    let (alpha, scale) = match f.p.cursor_blinking {
+        B::Smooth => (wave, 1.0),
+        B::Phase => (wave * wave * (3.0 - 2.0 * wave), 1.0),
+        B::Expand => (1.0, 0.2 + 0.8 * wave),
+        _ => (1.0, 1.0),
+    };
+    let color = with_alpha(f.theme.caret, alpha as f32);
+    let primary = f.sels.primary();
     for r in f.sels.ranges() {
-        let l = line_of(f.src, r.head);
+        let l = f.li.line_of(f.src, r.head);
         if !f.line_visible(l) {
             continue;
         }
-        let (x, y) = f.xy(l, col_of(f.src, r.head));
+        let (mut x, mut y) = f.xy(l, f.li.col_of(f.src, r.head));
+        if *r == primary {
+            x += f.caret_offset.0;
+            y += f.caret_offset.1;
+        }
+        let h = f.fs * 1.15;
+        let style = if f.overtype {
+            S::Block
+        } else {
+            f.p.cursor_style
+        };
+        let (w, hh, top, deco) = match style {
+            S::Line => (
+                2.0,
+                h * scale,
+                y + (f.line_px - h * scale) / 2.0,
+                BoxDecoration::new().color(color),
+            ),
+            S::LineThin => (
+                1.0,
+                h * scale,
+                y + (f.line_px - h * scale) / 2.0,
+                BoxDecoration::new().color(color),
+            ),
+            S::Block => (
+                f.advance,
+                f.line_px * scale,
+                y + f.line_px * (1.0 - scale) / 2.0,
+                BoxDecoration::new().color(with_alpha(f.theme.caret, (alpha * 0.55) as f32)),
+            ),
+            S::BlockOutline => (
+                f.advance,
+                f.line_px * scale,
+                y + f.line_px * (1.0 - scale) / 2.0,
+                BoxDecoration::new().border(Border::new(color, 1.0)),
+            ),
+            S::Underline => (
+                f.advance,
+                2.0,
+                y + f.line_px - 2.0,
+                BoxDecoration::new().color(color),
+            ),
+            S::UnderlineThin => (
+                f.advance,
+                1.0,
+                y + f.line_px - 1.0,
+                BoxDecoration::new().color(color),
+            ),
+        };
         layers.push(
-            Positioned::new(
-                container()
-                    .width(2.0)
-                    .height(f.fs * 1.15)
-                    .decoration(BoxDecoration::new().color(f.theme.caret)),
-            )
-            .left(x)
-            .top(y + (f.line_px - f.fs * 1.15) / 2.0)
-            .into_widget(),
+            Positioned::new(container().width(w).height(hh).decoration(deco))
+                .left(x)
+                .top(top)
+                .into_widget(),
         );
     }
 }

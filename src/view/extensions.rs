@@ -6,7 +6,6 @@ use pebbles::prelude::*;
 
 use crate::MONO;
 use crate::extensions::{Command, Decoration, EditContext};
-use crate::geometry::{col_of, line_char_len, line_of};
 use crate::view::Frame;
 
 /// Build overlay layers for `decos`, clipped to the visible window (line backgrounds first,
@@ -16,7 +15,10 @@ pub(crate) fn decoration_layers(f: &Frame, decos: &[Decoration]) -> Vec<AnyWidge
     // Line backgrounds (behind everything).
     for d in decos {
         if let Some(bg) = d.style.line_background {
-            let (la, lb) = (line_of(f.src, d.range.0), line_of(f.src, d.range.1));
+            let (la, lb) = (
+                f.li.line_of(f.src, d.range.0),
+                f.li.line_of(f.src, d.range.1),
+            );
             for line in la.max(f.first_line)..=lb.min(f.last_line) {
                 layers.push(
                     Positioned::new(
@@ -34,19 +36,22 @@ pub(crate) fn decoration_layers(f: &Frame, decos: &[Decoration]) -> Vec<AnyWidge
     }
     // Range backgrounds + underlines.
     for d in decos {
-        for line in
-            line_of(f.src, d.range.0).max(f.first_line)..=line_of(f.src, d.range.1).min(f.last_line)
+        for line in f.li.line_of(f.src, d.range.0).max(f.first_line)
+            ..=f.li.line_of(f.src, d.range.1).min(f.last_line)
         {
-            let (la, lb) = (line_of(f.src, d.range.0), line_of(f.src, d.range.1));
+            let (la, lb) = (
+                f.li.line_of(f.src, d.range.0),
+                f.li.line_of(f.src, d.range.1),
+            );
             let start_col = if line == la {
-                col_of(f.src, d.range.0)
+                f.li.col_of(f.src, d.range.0)
             } else {
                 0
             };
             let end_col = if line == lb {
-                col_of(f.src, d.range.1)
+                f.li.col_of(f.src, d.range.1)
             } else {
-                line_char_len(f.src, line)
+                f.li.line_char_len(line)
             };
             let x = f.pad_l + start_col as f64 * f.advance;
             let w = (end_col.saturating_sub(start_col).max(1) as f64 * f.advance).max(2.0);
@@ -93,11 +98,14 @@ pub(crate) struct Palette {
     pub(crate) open: Signal<bool>,
     pub(crate) query: Signal<String>,
     pub(crate) sel: Signal<usize>,
+    /// Set to the caret byte a Go to Line jump left (navigation history).
+    pub(crate) jumped: Signal<Option<usize>>,
 }
 
 /// Commands whose title contains the (lowercased) query, in order.
 fn filtered(commands: &[Command], query: &str) -> Vec<Command> {
-    if query.is_empty() {
+    // `@` (symbols) / `#` (workspace symbols) lists come pre-filtered by their provider.
+    if query.is_empty() || query.starts_with('@') || query.starts_with('#') {
         return commands.to_vec();
     }
     let q = query.to_lowercase();
@@ -108,6 +116,15 @@ fn filtered(commands: &[Command], query: &str) -> Vec<Command> {
         .collect()
 }
 
+/// Parse a Go-to-Line query (`:12`, `:12:5`, 1-based) into a 0-based `(line, col)`.
+pub(crate) fn parse_goto(q: &str) -> Option<(usize, usize)> {
+    let rest = q.strip_prefix(':')?;
+    let mut it = rest.split([':', ',']);
+    let line: usize = it.next()?.trim().parse().ok()?;
+    let col: usize = it.next().and_then(|c| c.trim().parse().ok()).unwrap_or(1);
+    Some((line.saturating_sub(1), col.saturating_sub(1)))
+}
+
 /// Run the selected command (if any) and close the palette.
 pub(crate) fn run_selected(
     pal: Palette,
@@ -115,6 +132,19 @@ pub(crate) fn run_selected(
     ctx: EditContext,
     focus: pebbles::core::focus::FocusNode,
 ) {
+    let q = pal.query.peek();
+    if q.starts_with(':') {
+        if let Some((line, col)) = parse_goto(&q) {
+            let text = ctx.text();
+            let n = text.split('\n').count();
+            let b = crate::geometry::byte_at(&text, line.min(n.saturating_sub(1)), col);
+            pal.jumped.set(Some(ctx.selection().1));
+            ctx.select(b, b);
+        }
+        pal.open.set(false);
+        focus.request_focus();
+        return;
+    }
     let matches = filtered(commands, &pal.query.peek());
     if let Some(cmd) = matches.get(pal.sel.peek().min(matches.len().saturating_sub(1))) {
         (cmd.run)(&ctx);
@@ -131,19 +161,47 @@ pub(crate) fn palette(
     focus: pebbles::core::focus::FocusNode,
     theme: &crate::theme::EditorTheme,
 ) -> AnyWidget {
-    let matches = filtered(&commands, &pal.query.peek());
+    let goto = pal.query.peek().starts_with(':');
+    let matches = if goto {
+        Vec::new()
+    } else {
+        filtered(&commands, &pal.query.peek())
+    };
     let sel = if matches.is_empty() {
         0
     } else {
         pal.sel.peek().min(matches.len() - 1)
     };
 
+    let n = matches.len();
     let field = text_field()
-        .placeholder("Run a command…")
+        .placeholder("Run a command…  (: go to a line, @ symbol, # workspace symbol)")
+        .bind(pal.query)
         .autofocus()
-        .on_changed(move |s| {
-            pal.query.set(s.to_string());
+        .on_changed(move |_| {
             pal.sel.set(0);
+        })
+        // Up / Down move the selection (wrapping); Escape closes.
+        .on_nav(move |k| match k {
+            KeyInput::Move {
+                motion: Motion::Down,
+                ..
+            } if n > 0 => {
+                pal.sel.set((pal.sel.peek().min(n - 1) + 1) % n);
+                true
+            }
+            KeyInput::Move {
+                motion: Motion::Up, ..
+            } if n > 0 => {
+                pal.sel.set((pal.sel.peek().min(n - 1) + n - 1) % n);
+                true
+            }
+            KeyInput::Escape => {
+                pal.open.set(false);
+                focus.request_focus();
+                true
+            }
+            _ => false,
         })
         .on_submit(move |_| run_selected(pal, &commands, ctx, focus));
 
@@ -161,22 +219,45 @@ pub(crate) fn palette(
                 .decoration(
                     BoxDecoration::new()
                         .color(bg)
-                        .radius(BorderRadius::all(4.0)),
+                        .radius(BorderRadius::all(theme.overlay_radius / 2.0)),
                 )
                 .alignment(Alignment::CENTER_LEFT)
                 .child(
                     text(cmd.title().to_string())
-                        .size(13.0)
-                        .font_family(MONO)
+                        .size((theme.ui_font_size + 0.5) as f32)
+                        .font_family(
+                            theme
+                                .ui_font_family
+                                .clone()
+                                .unwrap_or_else(|| MONO.to_string()),
+                        )
                         .color(theme.foreground),
                 )
                 .into_widget(),
         );
     }
-    if matches.is_empty() {
+    if goto {
+        let q = pal.query.peek();
+        let label = match parse_goto(&q) {
+            Some((l, c)) => format!("Go to line {}, column {}", l + 1, c + 1),
+            None => "Type a line number (and :column) to go to".to_string(),
+        };
         rows.push(
-            text("no matching commands")
-                .size(12.5)
+            theme
+                .ui_text(label, 0.0)
+                .color(theme.foreground)
+                .into_widget(),
+        );
+    } else if matches.is_empty() {
+        rows.push(
+            theme
+                .ui_text(
+                    match pal.query.peek().chars().next() {
+                        Some('@') | Some('#') => "no matching symbols",
+                        _ => "no matching commands",
+                    },
+                    0.0,
+                )
                 .color(theme.muted)
                 .into_widget(),
         );
@@ -187,7 +268,7 @@ pub(crate) fn palette(
         .decoration(
             BoxDecoration::new()
                 .color(theme.overlay_bg)
-                .radius(BorderRadius::all(10.0))
+                .radius(BorderRadius::all(theme.overlay_radius + 2.0))
                 .border(Border::new(theme.border, 1.0)),
         )
         .padding(EdgeInsets::all(10.0))

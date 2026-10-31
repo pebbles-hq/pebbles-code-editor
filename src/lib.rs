@@ -42,36 +42,61 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod actions;
 pub mod edit;
+mod emmet;
 pub mod extensions;
+pub mod keymap;
 pub mod lang;
+pub mod language;
 pub mod providers;
 
 mod brackets;
 mod collab;
 mod commands;
 mod config;
+mod controller;
 mod diff;
+mod diff_editor;
 mod fold;
 mod geometry;
 mod highlight;
+mod lines;
+mod ops;
+mod scan_text;
 mod search;
+mod snippet;
+mod snippets;
 mod theme;
 mod view;
 
+pub use actions::EditorCommand;
 pub use collab::Edit;
-pub use config::{CodeEditor, code_editor};
-pub use edit::{ChangeSet, EditorState, History, Selection, Selections, Transaction};
+pub use config::{
+    BreadcrumbPick, BreadcrumbSegment, CodeEditor, CursorBlinking, CursorStyle, LineNumbers,
+    code_editor,
+};
+pub use controller::{EditorController, Refresh, editor_controller};
+pub use diff::{ChangeHunk, ChangeKind};
+pub use diff_editor::{DiffEditor, DiffSideConfig, diff_editor};
+pub use edit::{
+    ChangeSet, DocumentHistory, EditorState, History, Selection, Selections, Transaction,
+};
+pub use emmet::{expand_css, expand_html};
 pub use extensions::{
     BlockWidget, Command, ConfigPatch, DecoStyle, Decoration, EditContext, Extension, GutterMark,
     Snapshot, extension,
 };
-pub use lang::{Language, SyntaxNode, Token, TokenKind, bracket_tree};
+pub use keymap::{BuiltinCommand, HostCommand, Keymap};
+pub use lang::{Language, SyntaxNode, SyntaxSession, Token, TokenKind, bracket_tree};
+pub use language::{LanguageService, ProviderService, RequestGate};
+pub use ops::{LineEnding, detect_indentation, detect_line_ending};
 pub use providers::{
     CompletionContext, CompletionItem, CompletionKind, CompletionProvider, DefinitionProvider,
-    Diagnostic, Diagnostics, FormatProvider, Hover, HoverProvider, InlayHint, InlayHints, Severity,
-    SignatureHelp, SignatureProvider,
+    Diagnostic, Diagnostics, FormatProvider, Hover, HoverProvider, InlayHint, InlayHints,
+    InlineSuggestionProvider, Severity, SignatureHelp, SignatureProvider,
 };
+pub use snippets::{Snippet, builtin_snippets};
 pub use theme::{EditorTheme, HighlightStyle, TokenStyle};
 
 /// The monospace family used for all editor text.

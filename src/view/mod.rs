@@ -8,13 +8,28 @@
 //! reactive setup, the read-model, the mouse gestures, and the final assembly.
 
 mod chrome;
+mod commands;
 mod completion;
+mod markdown;
+pub(crate) use completion::prefix_start as completion_prefix_start;
+mod breadcrumbs;
+mod decor;
+mod diffview;
 mod extensions;
 mod gutter;
+mod hierarchy;
+mod inlay;
+mod lsp;
 mod minimap;
 mod overlays;
+mod peek;
+mod ruler;
+mod scrollbar;
 mod search;
+mod semantic;
+mod smart_select;
 mod sticky;
+mod symbols;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -42,6 +57,9 @@ pub(crate) struct Frame<'a> {
     pub(crate) p: &'a Props,
     pub(crate) theme: &'a EditorTheme,
     pub(crate) src: &'a str,
+    /// The maintained line index of `src` (line starts, lengths, fold regions) — every
+    /// byte <-> line/column query goes through it instead of scanning the text.
+    pub(crate) li: &'a crate::lines::LineIndex,
     pub(crate) tokens: &'a [Token],
     pub(crate) sels: &'a Selections,
     /// Primary caret head byte, and whether the primary range has a selection.
@@ -54,6 +72,7 @@ pub(crate) struct Frame<'a> {
     pub(crate) lh: f64,
     /// The configured monospace family + extra letter spacing (folded into `advance`).
     pub(crate) font_family: &'a str,
+    pub(crate) font_weight: f32,
     pub(crate) letter_spacing: f64,
     pub(crate) line_px: f64,
     pub(crate) advance: f64,
@@ -65,15 +84,41 @@ pub(crate) struct Frame<'a> {
     pub(crate) first_line: usize,
     pub(crate) last_line: usize,
     pub(crate) caret_on: bool,
+    /// Blink phase `0..1` (drives smooth / phase / expand blinking).
+    pub(crate) caret_phase: f64,
+    /// Smooth-caret offset of the primary caret from its true spot (px).
+    pub(crate) caret_offset: (f64, f64),
+    /// Linked editing applies to this language.
+    pub(crate) linked_editing_active: bool,
+    /// Overtype mode is on (the caret draws as a block, VS Code `editor.overtypeCursorStyle`).
+    pub(crate) overtype: bool,
+    /// The colour-picker anchor (byte of the colour literal being edited).
+    pub(crate) color_picker: Signal<Option<usize>>,
+    /// The editor's focus node (popups hand focus back to it, see `popup_shield`).
+    pub(crate) focus: pebbles::core::focus::FocusNode,
+    /// The open change-peek hunk (gutter change bars set it).
+    pub(crate) change_peek: Signal<Option<usize>>,
     /// Whether the editor currently holds keyboard focus (drives active vs inactive selection).
     pub(crate) focused: bool,
     /// Highlight other occurrences of the selected word (off while the find bar is open).
     pub(crate) highlight_word_matches: bool,
+    /// The language service's highlights of the symbol under the caret (read / write /
+    /// text); `None` uses the word-occurrence fallback.
+    pub(crate) doc_highlights: Option<Vec<(usize, usize, crate::language::DocumentHighlightKind)>>,
+    /// Long-line mode: the rendered column window `[c0, c1)` (see `LONG_LINE`).
+    pub(crate) hclip: Option<(usize, usize)>,
     /// Gutter markers contributed by extensions (rendered as colored dots).
     pub(crate) ext_gutter_marks: &'a [GutterMark],
-    /// The fold display-map (buffer line ↔ display row) + the foldable regions for the gutter.
+    /// Every diagnostic (old and LSP), resolved to bytes and sorted.
+    pub(crate) diags: Rc<Vec<lsp::Diag>>,
+    /// The inactive tab stops of the live snippet (placeholder highlight).
+    pub(crate) snippet_stops: Vec<(usize, usize)>,
+    /// The language-service UI (the gutter's lightbulb).
+    pub(crate) lsp: &'a lsp::Lsp,
+    /// The fold display-map (buffer line ↔ display row).
     pub(crate) disp: &'a crate::fold::DisplayMap,
-    pub(crate) fold_regions: &'a [(usize, usize)],
+    /// Where each inlay hint sits (the space reserved for it in `disp`).
+    pub(crate) inlay_slots: &'a inlay::InlaySlots,
     pub(crate) folds: Signal<std::collections::BTreeSet<usize>>,
     /// Inline diff against the base text (added lines / removed markers), if configured.
     pub(crate) diff: Option<&'a crate::diff::LineDiff>,
@@ -88,6 +133,27 @@ impl Frame<'_> {
             self.pad_l + xcol as f64 * self.advance,
             self.pad_t + row as f64 * self.line_px,
         )
+    }
+    /// The caret x (px) of `col` on visual row `seg` (before any inlay hint at `col`).
+    pub(crate) fn seg_x(&self, seg: &crate::fold::Row, col: usize) -> f64 {
+        self.pad_l + self.disp.caret_xcol(seg, col) as f64 * self.advance
+    }
+    /// The x (px) where the char at `col` is drawn on `seg` (after any inlay hint at `col`).
+    pub(crate) fn seg_char_x(&self, seg: &crate::fold::Row, col: usize) -> f64 {
+        self.pad_l + self.disp.char_xcol(seg, col) as f64 * self.advance
+    }
+    /// `[cs, ce)` split at the inlay-hint columns inside it, so each piece draws contiguously.
+    pub(crate) fn inlay_pieces(&self, line: usize, cs: usize, ce: usize) -> Vec<(usize, usize)> {
+        let mut out = Vec::new();
+        let mut a = cs;
+        for &(c, _) in self.disp.inlays_of(line) {
+            if c > a && c < ce {
+                out.push((a, c));
+                a = c;
+            }
+        }
+        out.push((a, ce));
+        out
     }
     /// The y (px) of a display row index.
     pub(crate) fn row_y(&self, row: usize) -> f64 {
@@ -119,6 +185,133 @@ impl Frame<'_> {
     }
 }
 
+/// A visible inline suggestion: candidates for caret byte `at`, showing `items[idx]`.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct InlineGhost {
+    pub(crate) at: usize,
+    pub(crate) items: Vec<String>,
+    pub(crate) idx: usize,
+}
+
+/// Wrap an in-editor popup (colour picker, completion, hover, rename box, signature help,
+/// block widget) so it owns the pointer over its area. The popups are layered inside the
+/// editor's click area, and pointer-down / hover go to the topmost listener under the
+/// pointer — without this, a press on a popup reached the editor, which took focus back
+/// from the popup's field and moved the caret (and hovering it re-ran the editor hover).
+/// A press that focused nothing inside the popup (a button, a lens, a swatch) hands focus
+/// back to the editor instead, as VS Code keeps the editor focused around its widgets.
+pub(crate) fn popup_shield(f: &Frame, child: impl IntoWidget) -> AnyWidget {
+    let focus = f.focus;
+    GestureDetector::new(child)
+        .on_pointer_down(action_event(move |_| {
+            // A field in the popup takes focus on the drag start, before this fires.
+            if pebbles::core::focus::focus_signal().peek().is_none() {
+                focus.request_focus();
+            }
+        }))
+        .on_hover_move(action_event(|_| {}))
+        .into_widget()
+}
+
+/// The editor's popup layer: one fixed slot per popup kind (an empty slot is a zero-size
+/// placeholder), then the block widgets. It is a sibling ABOVE the editor's click area, at a
+/// fixed index, so its elements — and a popup field's focus — survive rebuilds (unkeyed
+/// children are matched by position; inside the grid stack, whose layer count changes with
+/// editor state such as the caret layers coming and going with focus, a press rebuilt the
+/// popup from scratch and dropped its field's focus). The fixed slots keep one popup's
+/// position stable when another opens or closes.
+fn popup_layer(slots: Vec<Option<AnyWidget>>, blocks: Vec<AnyWidget>) -> AnyWidget {
+    let mut kids: Vec<AnyWidget> = slots
+        .into_iter()
+        .map(|s| {
+            s.unwrap_or_else(|| {
+                Positioned::new(SizedBox::shrink())
+                    .left(0.0)
+                    .top(0.0)
+                    .into_widget()
+            })
+        })
+        .collect();
+    kids.extend(blocks);
+    stack(kids)
+        .fit(StackFit::Expand)
+        .alignment(Alignment::TOP_LEFT)
+        .into_widget()
+}
+
+/// The identifier (word chars) around byte `b`, if any.
+pub(crate) fn word_range_at(src: &str, b: usize) -> Option<(usize, usize)> {
+    let w = |c: char| c.is_alphanumeric() || c == '_';
+    let b = b.min(src.len());
+    let a = src[..b]
+        .char_indices()
+        .rev()
+        .take_while(|&(_, c)| w(c))
+        .last()
+        .map_or(b, |(i, _)| i);
+    let z = b + src[b..]
+        .chars()
+        .take_while(|&c| w(c))
+        .map(char::len_utf8)
+        .sum::<usize>();
+    (a < z).then_some((a, z))
+}
+
+/// The vertical scroll target, jumping or (with smooth scrolling) animating.
+#[derive(Clone)]
+pub(crate) struct VScroll {
+    pub(crate) handle: ScrollHandle,
+    pub(crate) smooth: Option<Signal<f64>>,
+}
+
+impl VScroll {
+    /// Scroll to `t`; `scroll_top` (the virtualization window) follows the real offset.
+    pub(crate) fn to(&self, t: f64, scroll_top: Signal<f64>) {
+        match self.smooth {
+            Some(y) => {
+                y.set(self.handle.offset());
+                pebbles::core::animation::animate_to(y, t, 0.125);
+            }
+            None => {
+                self.handle.scroll_to(t);
+                scroll_top.set(t);
+            }
+        }
+    }
+}
+
+/// Smooth-caret animation state: glide from `from` to `target` starting at `start`.
+pub(crate) struct CaretAnim {
+    from: (f64, f64),
+    target: (f64, f64),
+    start: std::time::Instant,
+}
+
+impl Default for CaretAnim {
+    fn default() -> Self {
+        CaretAnim {
+            from: (0.0, 0.0),
+            target: (f64::NAN, f64::NAN),
+            start: std::time::Instant::now(),
+        }
+    }
+}
+
+impl CaretAnim {
+    const DURATION: f64 = 0.08;
+    fn shown(&self, now: std::time::Instant) -> (f64, f64) {
+        if self.target.0.is_nan() {
+            return self.from;
+        }
+        let t = (now.duration_since(self.start).as_secs_f64() / Self::DURATION).min(1.0);
+        let e = 1.0 - (1.0 - t) * (1.0 - t); // ease-out
+        (
+            self.from.0 + (self.target.0 - self.from.0) * e,
+            self.from.1 + (self.target.1 - self.from.1) * e,
+        )
+    }
+}
+
 /// The editor component: wires reactive state, computes the [`Frame`], and assembles the
 /// gutter, scrolling content (with overlays), sticky headers, minimap, and chrome.
 pub(crate) fn render_editor(p: &Props) -> AnyWidget {
@@ -127,7 +320,25 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // transactions (see the `edit` module). `code` (the public `Signal<String>`) is kept in
     // sync so callers still bind to a plain string.
     let state = create_signal(EditorState::new(&code.peek()));
-    let history = create_signal(Rc::new(RefCell::new(History::new())));
+    // The undo stack: the host's per-document history when given (it outlives this view —
+    // tab switches, remounts, split groups), else a view-local one.
+    let shared = p.history.clone();
+    let history = pebbles::core::create_signal_with(move || match shared {
+        Some(h) => {
+            let rc = h.0.clone();
+            {
+                let mut hist = rc.borrow_mut();
+                let now = crate::edit::text_fingerprint(&code.peek());
+                if hist.synced.is_some_and(|f| f != now) {
+                    *hist = History::new(); // the text changed while detached: stale offsets
+                }
+                hist.synced = Some(now);
+                hist.break_group(); // typing after a switch starts a new undo step
+            }
+            rc
+        }
+        None => Rc::new(RefCell::new(History::new())),
+    });
     let goal = create_signal(0usize); // preserved column for Up/Down
     let blink_stamp = create_signal(0.0_f64); // loop time of the last edit/move — caret solid then
     let drag_anchor = create_signal::<Option<Offset>>(None); // pointer-down pos for column select
@@ -142,13 +353,76 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     #[allow(clippy::type_complexity)]
     let token_cache: Signal<Rc<RefCell<(String, Rc<Vec<Token>>)>>> =
         create_signal(Rc::new(RefCell::new((String::new(), Rc::new(Vec::new())))));
+    // Syntax fold-range cache: (parse version, ranges).
+    #[allow(clippy::type_complexity)]
+    let syntax_folds: Signal<Rc<RefCell<(u64, Option<Rc<Vec<(usize, usize)>>>)>>> =
+        create_signal(Rc::new(RefCell::new((u64::MAX, None))));
+    // Bracket-colorization prefix cache: (text before the window, bracket depth there).
+    let bracket_cache = create_signal(Rc::new(RefCell::new((String::new(), 0_i64))));
+    // Incremental syntax session (tree-sitter languages), keyed by language name so a
+    // language switch starts a fresh parse. Survives re-renders.
+    #[allow(clippy::type_complexity)]
+    let syntax: Signal<Rc<RefCell<Option<(String, Box<dyn crate::lang::SyntaxSession>)>>>> =
+        create_signal(Rc::new(RefCell::new(None)));
     // Imperative scroll handles — drive caret-into-view autoscroll (only used when a fixed
     // `height` makes the editor a scroll viewport). Held in signals so they survive renders.
     let scroll = create_signal(ScrollHandle::new()).peek(); // vertical
     let hscroll = create_signal(ScrollHandle::new()).peek(); // horizontal
+    // Smooth scrolling: programmatic vertical scrolls tween this signal, and an effect
+    // drives the scroll handle from it.
+    let smooth_y = create_signal(0.0_f64);
+    let vscroll = VScroll {
+        handle: scroll.clone(),
+        smooth: p.smooth_scrolling.then_some(smooth_y),
+    };
+    // Side-by-side diff: follow the other side's scroll offset.
+    {
+        let h = scroll.clone();
+        let link = p.scroll_link;
+        create_effect(move || {
+            let Some(l) = link else { return };
+            let y = l.get();
+            if (h.offset() - y).abs() > 0.5 {
+                h.scroll_to(y);
+                scroll_top.set(y);
+            }
+        });
+    }
+    {
+        let h = scroll.clone();
+        let started = std::cell::Cell::new(false);
+        create_effect(move || {
+            let y = smooth_y.get();
+            // Skip the initial run (no scroll requested yet).
+            if !started.replace(true) {
+                return;
+            }
+            h.scroll_to(y);
+            scroll_top.set(y);
+        });
+    }
+    let scroll_left = create_signal(0.0_f64); // live horizontal offset (clipping + the bar)
+    let hbar = scrollbar::HBarState {
+        hover: create_signal(false),
+        grab: create_signal(None),
+    };
+    let vbar = scrollbar::HBarState {
+        hover: create_signal(false),
+        grab: create_signal(None),
+    };
+    let mmap = minimap::MinimapState {
+        hover: create_signal(false),
+        grab: create_signal(None),
+    };
     let completion = create_signal::<Option<completion::Session>>(None); // autocomplete popup
+    // Stale-reply gates for completion / resolve requests (persist across re-renders).
+    // The live snippet session (tab stops), if any.
+    let snippet = create_signal::<Option<crate::snippet::SnippetSession>>(None);
+    let completion_gates = create_signal((
+        crate::language::RequestGate::new(),
+        crate::language::RequestGate::new(),
+    ));
     let hover_pos = create_signal::<Option<Offset>>(None); // pointer pos for hover tooltip
-    let sig_help = create_signal::<Option<crate::providers::SignatureHelp>>(None); // signature help
     let preedit = create_signal(String::new()); // IME composition (preedit) text, shown at caret
     // Fold state: use the caller-bound signal (persists across mounts / tabs) if given, else a
     // private one. `create_signal` runs unconditionally so the hook order never churns.
@@ -158,6 +432,13 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // The live wrap-column width, shared with the (once-created) autoscroll effect via interior
     // mutability so it can map the caret to its display row without a stale capture.
     let wrap_hold = create_signal(Rc::new(std::cell::Cell::new(0usize)));
+    // Live (line_px, advance, content_h) for the once-created autoscroll effect.
+    let metrics_hold = create_signal(Rc::new(std::cell::Cell::new((0.0_f64, 0.0_f64, 0.0_f64))));
+    // The line index, updated by each edit's delta (see `crate::lines`), so a rebuild costs
+    // the edited lines rather than the whole document. Shared with the autoscroll effect.
+    // The current inlay widths, for the pointer mapping and autoscroll (outside the render).
+    let inlay_hold = create_signal(Rc::new(RefCell::new(Rc::new(crate::fold::Inlays::new()))));
+    let line_cache = create_signal(Rc::new(RefCell::new(crate::lines::LineCache::default())));
     // Find/replace state.
     let find = search::State {
         open: create_signal(0u8),
@@ -167,13 +448,104 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         word: create_signal(false),
         regex: create_signal(false),
         idx: create_signal(0usize),
+        scope: create_signal(None),
+        preserve: create_signal(false),
+        focus_query: create_signal(false),
     };
     let palette = extensions::Palette {
         open: create_signal(false),
         query: create_signal(String::new()),
         sel: create_signal(0usize),
+        jumped: create_signal(None),
     };
     let focus = create_focus();
+    // View-state toggles driven by editor commands: soft-wrap override (Alt+Z), font zoom
+    // (Ctrl+= / Ctrl+-), soft-undo cursor history (Ctrl+U), smart-select stack, and the
+    // pending strokes of a multi-stroke chord (Ctrl+K …).
+    let wrap_override = create_signal::<Option<bool>>(None);
+    let caret_anim = create_signal(Rc::new(RefCell::new(CaretAnim::default())));
+    let color_picker = create_signal::<Option<usize>>(None);
+    let change_peek = create_signal::<Option<usize>>(None); // open change-peek hunk index
+    let mid_anchor = create_signal::<Option<Offset>>(None); // middle-button box-select anchor
+    let inline = create_signal::<Option<InlineGhost>>(None); // inline (ghost-text) suggestion
+    let tab_focus = create_signal(false); // Ctrl+M: Tab moves focus instead of indenting
+    let overtype = create_signal(false); // Insert: overtype mode
+    let color_draft = create_signal(String::new()); // colour-picker hex field
+    let zoom = p.zoom.unwrap_or_else(|| create_signal(0.0_f64));
+    let wheel_zoom = p.mouse_wheel_zoom;
+    let cursor_hist = create_signal(Rc::new(RefCell::new(commands::CursorHistory::default())));
+    let smart_stack = create_signal::<Vec<Selections>>(Vec::new());
+    let pending_keys = create_signal::<Vec<crate::actions::Stroke>>(Vec::new());
+    // Language-service UI state (hover, signature help, peek, rename, …).
+    let lsp_hooks = lsp::hooks();
+    let lsp_ctl = lsp::Lsp {
+        svc: lsp::effective_service(p),
+        uri: Rc::from(p.document_uri.as_str()),
+        h: lsp_hooks,
+        store: lsp_hooks.store.peek(),
+        state,
+        history,
+        code,
+        goal,
+        hover_delay: p.hover_delay,
+        diag_old: p.diagnostics,
+        diag_lsp: p.lsp_diagnostics,
+        on_open_link: p.on_open_link.clone(),
+        focus,
+        read_only: p.read_only,
+        outline: p.outline,
+        crumbs: Rc::new(breadcrumbs::Crumbs {
+            enabled: p.breadcrumbs,
+            path: Rc::new(p.breadcrumb_path.clone()),
+            on_pick: p.on_breadcrumb_pick.clone(),
+        }),
+        inlay_default: p.inlay_hints_enabled,
+        lens_default: p.code_lens,
+        linked_on: p.linked_editing,
+    };
+    create_effect(move || {
+        let st = state.get();
+        cursor_hist.peek().borrow_mut().observe(&st);
+    });
+    // Go to Line jumps feed the navigation history.
+    {
+        let l = lsp_ctl.clone();
+        create_effect(move || {
+            if let Some(from) = palette.jumped.get() {
+                l.record_jump(from);
+                palette.jumped.set(None);
+            }
+        });
+    }
+    // Go to Symbol: live preview while moving through the `@` list; restore on cancel.
+    {
+        let l = lsp_ctl.clone();
+        create_effect(move || {
+            let open = palette.open.get();
+            let q = palette.query.get();
+            let sel = palette.sel.get();
+            let _ = l.h.symbols.get();
+            l.preview_symbol(open, &q, sel);
+            if !open || !q.starts_with('#') {
+                l.reset_workspace_symbols();
+            }
+        });
+    }
+    // Document highlights follow the caret (service-driven; the word fallback otherwise).
+    {
+        let l = lsp_ctl.clone();
+        let on = p.occurrences_highlight;
+        create_effect(move || {
+            let _ = state.get();
+            if on {
+                l.request_highlights();
+            }
+            l.request_bulb();
+            l.request_symbols();
+            l.request_lenses();
+            l.request_linked();
+        });
+    }
 
     // Two-way binding + collaboration stream. On any `code` change: if it came from OUTSIDE
     // (a remote/loader edit — `code != state.text()`), rebuild the doc and REMAP the carets
@@ -181,6 +553,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // minimal `Edit` to `on_edit` (with `remote` set). Local keystrokes keep `code ==
     // state.text()`, so `remote` is false and no rebuild happens.
     let on_edit = p.on_edit.clone();
+    let shared_history = p.history.is_some();
     let prev_code = create_signal(code.peek());
     create_effect(move || {
         let new = code.get();
@@ -218,6 +591,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         if let (Some(cb), Some(e)) = (&on_edit, &delta) {
             cb(e, remote);
         }
+        if shared_history {
+            history.peek().borrow_mut().synced = Some(crate::edit::text_fingerprint(&new));
+        }
         prev_code.set(new);
     });
 
@@ -249,8 +625,24 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
 
     // Register the key handler (semantic edit commands from the framework).
     let read_only = p.read_only;
-    let indent_unit: String = if p.insert_spaces {
-        " ".repeat(p.tab_size)
+    // Indentation detection (once per mounted document, VS Code `detectIndentation`).
+    let detected =
+        create_signal(Rc::new(std::cell::OnceCell::<Option<(bool, usize)>>::new())).peek();
+    let (insert_spaces, tab_size) = match p.detect_indentation {
+        true => detected
+            .get_or_init(|| crate::ops::detect_indentation(&code.peek()))
+            .unwrap_or((p.insert_spaces, p.tab_size)),
+        false => (p.insert_spaces, p.tab_size),
+    };
+    lsp_ctl
+        .store
+        .fmt
+        .set(Some(crate::language::FormattingOptions {
+            tab_size: tab_size.max(1) as u32,
+            insert_spaces,
+        }));
+    let indent_unit: String = if insert_spaces {
+        " ".repeat(tab_size)
     } else {
         "\t".to_string()
     };
@@ -268,29 +660,326 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             .unwrap_or_else(|| DEFAULT_BRACKETS.to_vec()),
         auto_close: p.auto_close,
     });
+    // Editor command environment (shared by the raw-key resolver and the palette).
+    let eff_fs = (p.fs + zoom.get()).max(6.0);
+    let ops_cfg = Rc::new(crate::ops::OpCfg {
+        tab: indent_unit.clone(),
+        tab_size: tab_size.max(1),
+        line_comment: cfg.line_comment.clone(),
+        block_comment: p.language.as_ref().and_then(|l| {
+            l.block_comment()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+        }),
+        brackets: cfg.brackets.clone(),
+    });
+    let cmd_env = commands::Env {
+        state,
+        history,
+        code,
+        goal,
+        folds,
+        wrap: wrap_override,
+        soft_wrap_default: p.soft_wrap,
+        zoom,
+        cursor_hist,
+        smart_stack,
+        syntax,
+        find,
+        palette,
+        vscroll: vscroll.clone(),
+        scroll_top,
+        height: p.height,
+        line_px: eff_fs * p.lh,
+        read_only,
+        diff_base: p.diff_base,
+        ops: ops_cfg,
+        line_cache,
+        inline,
+        tab_focus,
+        overtype,
+        lang_name: p
+            .language
+            .as_ref()
+            .map_or_else(String::new, |l| l.name().to_string()),
+        inline_provider: p.inline_suggestions.clone(),
+        snippet,
+        doc_uri: p.document_uri.clone(),
+        lsp: lsp_ctl.clone(),
+    };
+    // Raw-key command resolver: runs BEFORE the framework maps the key to an editing intent,
+    // so editor chords (Alt+Up, Ctrl+Shift+K, Ctrl+K Ctrl+0, …) win over caret motion.
+    {
+        let table = Rc::new(crate::actions::key_table(&p.keymap));
+        let host_table = Rc::new(crate::actions::host_table(&p.keymap));
+        let host_cmds = Rc::new(p.keymap.host_commands.clone());
+        let env = cmd_env.clone();
+        focus.on_key_event(Rc::new(move |ev: &pebbles::core::KeyEvent| {
+            use pebbles::core::{KeyEventKind, KeyEventResult};
+            if ev.kind == KeyEventKind::Up {
+                return KeyEventResult::Ignored;
+            }
+            if completion.peek().is_some() || palette.open.peek() {
+                return KeyEventResult::Ignored;
+            }
+            let Some(stroke) = crate::actions::stroke_of(ev) else {
+                return KeyEventResult::Ignored;
+            };
+            // A focused breadcrumbs bar takes the arrows / Enter / Escape.
+            if env.lsp.h.crumb_focus.peek().is_some() {
+                let name = ["Left", "Right", "Enter", "Down", "Space", "Escape"]
+                    .into_iter()
+                    .find(|k| crate::actions::parse_chord(k).is_some_and(|c| c[0] == stroke));
+                if env.lsp.crumb_key(name.unwrap_or("")) {
+                    return KeyEventResult::Handled;
+                }
+            }
+            // Signature help with overloads: Alt+Up / Alt+Down cycle them (over Move Line).
+            if env.lsp.h.sig.peek().is_some() {
+                for (chord, d) in [("Alt+Up", -1), ("Alt+Down", 1)] {
+                    if crate::actions::parse_chord(chord).is_some_and(|c| c[0] == stroke)
+                        && env.lsp.cycle_signature(d)
+                    {
+                        return KeyEventResult::Handled;
+                    }
+                }
+            }
+            // A bare modifier press never resolves or cancels a pending chord.
+            let pending = pending_keys.peek();
+            let host = crate::actions::resolve(&host_table, &pending, &stroke);
+            if let crate::actions::Resolved::Run(i) = host {
+                pending_keys.set(Vec::new());
+                (host_cmds[i].1.0)();
+                return KeyEventResult::Handled;
+            }
+            let host_pending = host == crate::actions::Resolved::Pending;
+            match crate::actions::resolve(&table, &pending, &stroke) {
+                crate::actions::Resolved::Run(cmd) => {
+                    pending_keys.set(Vec::new());
+                    if commands::run(cmd, &env) {
+                        KeyEventResult::Handled
+                    } else {
+                        KeyEventResult::Ignored
+                    }
+                }
+                crate::actions::Resolved::Pending => {
+                    let mut p = pending;
+                    p.push(stroke);
+                    pending_keys.set(p);
+                    KeyEventResult::Handled
+                }
+                crate::actions::Resolved::None if host_pending => {
+                    let mut p = pending;
+                    p.push(stroke);
+                    pending_keys.set(p);
+                    KeyEventResult::Handled
+                }
+                crate::actions::Resolved::None => {
+                    if pending.is_empty() {
+                        KeyEventResult::Ignored
+                    } else {
+                        // An unbound second stroke cancels the chord (and is swallowed).
+                        pending_keys.set(Vec::new());
+                        KeyEventResult::Handled
+                    }
+                }
+            }
+        }));
+    }
     {
         let cfg = cfg.clone();
-        let provider = p.completion.clone();
-        let definition = p.definition.clone();
-        let format = p.format.clone();
-        let sig_provider = p.signature.clone();
+        // The local completion source: the host's old-style provider, else word-based
+        // suggestions (used when the language service does not do completion).
+        let local = p
+            .completion
+            .clone()
+            .or_else(|| p.word_based_suggestions.then(completion::word_provider));
+        // Snippets (built-in for the language + the host's) join the completion list.
+        let mut snips = p.snippets.clone();
+        if p.builtin_snippets
+            && let Some(l) = &p.language
+        {
+            snips.extend(crate::snippets::builtin_snippets(l.name()));
+        }
+        let unit = if p.insert_spaces {
+            " ".repeat(p.tab_size)
+        } else {
+            "\t".to_string()
+        };
+        let snips = Rc::new(snips);
+        let host = p.language_service.clone();
+        let completer = Rc::new(completion::Completer {
+            triggers: host
+                .as_ref()
+                .map(|h| h.completion_trigger_characters())
+                .unwrap_or_default(),
+            host,
+            local: crate::snippets::with_snippets(local, snips.clone(), unit.clone()),
+            snippets: crate::snippets::with_snippets(None, snips, unit),
+            gate: completion_gates.peek().0,
+            resolve_gate: completion_gates.peek().1,
+            uri: p.document_uri.clone(),
+            line_comment: p
+                .language
+                .as_ref()
+                .and_then(|l| l.line_comment().map(str::to_string)),
+        });
+        let inline_provider = p.inline_suggestions.clone();
+        let format_on_paste = p.format_on_paste;
+        let format_on_type = p.format_on_type;
+        let emmet_tab = p.emmet;
+        let emmet_env = cmd_env.clone();
         let ro_exts = p.extensions.clone(); // for read-only-range veto
+        let lsp_k = lsp_ctl.clone();
         // Register as a *code* editor so the shell routes Tab/Shift+Tab here (indent/outdent)
         // instead of moving focus. When the completion popup is open it intercepts navigation
         // keys; otherwise keys flow to the command engine, and typing re-queries completion.
-        focus.register_code_editor(Rc::new(move |k: KeyInput| {
+        let keymap = p.keymap.clone();
+        let linked_on = p.linked_editing
+            && p.language.as_ref().is_some_and(|l| {
+                matches!(
+                    l.name(),
+                    "HTML" | "XML" | "TSX" | "JavaScript" | "Markdown" | "Vue" | "Svelte"
+                )
+            });
+        // The service's linked-editing ranges work in any language.
+        let linked_any = p.linked_editing;
+        let inner = move |k: KeyInput, via_binding: bool| -> bool {
+            // A built-in whose default chord the host disabled is declined, so the key
+            // bubbles to the app's shortcuts. (A host `Keymap::bind` chord still runs it.)
+            if !via_binding
+                && crate::keymap::BuiltinCommand::of_key(&k).is_some_and(|c| keymap.is_disabled(c))
+            {
+                return false;
+            }
             // IME composition: a Preedit shows the in-progress (underlined) text at the caret;
             // it is NOT committed until an Insert (from Ime::Commit). Any other key ends the
             // composition (the commit Insert clears it here, then inserts the committed text).
             if let KeyInput::Preedit(s) = &k {
                 preedit.set(s.clone());
-                return;
+                return true;
             }
             if !preedit.peek().is_empty() {
                 preedit.set(String::new());
             }
-            if completion.peek().is_some() {
+            // Escape closes the problem peek (F8).
+            if matches!(k, KeyInput::Escape) && lsp_k.close_problem() {
+                return true;
+            }
+            // The peek view takes Up/Down/Enter/Escape while open.
+            if lsp_k.peek_key(&k) || lsp_k.hier_key(&k) {
+                return true;
+            }
+            // Any key closes the hover (Escape is consumed by it).
+            if lsp_k.h.hover.peek().is_some() {
+                lsp_k.hide_hover();
+                if matches!(k, KeyInput::Escape) {
+                    return true;
+                }
+            }
+            // Emmet: Tab expands an abbreviation (VS Code `emmet.triggerExpansionOnTab`).
+            if emmet_tab
+                && !read_only
+                && matches!(k, KeyInput::Indent)
+                && completion.peek().is_none()
+                && inline.peek().is_none()
+                && snippet.peek().is_none()
+                && commands::emmet_expand(&emmet_env)
+            {
+                return true;
+            }
+            // Tab focus mode (Ctrl+M): Tab / Shift+Tab bubble so focus traversal moves on.
+            if tab_focus.peek() && matches!(k, KeyInput::Indent | KeyInput::Outdent) {
+                return false;
+            }
+            // Overtype: typed text replaces the chars after each caret (never past the end
+            // of its line); a selection is replaced as usual. One typing undo step.
+            if overtype.peek()
+                && !read_only
+                && let KeyInput::Insert(t) = &k
+                && !t.is_empty()
+                && !t.contains('\n')
+            {
+                let st = state.peek();
+                let text = st.text();
+                let n = t.chars().count();
+                let mut spans: Vec<(usize, usize)> = st
+                    .selection
+                    .ranges()
+                    .iter()
+                    .map(|r| {
+                        if !r.is_empty() {
+                            return (r.min(), r.max());
+                        }
+                        let mut e = r.head;
+                        for c in text[r.head..].chars().take(n) {
+                            if c == '\n' {
+                                break;
+                            }
+                            e += c.len_utf8();
+                        }
+                        (r.head, e)
+                    })
+                    .collect();
+                spans.sort_unstable();
+                let mut delta = 0isize;
+                let mut carets = Vec::new();
+                for &(a, b) in &spans {
+                    let at = (a as isize + delta) as usize + t.len();
+                    carets.push(Selection::caret(at));
+                    delta += t.len() as isize - (b - a) as isize;
+                }
+                let cs = ChangeSet::from_changes(
+                    spans
+                        .iter()
+                        .map(|&(a, b)| crate::edit::Change {
+                            from: a,
+                            to: b,
+                            insert: t.clone(),
+                        })
+                        .collect(),
+                );
+                let pi = st.selection.primary_index().min(carets.len() - 1);
+                dispatch(
+                    state,
+                    history,
+                    code,
+                    Transaction::change_and_select(cs, Selections::new(carets, pi)),
+                    Coalesce::Typing,
+                );
+                goal.set(col_of(&state.peek().text(), state.peek().primary().head));
+                return true;
+            }
+            // Inline (ghost-text) suggestion: Tab accepts, Escape dismisses, Alt+] / Alt+[
+            // (raw commands) cycle; any other key closes it and may re-query below.
+            if let Some(ghost) = inline.peek()
+                && completion.peek().is_none()
+            {
                 match k {
+                    KeyInput::Indent if !read_only => {
+                        let text = ghost.items.get(ghost.idx).cloned().unwrap_or_default();
+                        inline.set(None);
+                        let at = state.peek().primary().head;
+                        dispatch(
+                            state,
+                            history,
+                            code,
+                            Transaction::change_and_select(
+                                ChangeSet::insert(at, text.clone()),
+                                Selections::single(Selection::caret(at + text.len())),
+                            ),
+                            Coalesce::Never,
+                        );
+                        return true;
+                    }
+                    KeyInput::Escape => {
+                        inline.set(None);
+                        return true;
+                    }
+                    _ => inline.set(None),
+                }
+            }
+            if let Some(open) = completion.peek() {
+                match &k {
                     KeyInput::Move {
                         motion: Motion::Down,
                         ..
@@ -300,7 +989,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                             sess.move_by(1);
                         }
                         completion.set(s);
-                        return;
+                        completer.resolve_selected(completion);
+                        return true;
                     }
                     KeyInput::Move {
                         motion: Motion::Up, ..
@@ -310,15 +1000,47 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                             sess.move_by(-1);
                         }
                         completion.set(s);
-                        return;
+                        completer.resolve_selected(completion);
+                        return true;
                     }
                     KeyInput::Enter | KeyInput::Indent => {
-                        completion::accept(state, history, code, goal, completion);
-                        return;
+                        completion::accept(
+                            state, history, code, goal, completion, &completer, snippet, true,
+                        );
+                        return true;
+                    }
+                    // A commit character accepts the item, then is typed as usual.
+                    KeyInput::Insert(t)
+                        if !read_only
+                            && open
+                                .current()
+                                .is_some_and(|it| it.commit_characters.iter().any(|c| c == t)) =>
+                    {
+                        completion::accept(
+                            state, history, code, goal, completion, &completer, snippet, false,
+                        );
                     }
                     KeyInput::Escape => {
                         completion.set(None);
-                        return;
+                        return true;
+                    }
+                    _ => {}
+                }
+            }
+            // A live snippet: Tab / Shift+Tab move between its stops, Esc leaves it.
+            if snippet.peek().is_some() {
+                match k {
+                    KeyInput::Indent | KeyInput::Outdent => {
+                        let fwd = matches!(k, KeyInput::Indent);
+                        if let Some(stop) = crate::snippet::jump(state, snippet, fwd) {
+                            completion::open_choices(completion, &stop);
+                        }
+                        goal.set(col_of(&state.peek().text(), state.peek().primary().head));
+                        return true;
+                    }
+                    KeyInput::Escape => {
+                        snippet.set(None);
+                        return true;
                     }
                     _ => {}
                 }
@@ -326,96 +1048,100 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             match &k {
                 // Find / replace: open the bar (it autofocuses its query field). Escape (while
                 // the editor is focused) closes it.
-                KeyInput::Find => {
-                    find.open.set(1);
-                    // Release focus so the bar's query field (autofocus) can take it.
+                KeyInput::Find | KeyInput::Replace => {
+                    // Seed the query from a single-line selection (or the word at the caret),
+                    // and scope to a multi-line selection (VS Code `seedSearchStringFromSelection`
+                    // + `autoFindInSelection: multiline`).
+                    let st = state.peek();
+                    let pr = st.primary();
+                    let text = st.text();
+                    if !pr.is_empty() {
+                        let sel = &text[pr.min()..pr.max()];
+                        if sel.contains('\n') {
+                            find.scope.set(Some((pr.min(), pr.max())));
+                        } else {
+                            find.query.set(sel.to_string());
+                            find.scope.set(None);
+                        }
+                    } else {
+                        let (a, b) = word_at(&text, pr.head);
+                        if b > a {
+                            find.query.set(text[a..b].to_string());
+                        }
+                        find.scope.set(None);
+                    }
+                    find.idx.set(0);
+                    find.open
+                        .set(if matches!(k, KeyInput::Replace) { 2 } else { 1 });
+                    find.focus_query.set(true);
                     pebbles::core::focus::set_focus(None);
-                    return;
-                }
-                KeyInput::Replace => {
-                    find.open.set(2);
-                    pebbles::core::focus::set_focus(None);
-                    return;
+                    return true;
                 }
                 KeyInput::Escape if find.open.peek() > 0 => {
                     find.open.set(0);
-                    return;
+                    return true;
                 }
                 KeyInput::CommandPalette => {
+                    palette.query.set(String::new());
+                    palette.sel.set(0);
                     palette.open.set(true);
                     pebbles::core::focus::set_focus(None); // let the palette field autofocus
-                    return;
+                    return true;
                 }
                 KeyInput::Escape if palette.open.peek() => {
                     palette.open.set(false);
-                    return;
+                    return true;
                 }
                 KeyInput::TriggerCompletion => {
-                    if let Some(pv) = &provider {
-                        completion::trigger(state, completion, pv, true);
+                    if !completer.has_source() {
+                        return false; // no source: bubble
                     }
-                    return;
+                    completer.request(state, completion, true, Default::default());
+                    return true;
                 }
-                // F12: jump the caret to the provider's target (autoscroll follows).
+                // F12: reveal the definition (several results open the peek).
                 KeyInput::GoToDefinition => {
-                    if let Some(dp) = &definition {
-                        let cur = state.peek();
-                        if let Some(target) = dp(&cur.text(), cur.primary().head) {
-                            state.set(EditorState {
-                                doc: cur.doc.clone(),
-                                selection: Selections::single(Selection::caret(
-                                    target.min(cur.len()),
-                                )),
-                            });
-                            history.peek().borrow_mut().break_group();
-                        }
-                    }
-                    return;
+                    return lsp_k.navigate(lsp::Nav::Definition, false);
                 }
-                // Shift+Alt+F: replace the document with the formatter's output (one undo step).
+                // Shift+Alt+F: format the document through the service (one undo step).
                 KeyInput::Format => {
-                    if let Some(fp) = &format {
-                        let cur = state.peek();
-                        let old = cur.text();
-                        let new = fp(&old);
-                        if new != old {
-                            let caret = cur.primary().head.min(new.len());
-                            dispatch(
-                                state,
-                                history,
-                                code,
-                                Transaction::change_and_select(
-                                    ChangeSet::replace(0, old.len(), new),
-                                    Selections::single(Selection::caret(caret)),
-                                ),
-                                Coalesce::Never,
-                            );
-                        }
-                    }
-                    return;
+                    return lsp_k.format_document();
                 }
                 _ => {}
             }
             // Decide the completion follow-up from the key *before* it's consumed: typing an
             // identifier char re-queries; backspace re-queries only while open; anything else
             // dismisses.
+            let follow_kind = match &k {
+                KeyInput::Insert(_) => 1,
+                KeyInput::Backspace | KeyInput::Delete => 2,
+                _ => 0,
+            };
             let follow = match &k {
                 KeyInput::Insert(s)
                     if !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_') =>
                 {
                     1
                 }
-                KeyInput::Backspace if completion.peek().is_some() => 1,
+                KeyInput::Insert(s) if completer.is_trigger(s) => 3,
+                KeyInput::Backspace if completion.peek().is_some() => 2,
                 _ => 0,
             };
-            // Signature help follows the same "before consume" rule: `(`/`,` opens it, `)`/Esc
-            // closes it. Evaluated before `k` is moved into the command engine.
-            let sig_action = match &k {
-                KeyInput::Insert(s) if s == "(" || s == "," => 1,
-                KeyInput::Insert(s) if s == ")" => 2,
-                KeyInput::Escape => 2,
-                _ => 0,
+            let typed_char = match &k {
+                KeyInput::Insert(s) => Some(s.clone()),
+                _ => None,
             };
+            let is_escape = matches!(k, KeyInput::Escape);
+            // Escape with nothing left to dismiss (no popup / peek / snippet above already
+            // took it, no signature help, a single empty caret) is declined so it bubbles to
+            // the app's shortcuts (VS Code: `editorHasSelection`/`hasMultipleSelections`-gated
+            // Escape bindings, otherwise the key reaches the workbench).
+            if is_escape && lsp_k.h.sig.peek().is_none() {
+                let st = state.peek();
+                if !st.selection.is_multi() && st.primary().is_empty() {
+                    return false;
+                }
+            }
             // Read-only veto: if an editing key would touch a range an extension marked
             // read-only, drop it (checked against the primary selection/caret).
             let editing = matches!(
@@ -448,7 +1174,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                         .is_some_and(|f| f(&snap).iter().any(|&(lo, hi)| a <= hi && b >= lo))
                 });
                 if blocked {
-                    return;
+                    return true;
                 }
             }
             // Transaction filter: let extensions transform or veto a single-caret insert (e.g.
@@ -483,7 +1209,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                         }
                     }
                     if vetoed {
-                        return;
+                        return true;
                     }
                     if edit.from != a || edit.to != b || &edit.insert != text {
                         // The filter changed the edit — apply it directly (one undo step).
@@ -499,27 +1225,190 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                             Coalesce::Never,
                         );
                         goal.set(col_of(&state.peek().text(), state.peek().primary().head));
-                        return;
+                        return true;
                     }
                 }
             }
-            apply_key(k, state, history, code, goal, read_only, &cfg);
-            if let Some(pv) = &provider {
-                if follow == 1 {
-                    completion::trigger(state, completion, pv, false);
+            // Linked editing (auto-rename tag): an edit inside a markup tag name is applied to
+            // its partner tag's name too, as one transaction (a temporary second cursor).
+            let linked_pair = if linked_any && !read_only {
+                let st = state.peek();
+                let sels = st.selection.clamped(&st.doc);
+                let pr = sels.primary();
+                let name_key = match &k {
+                    KeyInput::Insert(t) => t
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | ':' | '.')),
+                    KeyInput::Backspace | KeyInput::Delete => true,
+                    _ => false,
+                };
+                if name_key && !sels.is_multi() {
+                    let text = st.text();
+                    // The service's ranges first; the markup tag pair otherwise.
+                    let groups: Option<Vec<(usize, usize)>> = lsp_k.linked_now().or_else(|| {
+                        linked_on
+                            .then(|| crate::scan_text::linked_tag_names(&text, pr.min()))
+                            .flatten()
+                            .map(|(a, b)| {
+                                let mut v = vec![a, b];
+                                v.sort();
+                                v
+                            })
+                    });
+                    groups
+                        .and_then(|g| {
+                            let here = *g.iter().find(|h| h.0 <= pr.min() && pr.max() <= h.1)?;
+                            Some((here, g))
+                        })
+                        .filter(|(here, _)| {
+                            !(matches!(k, KeyInput::Backspace)
+                                && pr.is_empty()
+                                && pr.head == here.0)
+                        })
+                        .filter(|(here, _)| {
+                            !(matches!(k, KeyInput::Delete) && pr.is_empty() && pr.head == here.1)
+                        })
+                        .map(|(here, all)| {
+                            let mirrors: Vec<Selection> = all
+                                .iter()
+                                .filter(|o| **o != here)
+                                .map(|o| {
+                                    let d = |p: usize| o.0 + (p - here.0);
+                                    Selection::range(d(pr.anchor), d(pr.head))
+                                })
+                                .collect();
+                            (pr, mirrors, all)
+                        })
                 } else {
-                    completion.set(None);
+                    None
+                }
+            } else {
+                None
+            };
+            if let Some((pr, mirrors, all)) = linked_pair {
+                let cur = state.peek();
+                let old_len = cur.doc.len_bytes();
+                let mut sels = vec![pr];
+                sels.extend(mirrors);
+                sels.sort_by_key(|s| s.min());
+                let idx = sels.iter().position(|s| *s == pr).unwrap_or(0);
+                state.set(EditorState {
+                    doc: cur.doc.clone(),
+                    selection: Selections::new(sels, idx),
+                });
+                apply_key(k, state, history, code, goal, read_only, &cfg);
+                let after = state.peek();
+                let keep = after.selection.primary();
+                state.set(EditorState {
+                    doc: after.doc.clone(),
+                    selection: Selections::single(keep),
+                });
+                if lsp_k.h.linked.peek().is_some() {
+                    lsp_k.shift_linked(&all, old_len);
+                }
+            } else {
+                let was_paste = matches!(k, KeyInput::Paste);
+                let before = was_paste.then(|| state.peek().text());
+                apply_key(k, state, history, code, goal, read_only, &cfg);
+                // Format on paste: the pasted range (the whole document when the service
+                // has no range formatting), a separate undo step after the paste.
+                if let Some(old) = before
+                    && format_on_paste
+                    && !read_only
+                {
+                    let new = state.peek().text();
+                    if let Some(e) = crate::collab::diff(&old, &new) {
+                        lsp_k.format_range(e.from, e.from + e.insert.len());
+                    }
                 }
             }
-            match (sig_action, &sig_provider) {
-                (1, Some(sp)) => {
-                    let cur = state.peek();
-                    sig_help.set(sp(&cur.text(), cur.primary().head));
-                }
-                (2, _) => sig_help.set(None),
-                _ => {}
+            if editing {
+                completer.gate.bump_version();
             }
-        }));
+            if completer.has_source() {
+                use crate::language::{CompletionContext as Cx, CompletionTriggerKind as Tk};
+                let open = completion.peek();
+                let caret = state.peek().primary().head;
+                match (follow, open) {
+                    // Deleting back to the word start closes the popup.
+                    (2, Some(s)) if caret <= s.anchor => {
+                        completer.gate.cancel();
+                        completion.set(None);
+                    }
+                    // An incomplete list re-queries the source as the word grows.
+                    (1 | 2, Some(s)) if s.incomplete => completer.request(
+                        state,
+                        completion,
+                        true,
+                        Cx {
+                            trigger_kind: Tk::TriggerForIncompleteCompletions,
+                            trigger_character: None,
+                        },
+                    ),
+                    // Otherwise the open list is filtered locally.
+                    (1 | 2, Some(_)) => completion::refilter(state, completion),
+                    (1, None) => completer.request(state, completion, false, Default::default()),
+                    (3, _) => completer.request(
+                        state,
+                        completion,
+                        true,
+                        Cx {
+                            trigger_kind: Tk::TriggerCharacter,
+                            trigger_character: typed_char.clone(),
+                        },
+                    ),
+                    _ => {
+                        completer.gate.cancel();
+                        completion.set(None);
+                    }
+                }
+            }
+            // Re-query inline suggestions after a typing edit.
+            if let Some(ip) = &inline_provider
+                && matches!(follow_kind, 1 | 2)
+            {
+                let cur = state.peek();
+                let at = cur.primary().head;
+                let items: Vec<String> = ip(&cur.text(), at)
+                    .into_iter()
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                inline.set((!items.is_empty()).then_some(InlineGhost { at, items, idx: 0 }));
+            }
+            // Signature help: trigger characters open it; while open, edits/moves retrigger.
+            if is_escape {
+                lsp_k.close_signature();
+            } else {
+                lsp_k.signature_after_key(typed_char.as_deref());
+            }
+            // Format on type: the service's trigger characters (VS Code formatOnType).
+            if format_on_type
+                && !read_only
+                && let Some(t) = typed_char.as_deref()
+            {
+                lsp_k.format_on_type(t);
+            }
+            true
+        };
+        // Every key runs with its edits recorded, so a live snippet session can map its tab
+        // stops through them (and end when the caret leaves the snippet).
+        let handle = Rc::new(move |k: KeyInput, via_binding: bool| -> bool {
+            if snippet.peek().is_none() {
+                return inner(k, via_binding);
+            }
+            let (handled, log) = crate::commands::record(|| inner(k, via_binding));
+            crate::snippet::after_key(state, snippet, &log);
+            handled
+        });
+        {
+            let h = handle.clone();
+            focus.register_code_editor_bubbling(Rc::new(move |k: KeyInput| h(k, false)));
+        }
+        // Host-added chords for built-ins (`Keymap::bind`), active only while focused.
+        for (chord, cmd) in p.keymap.bindings.iter().cloned() {
+            let h = handle.clone();
+            create_shortcut_if(&chord, move || focus.is_focused() && h(cmd.key(), true));
+        }
     }
 
     // Extension event hooks (on_change / on_selection). The signal + effect are created
@@ -565,7 +1454,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // focused (declined otherwise, so it falls through to other handlers / page scroll).
     for kb in p.extensions.iter().flat_map(|e| e.keys.iter()).cloned() {
         let key_exts = p.extensions.clone();
-        create_shortcut_if(&kb.chord.clone(), move || {
+        create_shortcut_if(&kb.chord, move || {
             if !focus.is_focused() {
                 return false;
             }
@@ -580,27 +1469,193 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         });
     }
 
+    // ---- host controller (EditorController) ----
+    // Requests are applied HERE, in render (not in an effect): effects flush before the
+    // reconciler runs, so an effect would let the OLD editor consume an "open at line" that
+    // the host queued in the same handler that switched documents.
+    let ctrl = p.controller;
+    // Mirror the primary caret into the controller (unconditional hook; no-op without one).
+    create_effect(move || {
+        let st = state.get();
+        let Some(c) = ctrl else { return };
+        let text = st.text();
+        let head = st.primary().head;
+        let pos = (line_of(&text, head), col_of(&text, head));
+        if c.cursor.peek() != pos {
+            c.cursor.set(pos);
+        }
+    });
+    if let Some(c) = ctrl {
+        let reqs = c.requests.get();
+        if !reqs.is_empty() {
+            c.requests.set(Vec::new());
+            let line_px = (p.fs + zoom.peek()).max(6.0) * p.lh;
+            for r in reqs {
+                let cur = state.peek();
+                let text = cur.text();
+                let at = |(l, col): (usize, usize)| byte_at(&text, l, col);
+                let sel = match r {
+                    crate::controller::Request::Cursor(l, col) => {
+                        Some(Selection::caret(at((l, col))))
+                    }
+                    crate::controller::Request::Select(a, h) => {
+                        Some(Selection::range(at(a), at(h)))
+                    }
+                    crate::controller::Request::ScrollTo(line) => {
+                        let li = line_cache.peek().borrow_mut().sync(&text);
+                        let line = line.min(li.line_count().saturating_sub(1));
+                        let wc = wrap_hold.peek().get();
+                        let row = if wc == 0 && folds.peek().is_empty() {
+                            line
+                        } else {
+                            crate::fold::DisplayMap::for_index(&li, &folds.peek(), wc, &[])
+                                .place(line, 0)
+                                .0
+                        };
+                        let t = (10.0 + row as f64 * line_px - line_px).max(0.0);
+                        vscroll.to(t, scroll_top);
+                        None
+                    }
+                    crate::controller::Request::Focus => {
+                        focus.request_focus();
+                        None
+                    }
+                    crate::controller::Request::Run(cmd) => {
+                        commands::run(cmd, &cmd_env);
+                        None
+                    }
+                    crate::controller::Request::FormatForSave(t) => {
+                        let ready = c.save_ready;
+                        cmd_env
+                            .lsp
+                            .format_document_then(Box::new(move || ready.set(t)));
+                        None
+                    }
+                    crate::controller::Request::ApplyEdits(edits) => {
+                        cmd_env.lsp.apply_text_edits(&edits);
+                        None
+                    }
+                    crate::controller::Request::Refresh(what) => {
+                        cmd_env.lsp.refresh(what);
+                        None
+                    }
+                };
+                if let Some(sel) = sel {
+                    state.set(EditorState {
+                        doc: cur.doc.clone(),
+                        selection: Selections::single(sel),
+                    });
+                    history.peek().borrow_mut().break_group();
+                    goal.set(col_of(&text, sel.head));
+                }
+            }
+        }
+    }
+
     // ---- read model ----
     let st = state.get();
     let src = st.text();
-    let fs = p.fs;
+    let fs = eff_fs;
     let lh = p.lh;
     let line_px = fs * lh;
     // Letter spacing widens every cell; fold it into the advance so caret/click/selection math
     // stays exact and matches the rendered text (which gets the same letter_spacing).
     let advance = fs * p.advance_ratio + p.letter_spacing;
     let pad_l = 14.0;
-    let pad_t = 10.0;
     let theme = &p.theme;
+    // Code lenses: a row above their line (line 0's lens widens the top padding).
+    let mut lens_rows = lsp_ctl.lens_rows(theme, fs, &src);
+    let top_lens = match lens_rows.first() {
+        Some((0, _)) => Some(lens_rows.remove(0).1),
+        _ => None,
+    };
+    let pad_t = 10.0 + if top_lens.is_some() { line_px } else { 0.0 };
 
     // All cursors/selections; the primary drives the current-line band + status line.
     let sels = st.selection.clamped(&st.doc);
     let primary = sels.primary();
     let (pcc, has_primary_sel) = (primary.head, !primary.is_empty());
-    let cl = line_of(&src, pcc);
-    let cc = col_of(&src, pcc);
-    let line_count = src.split('\n').count().max(1);
-    let char_lens: Vec<usize> = src.split('\n').map(|l| l.chars().count()).collect();
+    // Incremental parse (tree-sitter languages) BEFORE the line index, so syntax-derived
+    // fold regions apply to this frame. Fold ranges walk the tree, so they are recomputed
+    // only when the parse changed, and only up to SYNTAX_FOLD_MAX_BYTES (~20k lines;
+    // indentation folding beyond that keeps huge files cheap).
+    const SYNTAX_FOLD_MAX_BYTES: usize = 800_000;
+    // VS Code `editor.maxTokenizationLineLength`: a document with a line longer than this
+    // (minified code, data dumps) is not parsed; visible lines are tokenized one by one and
+    // the over-long lines render as plain text — so typing on them stays cheap.
+    const MAX_TOKENIZATION_LINE_LENGTH: usize = 20_000;
+    let too_long =
+        line_cache.peek().borrow_mut().sync(&src).max_cols() > MAX_TOKENIZATION_LINE_LENGTH;
+    let syntax_regions: Option<Rc<Vec<(usize, usize)>>> =
+        p.language.as_ref().filter(|_| !too_long).and_then(|l| {
+            let cell = syntax.peek();
+            let mut slot = cell.borrow_mut();
+            let name = l.name().to_string();
+            if slot.as_ref().is_none_or(|(n, _)| *n != name) {
+                *slot = l.session().map(|s| (name, s));
+            }
+            let (_, sess) = slot.as_mut()?;
+            sess.update(&src);
+            if src.len() > SYNTAX_FOLD_MAX_BYTES {
+                return None;
+            }
+            let fc = syntax_folds.peek();
+            let mut fc = fc.borrow_mut();
+            if fc.0 != sess.version() || fc.1.is_none() {
+                let r = sess.fold_ranges();
+                *fc = (sess.version(), Some(Rc::new(r)));
+            }
+            fc.1.clone().filter(|r| !r.is_empty())
+        });
+    let li = {
+        let cell = line_cache.peek();
+        let mut lc = cell.borrow_mut();
+        lc.sync(&src);
+        lc.set_syntax_regions(syntax_regions.as_ref());
+        let li = lc.sync(&src);
+        // Line-anchored state follows edits that add/remove lines (VS Code keeps folds and
+        // breakpoints on their text): shift folded heads (dropped when their line is
+        // deleted) and breakpoints (collapsed onto the edit line).
+        let shifts = lc.take_shifts();
+        if !shifts.is_empty() {
+            let map = |set: &std::collections::BTreeSet<usize>, keep: bool| {
+                set.iter()
+                    .filter_map(|&x| {
+                        shifts
+                            .iter()
+                            .try_fold(x, |x, &sh| crate::lines::shift_line(x, sh, keep))
+                    })
+                    .collect::<std::collections::BTreeSet<usize>>()
+            };
+            let f = folds.peek();
+            if !f.is_empty() {
+                let nf = map(&f, false);
+                if nf != f {
+                    folds.set(nf);
+                }
+            }
+            if let Some(bp) = p.breakpoints {
+                let b = bp.peek();
+                let nb = map(&b, true);
+                if nb != b {
+                    bp.set(nb);
+                }
+            }
+        }
+        li
+    };
+    let cl = li.line_of(&src, pcc);
+    let cc = li.col_of(&src, pcc);
+    let line_count = li.line_count();
+    // ---- diagnostics: merged, resolved to bytes; counts published for the host ----
+    let diags = Rc::new(lsp_ctl.diagnostics(&src, true));
+    if let Some(sig) = p.problem_counts {
+        let c = lsp::counts(&diags);
+        if sig.peek() != c {
+            sig.set(c);
+        }
+    }
+
     // Inline diff against the base (added lines + removed markers), recomputed reactively.
     let line_diff = p
         .diff_base
@@ -612,15 +1667,25 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // settles one frame after mount (use_bounds is a tracked signal), and is 0 until then.
     let bounds = use_bounds();
     let gutter_w_est = if p.gutter {
-        line_count.to_string().len().max(2) as f64 * advance + 22.0 + 14.0
+        line_count.to_string().len().max(2) as f64 * advance
+            + 22.0
+            + 14.0
+            + gutter::glyph_margin_w(p, line_px)
     } else {
         0.0
     };
-    let wrap_cols = if p.soft_wrap && p.height.is_some() && bounds.width() > 1.0 {
-        (((bounds.width() - gutter_w_est - pad_l * 2.0) / advance).floor() as isize).max(8) as usize
-    } else {
-        0
-    };
+    let wrap_cols =
+        if wrap_override.get().unwrap_or(p.soft_wrap) && p.height.is_some() && bounds.width() > 1.0
+        {
+            // The wrap width is the text area: the viewport minus the gutter, the side panels and
+            // the vertical scrollbar's strip (text never runs under the bar).
+            // (The overview ruler is drawn inside the bar.)
+            let side = scrollbar::SIZE + if p.minimap { 84.0 } else { 0.0 };
+            (((bounds.width() - gutter_w_est - side - pad_l * 2.0) / advance).floor() as isize)
+                .max(8) as usize
+        } else {
+            0
+        };
     // Extension block widgets (full-width widgets on reserved rows below a line). Collect them
     // and the per-line gap-row counts BEFORE the map so it can reserve the space.
     let block_snap = Snapshot {
@@ -628,30 +1693,135 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         caret: primary.head,
         selection: (primary.min(), primary.max()),
     };
-    let block_widgets: Vec<crate::extensions::BlockWidget> = p
+    let mut block_widgets: Vec<crate::extensions::BlockWidget> = p
         .extensions
         .iter()
         .filter_map(|e| e.block.as_ref())
         .flat_map(|f| f(&block_snap))
         .filter(|b| b.line < line_count)
         .collect();
-    let mut block_gaps = vec![0usize; line_count];
-    for b in &block_widgets {
-        block_gaps[b.line] += (b.height / line_px).ceil().max(1.0) as usize;
+    // Ghost text: the inline suggestion (or the completion preview) at the caret. The first
+    // line overlays at the caret; further lines reserve rows below (a block widget).
+    let ghost_text: Option<String> = match (inline.get(), completion.get()) {
+        (Some(g), None) if g.at == primary.head => g.items.get(g.idx).cloned(),
+        (_, Some(sess)) if p.suggest_preview => sess.items.get(sess.selected).and_then(|it| {
+            let typed = &src[sess.anchor.min(primary.head)..primary.head];
+            it.new_text()
+                .strip_prefix(typed)
+                .filter(|rest| !rest.is_empty() && !rest.contains('$'))
+                .map(str::to_string)
+        }),
+        _ => None,
+    };
+    if let Some(g) = &ghost_text {
+        let extra: Vec<&str> = g.split('\n').skip(1).collect();
+        if !extra.is_empty() {
+            let caret_line = li.line_of(&src, primary.head);
+            let lines: Vec<AnyWidget> = extra
+                .iter()
+                .map(|l| {
+                    text(l.to_string())
+                        .size(eff_fs as f32)
+                        .line_height(p.lh as f32)
+                        .font_family(p.font_family.clone())
+                        .color(p.theme.ghost_text)
+                        .into_widget()
+                })
+                .collect();
+            block_widgets.push(crate::extensions::BlockWidget {
+                line: caret_line,
+                height: extra.len() as f64 * eff_fs * p.lh,
+                widget: column(lines)
+                    .main_axis_size(MainAxisSize::Min)
+                    .into_widget(),
+            });
+        }
     }
-    let fold_regions: std::rc::Rc<Vec<(usize, usize)>> =
-        std::rc::Rc::new(crate::fold::foldable(&src));
-    let disp = std::rc::Rc::new(crate::fold::DisplayMap::new(
-        line_count,
+    // The change peek (gutter change-bar click) is an internal block widget.
+    if let (Some(d), Some(base)) = (line_diff.as_ref(), p.diff_base) {
+        let cx = peek::PeekCtx {
+            peek: change_peek,
+            state,
+            history,
+            code,
+            base,
+            on_stage: p.on_stage_hunk.clone(),
+            theme: &p.theme,
+            fs: eff_fs,
+            line_px: eff_fs * p.lh,
+            font_family: &p.font_family,
+        };
+        if let Some(b) = peek::block(&cx, d, &src)
+            && b.line < line_count
+        {
+            block_widgets.push(b);
+        }
+    }
+    // The language-service peek (definitions / references) is an internal block widget.
+    if let Some(b) = lsp_ctl.peek_block(&p.theme, eff_fs, eff_fs * p.lh, &p.font_family)
+        && b.line < line_count
+    {
+        block_widgets.push(b);
+    }
+    // Code lenses above their line = a row below the previous line.
+    for (line, w) in lens_rows {
+        if line < line_count {
+            block_widgets.push(crate::extensions::BlockWidget {
+                line: line - 1,
+                height: line_px,
+                widget: w,
+            });
+        }
+    }
+    // The call / type hierarchy peek.
+    if let Some(b) = lsp_ctl.hier_block(&p.theme, eff_fs * p.lh)
+        && b.line < line_count
+    {
+        block_widgets.push(b);
+    }
+    // The problem peek (F8 / Shift+F8) below the problem's line.
+    if let Some(b) = lsp_ctl.problem_block(&p.theme, eff_fs, eff_fs * p.lh, &src, &diags)
+        && b.line < line_count
+    {
+        block_widgets.push(b);
+    }
+    // Diff editor (side-by-side / inline): word highlights, removed rows, filler rows.
+    let diff_parts = diffview::parts(p, &src, eff_fs, line_px);
+    block_widgets.extend(
+        diff_parts
+            .blocks
+            .into_iter()
+            .filter(|b| b.line < line_count),
+    );
+    let mut block_gaps = Vec::new();
+    if !block_widgets.is_empty() {
+        block_gaps = vec![0usize; line_count];
+        for b in &block_widgets {
+            block_gaps[b.line] += (b.height / line_px).ceil().max(1.0) as usize;
+        }
+    }
+    // Inlay hints reserve columns in the display map (host hints + language-service hints).
+    let inlay_slots = {
+        let props = p.inlay_hints.map(|s| s.get()).unwrap_or_default();
+        let lsp_hints = if lsp_ctl.inlays_on() {
+            lsp_ctl.h.inlays.get()
+        } else {
+            Rc::new(Vec::new())
+        };
+        inlay::slots(&src, &li, &props, &lsp_hints)
+    };
+    inlay_hold.peek().replace(inlay_slots.map.clone());
+    let disp = std::rc::Rc::new(crate::fold::DisplayMap::for_index_inlays(
+        &li,
         &folds.get(),
-        &fold_regions,
-        &char_lens,
         wrap_cols,
         &block_gaps,
+        inlay_slots.map.clone(),
     ));
     let display_rows = disp.rows();
     let content_h = display_rows as f64 * line_px + pad_t * 2.0;
     wrap_hold.peek().set(wrap_cols); // publish to the autoscroll effect
+    metrics_hold.peek().set((line_px, advance, content_h));
     let focused = focus.is_focused();
 
     // ---- viewport virtualization (in display-row space) ----
@@ -669,6 +1839,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     } else {
         (0, line_count - 1)
     };
+    // Inlay hints follow the viewport and the document version.
+    lsp_ctl.request_inlays(first_line, last_line);
+    lsp_ctl.request_semantic(first_line, last_line);
 
     // Pointer → byte, fold/wrap-aware: the y maps to a VISUAL row, then to its buffer line +
     // column span. When nothing is folded or wrapped this is the plain identity mapping (fast
@@ -678,15 +1851,15 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         let xcol = (((pos.x - pad_l) / advance).round().max(0.0)) as usize;
         let nlines = text.split('\n').count().max(1);
         let fset = folds.peek();
-        if wrap_cols == 0 && fset.is_empty() {
+        let inl = inlay_hold.peek().borrow().clone();
+        if wrap_cols == 0 && fset.is_empty() && inl.is_empty() {
             return byte_at(text, row.min(nlines - 1), xcol);
         }
-        let clens: Vec<usize> = text.split('\n').map(|l| l.chars().count()).collect();
-        let regions = crate::fold::foldable(text);
-        let map = crate::fold::DisplayMap::new(nlines, &fset, &regions, &clens, wrap_cols, &[]);
-        let r = map.row_at(row);
-        let col = (r.start + xcol).min(clens.get(r.line).copied().unwrap_or(0));
-        byte_at(text, r.line, col)
+        let li = line_cache.peek().borrow_mut().sync(text);
+        let map = crate::fold::DisplayMap::for_index_inlays(&li, &fset, wrap_cols, &[], inl);
+        let xf = ((pos.x - pad_l) / advance).max(0.0);
+        let (line, col) = map.hit(row, xf, |l| li.char_lens().get(l).copied().unwrap_or(0));
+        byte_at(text, line, col)
     };
 
     // ---- caret blink ----
@@ -697,38 +1870,61 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         let _ = state.get();
         blink_stamp.set(blink_loop.peek());
     });
-    let caret_on = focused && (blink_loop.get() - blink_stamp.get()).rem_euclid(1.0) < 0.5;
+    let caret_phase = (blink_loop.get() - blink_stamp.get()).rem_euclid(1.0);
+    let caret_on =
+        focused && (p.cursor_blinking != crate::config::CursorBlinking::Blink || caret_phase < 0.5);
+    // Smooth caret animation: the primary caret glides from its previous spot over ~80 ms.
+    let caret_offset = {
+        let cell = caret_anim.peek();
+        let mut a = cell.borrow_mut();
+        let (tx, ty) = {
+            let l = li.line_of(&src, pcc);
+            let c = li.col_of(&src, pcc);
+            let (row, xcol) = disp.place(l, c);
+            (pad_l + xcol as f64 * advance, pad_t + row as f64 * line_px)
+        };
+        if !p.smooth_caret {
+            (0.0, 0.0)
+        } else {
+            let now = std::time::Instant::now();
+            if a.target != (tx, ty) {
+                let shown = a.shown(now);
+                *a = CaretAnim {
+                    from: shown,
+                    target: (tx, ty),
+                    start: now,
+                };
+            }
+            let (sx, sy) = a.shown(now);
+            (sx - tx, sy - ty)
+        }
+    };
 
     // ---- autoscroll ----
     // Keep the primary caret in view on every edit/move (only when a fixed height makes the
     // editor a scroll viewport). `scroll_top` (the signal the scroll view feeds) is the
     // source of truth; we set it optimistically so the virtualized window follows now, then
     // command the scroll view to match. Only moves when the caret is off-screen.
-    let scroll_a = scroll.clone();
+    let vscroll_a = vscroll.clone();
     let hscroll_a = hscroll.clone();
     if let Some(vh) = p.height {
         create_effect(move || {
             let st = state.get();
+            // Live metrics (font zoom changes them after this effect was created).
+            let (line_px, advance, content_h) = metrics_hold.peek().get();
             let text = st.text();
             let head = st.primary().head;
-            let line = line_of(&text, head);
-            let col = col_of(&text, head);
+            let li = line_cache.peek().borrow_mut().sync(&text);
+            let line = li.line_of(&text, head);
+            let col = li.col_of(&text, head);
             // The caret's DISPLAY row (fold/wrap-aware), so autoscroll targets the right place.
             let wc = wrap_hold.peek().get();
-            let drow = if wc == 0 && folds.peek().is_empty() {
-                line
+            let inl = inlay_hold.peek().borrow().clone();
+            let (drow, xcol) = if wc == 0 && folds.peek().is_empty() && inl.is_empty() {
+                (line, col)
             } else {
-                let clens: Vec<usize> = text.split('\n').map(|l| l.chars().count()).collect();
-                let regions = crate::fold::foldable(&text);
-                let map = crate::fold::DisplayMap::new(
-                    clens.len().max(1),
-                    &folds.peek(),
-                    &regions,
-                    &clens,
-                    wc,
-                    &[],
-                );
-                map.place(line, col).0
+                crate::fold::DisplayMap::for_index_inlays(&li, &folds.peek(), wc, &[], inl)
+                    .place(line, col)
             };
             let top = pad_t + drow as f64 * line_px;
             let bottom = top + line_px;
@@ -742,23 +1938,108 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 None
             };
             if let Some(t) = target {
-                scroll_a.scroll_to(t);
-                scroll_top.set(t.min((content_h - vh).max(0.0)));
+                vscroll_a.to(t.min((content_h - vh).max(0.0)), scroll_top);
             }
-            let x = pad_l + col_of(&text, head) as f64 * advance;
+            let x = pad_l + xcol as f64 * advance;
             hscroll_a.ensure_visible(x, x + advance, advance * 4.0);
         });
     }
 
+    // ---- long lines: horizontal virtualization ----
+    // When a visible line is longer than LONG_LINE columns (minified files) and soft wrap is
+    // off, only a column window around the horizontal scroll position (and the caret) is
+    // tokenized and rendered, so per-frame cost doesn't grow with the line length.
+    const LONG_LINE: usize = 4000;
+    let hclip: Option<(usize, usize)> = if wrap_cols == 0
+        && (first_line..=last_line).any(|l| li.char_lens().get(l).copied().unwrap_or(0) > LONG_LINE)
+    {
+        let view_cols = ((bounds.width().max(800.0)) / advance).ceil() as usize;
+        let margin = 128usize;
+        let sl_col =
+            ((scroll_left.get().max(hscroll.offset()) - pad_l) / advance).max(0.0) as usize;
+        let mut c0 = sl_col.saturating_sub(margin);
+        let mut c1 = sl_col + view_cols + margin;
+        if cc < c0 || cc >= c1 {
+            // The caret moved off the scrolled window (autoscroll lands next frame).
+            c0 = cc.saturating_sub(view_cols + margin);
+            c1 = cc + margin;
+        }
+        Some((c0, c1))
+    } else {
+        None
+    };
+    // Byte ranges of the visible text: one span for the window, or per-line column-clipped
+    // spans in long-line mode.
+    let vis_ranges: Vec<(usize, usize)> = match hclip {
+        None => vec![(
+            li.line_start_of(first_line),
+            line_end(&src, li.line_start_of(last_line)),
+        )],
+        Some((c0, c1)) => (first_line..=last_line)
+            .filter(|&l| !disp.is_hidden(l))
+            .map(|l| {
+                let len = li.char_lens().get(l).copied().unwrap_or(0);
+                (
+                    li.byte_at(&src, l, c0.min(len)),
+                    li.byte_at(&src, l, c1.min(len)),
+                )
+            })
+            .collect(),
+    };
     // ---- tokens (cached lexical + semantic overlay) ----
     // Large-file mode: past a line threshold, tokenize ONLY the visible window (lazily, each
     // render) and rebase to absolute offsets, instead of the whole document — so a 100k-line
     // file re-highlights in screenful-sized work per edit/scroll. Tradeoff: a multi-line
     // construct (string/comment) that opens above the window may mis-color at the top edge.
     const LARGE_FILE_LINES: usize = 5000;
-    let tokens: Rc<Vec<Token>> = if line_count > LARGE_FILE_LINES {
-        let ls = line_start_of(&src, first_line);
-        let le = line_end(&src, line_start_of(&src, last_line));
+    // Incremental parser path (tree-sitter): one session per editor, re-parsed incrementally
+    // on change and queried for the visible window (plus a margin) only.
+    let session_tokens: Option<Rc<Vec<Token>>> =
+        p.language.as_ref().filter(|_| !too_long).and_then(|l| {
+            let cell = syntax.peek();
+            let mut slot = cell.borrow_mut();
+            let name = l.name().to_string();
+            if slot.as_ref().is_none_or(|(n, _)| *n != name) {
+                *slot = l.session().map(|s| (name, s));
+            }
+            let (_, sess) = slot.as_mut()?;
+            if hclip.is_some() {
+                let mut v = Vec::new();
+                for &(a, b) in &vis_ranges {
+                    if b > a {
+                        v.extend(sess.highlight_range(&src, a..b));
+                    }
+                }
+                return Some(Rc::new(v));
+            }
+            const MARGIN: usize = 50;
+            let lo = li.line_start_of(first_line.saturating_sub(MARGIN));
+            let hi_line = (last_line + MARGIN).min(line_count.saturating_sub(1));
+            let hi = line_end(&src, li.line_start_of(hi_line));
+            Some(Rc::new(sess.highlight_range(&src, lo..hi)))
+        });
+    let tokens: Rc<Vec<Token>> = if let Some(t) = session_tokens {
+        t
+    } else if too_long {
+        // Line-by-line over the visible window, skipping the over-long lines.
+        let mut toks = Vec::new();
+        if let Some(l) = p.language.as_ref() {
+            for line in first_line..=last_line.min(line_count.saturating_sub(1)) {
+                if li.line_char_len(line) > MAX_TOKENIZATION_LINE_LENGTH {
+                    continue;
+                }
+                let ls = li.line_start_of(line);
+                let le = line_end(&src, ls);
+                toks.extend(l.highlight(&src[ls..le]).into_iter().map(|t| Token {
+                    start: t.start + ls,
+                    ..t
+                }));
+            }
+        }
+        Rc::new(toks)
+    } else if line_count > LARGE_FILE_LINES {
+        let ls = li.line_start_of(first_line);
+        let le = line_end(&src, li.line_start_of(last_line));
         let win = &src[ls..le];
         let toks: Vec<Token> = p
             .language
@@ -786,6 +2067,12 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         }
         c.1.clone()
     };
+    // Semantic tokens: the language service's (full / delta / range), then any host-pushed
+    // tokens (`CodeEditor::semantic_tokens`) on top.
+    let tokens: Rc<Vec<Token>> = match lsp_ctl.semantic_for(&src) {
+        Some(sem) if !sem.is_empty() => Rc::new(merge_tokens(&tokens, &sem)),
+        _ => tokens,
+    };
     let tokens: Rc<Vec<Token>> = match p.semantic {
         Some(sig) => {
             let sem = sig.get();
@@ -797,10 +2084,39 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         }
         None => tokens,
     };
+    // Bracket-pair colorization over the rendered window: depth at the window start comes
+    // from a cached prefix scan (re-scanned only when the text above the window changes).
+    let tokens: Rc<Vec<Token>> = if p.bracket_pair_colorization {
+        let lo = vis_ranges.first().map_or(0, |r| r.0);
+        let cell = bracket_cache.peek();
+        let mut c = cell.borrow_mut();
+        let prefix = &src[..lo];
+        if c.0 != prefix {
+            c.1 = crate::highlight::bracket_depth(prefix, &cfg.brackets);
+            c.0.clear();
+            c.0.push_str(prefix);
+        }
+        let mut depth = c.1;
+        let mut at = lo;
+        let mut br = Vec::new();
+        for &(a, b) in &vis_ranges {
+            if a > at {
+                // Skipped (clipped) text between ranges still nests.
+                depth = crate::highlight::bracket_depth_from(depth, &src[at..a], &cfg.brackets);
+            }
+            let part = crate::highlight::bracket_tokens(&src, a, b, depth, &cfg.brackets, &tokens);
+            depth = crate::highlight::bracket_depth_from(depth, &src[a..b], &cfg.brackets);
+            br.extend(part);
+            at = b;
+        }
+        Rc::new(crate::highlight::overlay_split(&tokens, &br))
+    } else {
+        tokens
+    };
 
     // ---- extension contributions for this frame ----
     // Decorations + gutter markers are recomputed from the current snapshot each render.
-    let (ext_decos, ext_gutter_marks): (Vec<Decoration>, Vec<GutterMark>) =
+    let (mut ext_decos, ext_gutter_marks): (Vec<Decoration>, Vec<GutterMark>) =
         if p.extensions.is_empty() {
             (Vec::new(), Vec::new())
         } else {
@@ -823,12 +2139,37 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 .collect();
             (decos, marks)
         };
+    ext_decos.extend(diff_parts.decos);
+    // Ctrl/Cmd+hover: underline the link or the symbol with a definition under the pointer
+    // (the Ctrl+click target), as VS Code does.
+    if let Some(pos) = hover_pos.get()
+        && (pebbles::core::keyboard::ctrl_held() || pebbles::core::keyboard::meta_held())
+    {
+        let b = p2b(&src, pos);
+        let ls = line_start(&src, b);
+        let le = line_end(&src, ls);
+        let link = crate::scan_text::find_links(&src[ls..le])
+            .into_iter()
+            .find(|&(a, z)| ls + a <= b && b <= ls + z)
+            .map(|(a, z)| (ls + a, ls + z));
+        let target = link.or_else(|| {
+            lsp_ctl
+                .h
+                .link
+                .get()
+                .filter(|&(a, z)| a <= b && b <= z && z <= src.len())
+        });
+        if let Some(r) = target {
+            ext_decos.push(Decoration::underline(r, theme.accent));
+        }
+    }
 
     // ---- the read-model the view builders share ----
     let frame = Frame {
         p,
         theme,
         src: &src,
+        li: &li,
         tokens: &tokens,
         sels: &sels,
         pcc,
@@ -837,6 +2178,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         fs,
         lh,
         font_family: &p.font_family,
+        font_weight: p.font_weight,
         letter_spacing: p.letter_spacing,
         line_px,
         advance,
@@ -847,11 +2189,39 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         first_line,
         last_line,
         caret_on,
+        caret_phase,
+        caret_offset,
         focused,
+        overtype: overtype.get(),
+        linked_editing_active: p.linked_editing
+            && p.language.as_ref().is_some_and(|l| {
+                matches!(
+                    l.name(),
+                    "HTML" | "XML" | "TSX" | "JavaScript" | "Markdown" | "Vue" | "Svelte"
+                )
+            }),
+        color_picker,
+        focus,
+        change_peek,
         highlight_word_matches: find.open.get() == 0,
+        doc_highlights: lsp_ctl.h.highlights.get(),
+        diags: diags.clone(),
+        lsp: &lsp_ctl,
+        snippet_stops: snippet
+            .get()
+            .map(|sn| {
+                sn.stops
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != sn.current)
+                    .flat_map(|(_, st)| st.ranges.iter().copied())
+                    .collect()
+            })
+            .unwrap_or_default(),
+        hclip,
         ext_gutter_marks: &ext_gutter_marks,
         disp: disp.as_ref(),
-        fold_regions: fold_regions.as_slice(),
+        inlay_slots: &inlay_slots,
         folds,
         diff: line_diff.as_ref(),
     };
@@ -862,22 +2232,59 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // below and driven by the find bar's navigation/replace actions.
     let search_matches: Vec<(usize, usize)> = if find.open.get() > 0 {
         // Read the option signals so a toggle re-runs the search.
-        let (q, _, _, _) = (
+        let (q, _, _, _, scope) = (
             find.query.get(),
             find.case.get(),
             find.word.get(),
             find.regex.get(),
+            find.scope.get(),
         );
         if q.is_empty() {
             Vec::new()
         } else {
-            crate::search::find_all(&src, &q, &find.options())
+            crate::search::in_scope(crate::search::find_all(&src, &q, &find.options()), scope)
         }
     } else {
         Vec::new()
     };
 
+    let ruler_matches = search_matches.clone();
     let mut layers = overlays::build(&frame);
+    if let Some(w) = top_lens {
+        layers.push(
+            Positioned::new(container().height(line_px).child(w))
+                .left(pad_l)
+                .right(0.0)
+                .top(10.0)
+                .into_widget(),
+        );
+    }
+    // Interactive popups go to `popup_layer` (fixed slots above every grid layer), not
+    // `layers`; see there.
+    let mut picker_slot: Vec<AnyWidget> = Vec::new();
+    decor::color_picker(&frame, &mut picker_slot, state, history, code, color_draft);
+    let mut blocks: Vec<AnyWidget> = Vec::new();
+    if let Some(g) = &ghost_text {
+        let first = g.split('\n').next().unwrap_or("");
+        let l = li.line_of(&src, primary.head);
+        if !first.is_empty() && frame.line_visible(l) {
+            let (x, y) = frame.xy(l, li.col_of(&src, primary.head));
+            layers.push(
+                Positioned::new(
+                    text_rich(vec![
+                        span(first.to_string())
+                            .size(fs as f32)
+                            .font_family(p.font_family.as_str())
+                            .color(theme.ghost_text),
+                    ])
+                    .line_height(lh as f32),
+                )
+                .left(x)
+                .top(y)
+                .into_widget(),
+            );
+        }
+    }
     if !ext_decos.is_empty() {
         layers.extend(extensions::decoration_layers(&frame, &ext_decos));
     }
@@ -889,12 +2296,15 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 let off = used.entry(bw.line).or_insert(0.0);
                 let y = frame.row_y(grow) + *off;
                 *off += bw.height;
-                layers.push(
-                    Positioned::new(container().height(bw.height).child(bw.widget))
-                        .left(pad_l)
-                        .right(0.0)
-                        .top(y)
-                        .into_widget(),
+                blocks.push(
+                    Positioned::new(popup_shield(
+                        &frame,
+                        container().height(bw.height).child(bw.widget),
+                    ))
+                    .left(pad_l)
+                    .right(0.0)
+                    .top(y)
+                    .into_widget(),
                 );
             }
         }
@@ -903,47 +2313,16 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         let cur = find.idx.peek().min(search_matches.len() - 1);
         layers.extend(search::match_layers(&frame, &search_matches, cur));
     }
+    let mut completion_slot = None;
     if let Some(sess) = completion.peek() {
-        layers.push(completion::popup(&sess, &frame));
+        completion_slot = Some(completion::popup(&sess, &frame));
     }
-    // Hover tooltip: query the provider at the pointer's byte and float a panel there.
-    if let (Some(pos), Some(hp)) = (hover_pos.get(), &p.hover) {
-        let byte = p2b(&src, pos);
-        if let Some(h) = hp(&src, byte) {
-            let tip = chrome::tooltip(
-                text(h.contents)
-                    .size((fs * 0.92) as f32)
-                    .font_family(&p.font_family)
-                    .color(theme.foreground)
-                    .into_widget(),
-                theme,
-            );
-            layers.push(
-                Positioned::new(tip)
-                    .left(pos.x + 4.0)
-                    .top(pos.y + 18.0)
-                    .into_widget(),
-            );
-        }
-    }
+    // Hover (service-driven, shown after the pointer dwells or by Ctrl+K Ctrl+I).
+    let hover_slot = lsp_ctl.hover_layer(&frame);
+    // The inline rename box (F2).
+    let rename_slot = lsp_ctl.rename_layer(&frame);
     // Signature help: a panel just above the caret line while typing a call.
-    if let Some(sig) = sig_help.get() {
-        let tip = chrome::tooltip(
-            text(sig.label.clone())
-                .size((fs * 0.92) as f32)
-                .font_family(&p.font_family)
-                .color(theme.foreground)
-                .into_widget(),
-            theme,
-        );
-        let y = (frame.y_of(cl) - line_px - 4.0).max(0.0);
-        layers.push(
-            Positioned::new(tip)
-                .left(pad_l + cc as f64 * advance)
-                .top(y)
-                .into_widget(),
-        );
-    }
+    let sig_slot = lsp_ctl.sig_layer(&frame);
     // IME composition: the in-progress preedit text, tinted + underlined at the caret.
     let pre = preedit.get();
     if !pre.is_empty() {
@@ -980,11 +2359,11 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     if p.selection_handles && has_primary_sel {
         let (lo, hi) = (primary.min(), primary.max());
         for (byte, is_end) in [(lo, false), (hi, true)] {
-            let ln = line_of(&src, byte);
+            let ln = li.line_of(&src, byte);
             if !frame.line_visible(ln) {
                 continue;
             }
-            let hx = pad_l + col_of(&src, byte) as f64 * advance - 7.0;
+            let hx = pad_l + li.col_of(&src, byte) as f64 * advance - 7.0;
             let hy = frame.y_of(ln) + line_px - 3.0;
             // The OTHER endpoint stays fixed while this handle drags.
             let fixed = if is_end { lo } else { hi };
@@ -1012,8 +2391,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // Text drag-and-drop: a drop caret at the target byte while dragging a selection.
     if let Some(d) = drop_byte.get() {
         let d = d.min(src.len());
-        let x = pad_l + col_of(&src, d) as f64 * advance;
-        let y = frame.y_of(line_of(&src, d));
+        let x = pad_l + li.col_of(&src, d) as f64 * advance;
+        let y = frame.y_of(li.line_of(&src, d));
         layers.push(
             Positioned::new(
                 container()
@@ -1026,6 +2405,16 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             .into_widget(),
         );
     }
+    let popups = popup_layer(
+        vec![
+            picker_slot.pop(),
+            completion_slot,
+            hover_slot,
+            rename_slot,
+            sig_slot,
+        ],
+        blocks,
+    );
     let grid = stack(layers)
         .fit(StackFit::Expand)
         .alignment(Alignment::TOP_LEFT);
@@ -1157,25 +2546,41 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // With a fixed height, bound the content to the widest line so it can overflow and scroll
     // horizontally (the gutter stays fixed, outside the horizontal scroll). Without a height
     // the editor grows to content. Soft wrap disables horizontal overflow (lines fit the width).
+    // The horizontal viewport: the editor minus the gutter, the side panels and the
+    // vertical scrollbar's strip (the text keeps clear of the bar).
+    let h_view = (bounds.width()
+        - gutter_w_est
+        - if p.minimap { 84.0 } else { 0.0 }
+        - 1.0
+        - scrollbar::SIZE)
+        .max(0.0);
     let content_w = if wrap_cols > 0 {
         None
     } else {
         p.height.map(|_| {
-            let max_cols = src
-                .split('\n')
-                .map(|l| l.chars().count())
-                .max()
-                .unwrap_or(0);
-            pad_l * 2.0 + max_cols as f64 * advance
+            let max_cols = li.max_cols();
+            // At least the viewport width, so clicks (and block widgets such as the change
+            // peek) right of short lines still land on the content.
+            (pad_l * 2.0 + max_cols as f64 * advance).max(h_view)
         })
     };
-    let content_box = match content_w {
-        Some(w) => container().width(w).height(content_h).child(grid),
-        None => container().height(content_h).child(grid),
+    // The popups' box fills at least the viewport: popups anchored to a short document
+    // (colour picker, completion, hover, …) sit below the last line, and hit testing never
+    // reaches a child outside its parent's bounds (as Flutter). The click area itself stays
+    // the text's height, so the empty viewport below a short document claims no presses
+    // (a host overlay drawn there keeps them). The scroll extent is unchanged: the box only
+    // grows when the document is shorter than the viewport.
+    let box_h = content_h.max(p.height.unwrap_or(0.0));
+    let sized = |h: f64, child: AnyWidget| match content_w {
+        Some(w) => container().width(w).height(h).child(child).into_widget(),
+        None => container().height(h).child(child).into_widget(),
     };
+    let content_box = sized(content_h, grid.into_widget());
     // Per-plugin pointer handlers: notify each extension's on_click with the byte under the
     // press. (The editor's own hit-testing above already placed the caret.)
     let click_exts = p.extensions.clone();
+    let click_link = p.on_open_link.clone();
+    let click_lsp = lsp_ctl.clone();
     let click_area = GestureDetector::new(content_box)
         .on_pointer_down(action_event(move |e| {
             focus.request_focus();
@@ -1193,6 +2598,25 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             } else {
                 text_drag.set(None);
                 hit(e.position, shift, alt);
+            }
+            // Ctrl/Cmd+click: open a link under the pointer, else go to definition.
+            let ctrl = pebbles::core::keyboard::ctrl_held() || pebbles::core::keyboard::meta_held();
+            if ctrl && !shift && !alt {
+                let cur = state.peek();
+                let text = cur.text();
+                let b = p2b(&text, e.position);
+                let ls = line_start(&text, b);
+                let line = &text[ls..line_end(&text, ls)];
+                let link = crate::scan_text::find_links(line)
+                    .into_iter()
+                    .find(|&(a, z)| ls + a <= b && b <= ls + z)
+                    .map(|(a, z)| line[a..z].to_string());
+                match (link, &click_link) {
+                    (Some(url), Some(open)) => open(&url),
+                    _ => {
+                        click_lsp.navigate_at(b, lsp::Nav::Definition, false);
+                    }
+                }
             }
             if click_exts.iter().any(|x| x.on_click.is_some()) {
                 let cur = state.peek();
@@ -1251,19 +2675,72 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 drop_byte.set(None);
             }
         }))
+        // Middle-button drag: column (box) selection, as VS Code.
+        .on_tertiary_tap_down(action_event(move |e| mid_anchor.set(Some(e.position))))
+        .on_tertiary_tap_up(action_event(move |e| {
+            if let Some(a) = mid_anchor.peek() {
+                column_select(a, e.position);
+                mid_anchor.set(None);
+            }
+        }))
+        // Ctrl+wheel: font zoom (VS Code `editor.mouseWheelZoom`).
+        .on_pointer_signal(move |ev| {
+            if wheel_zoom && pebbles::core::keyboard::ctrl_held() {
+                let z = zoom.peek() + if ev.delta.y < 0.0 { 1.0 } else { -1.0 };
+                zoom.set(z.clamp(-8.0, 40.0));
+                true
+            } else {
+                false
+            }
+        })
         .on_double_tap(action_event(move |e| word_select(e.position)))
         .on_triple_tap(action_event(move |e| line_select(e.position)))
-        .on_hover_move(action_event(move |e| hover_pos.set(Some(e.position))))
-        .on_hover_exit(action(move || hover_pos.set(None)));
+        .on_hover_move(action_event({
+            let l = lsp_ctl.clone();
+            move |e| {
+                hover_pos.set(Some(e.position));
+                let text = state.peek().text();
+                let b = p2b(&text, e.position);
+                if pebbles::core::keyboard::ctrl_held() || pebbles::core::keyboard::meta_held() {
+                    l.request_link(b);
+                } else if l.h.link.peek().is_some() {
+                    l.h.link.set(None);
+                }
+                l.pointer_moved(b, e.position);
+            }
+        }))
+        .on_hover_exit(action({
+            let l = lsp_ctl.clone();
+            move || {
+                hover_pos.set(None);
+                l.pointer_left();
+            }
+        }));
 
     // Horizontal scroll: wrap the content (not the gutter) so long lines scroll sideways
     // while the line numbers stay put. Only when the editor is a bounded viewport.
+    // The popup layer over the click area (a sibling, in the same content coordinates).
+    let click_area = sized(
+        box_h,
+        stack(vec![click_area.into_widget(), sized(box_h, popups)])
+            .fit(StackFit::Loose)
+            .alignment(Alignment::TOP_LEFT)
+            .into_widget(),
+    );
     let content_area: AnyWidget = if content_w.is_some() {
+        // Its own bar would sit under the document's last line (this view is the vertical
+        // viewport's content), so the editor draws the horizontal bar pinned to the viewport.
         SingleChildScrollView::horizontal(click_area)
             .controller(hscroll.clone())
+            .hide_scrollbar()
+            .on_scroll(move |n| {
+                if (scroll_left.peek() - n.metrics.pixels).abs() > 0.01 {
+                    scroll_left.set(n.metrics.pixels);
+                }
+            })
             .into_widget()
     } else {
-        click_area.into_widget()
+        click_area
     };
 
     // Gutter to the left of the (horizontally-scrolling) content.
@@ -1320,24 +2797,103 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let code_area: AnyWidget = match p.height {
         Some(h) => {
             let on_scroll_cb = p.on_scroll.clone();
+            let scroll_link = p.scroll_link;
+            // VS Code `scrollBeyondLastLine`: room for the last line to reach the top. It is
+            // part of the scroll extent, so the thumb measures it too.
+            let beyond = if p.scroll_beyond_last_line {
+                (h - line_px - pad_t).max(0.0)
+            } else {
+                0.0
+            };
+            let extent = content_h + beyond;
+            // The vertical bar is a sibling right of the text (and minimap): no strip reserved.
+            let body = container()
+                .padding(EdgeInsets::only(0.0, 0.0, 0.0, beyond))
+                .child(body)
+                .into_widget();
             let scroller = scroll_view(body)
+                .hide_scrollbar() // the editor draws the one vertical bar (far right)
                 .controller(scroll.clone())
                 // Re-render the visible window as the viewport scrolls, and report the offset so
                 // the caller can persist/restore it (view state).
                 .on_scroll(move |n| {
                     scroll_top.set(n.metrics.pixels);
+                    if let Some(l) = scroll_link
+                        && (l.peek() - n.metrics.pixels).abs() > 0.5
+                    {
+                        l.set(n.metrics.pixels);
+                    }
                     if let Some(cb) = &on_scroll_cb {
                         cb(n.metrics.pixels);
                     }
                 })
                 .into_widget();
-            let scroller = sticky::overlay(&frame, scroller, scroll_top);
-            let inner: AnyWidget = match minimap::panel(&frame, scroll, scroll_top) {
-                Some(mm) => row(children![expanded(scroller), mm])
-                    .cross_axis_alignment(CrossAxisAlignment::Start)
-                    .into_widget(),
+            let jump_v = vscroll.clone();
+            let on_jump: Rc<dyn Fn(usize, f64)> = Rc::new(move |at: usize, t: f64| {
+                let cur = state.peek();
+                state.set(EditorState {
+                    doc: cur.doc.clone(),
+                    selection: Selections::single(Selection::caret(at)),
+                });
+                jump_v.to(t.min(jump_v.handle.max()), scroll_top);
+            });
+            let scroller = sticky::overlay(&frame, scroller, scroll_top, scroll_left, on_jump);
+            let scroller = match content_w.and_then(|cw| {
+                scrollbar::horizontal(theme, hscroll.clone(), scroll_left, cw, h_view, hbar)
+            }) {
+                Some(hb) => stack(vec![
+                    scroller,
+                    Positioned::new(hb)
+                        .left(if p.gutter { gutter_w_est } else { 0.0 })
+                        .right(0.0)
+                        .bottom(0.0)
+                        .height(scrollbar::SIZE)
+                        .into_widget(),
+                ])
+                .fit(StackFit::Expand)
+                .into_widget(),
                 None => scroller,
             };
+            // VS Code: text | minimap | ONE vertical bar at the right edge, the overview
+            // ruler drawn in its track.
+            let mut parts: Vec<AnyWidget> = vec![expanded(scroller).into_widget()];
+            if let Some(mm) = minimap::panel(&frame, scroll.clone(), scroll_top, extent, mmap) {
+                parts.push(mm);
+            }
+            parts.push(scrollbar::vertical(
+                theme,
+                scroll.clone(),
+                scroll_top,
+                extent,
+                h,
+                vbar,
+                ruler::track(&frame, ruler::marks(&frame, &ruler_matches), extent),
+                theme.background,
+            ));
+            let inner: AnyWidget = row(parts)
+                .cross_axis_alignment(CrossAxisAlignment::Start)
+                .into_widget();
+            // A wheel notch scrolls by lines (3 per notch, as VS Code / the OS default),
+            // through the smooth-scrolling setting, over the text, minimap and bar alike;
+            // trackpad pixels and Shift+wheel (horizontal) go to the scroll views as they are.
+            let wheel_v = vscroll.clone();
+            let inner = GestureDetector::new(inner)
+                .on_pointer_signal(move |ev| {
+                    let pebbles::render::ScrollUnit::Lines(l) = ev.unit else {
+                        return false;
+                    };
+                    if pebbles::core::keyboard::shift_held() || l.x != 0.0 || l.y == 0.0 {
+                        return false;
+                    }
+                    let base = wheel_v.handle.offset();
+                    let t = (base + l.y * 3.0 * line_px).clamp(0.0, wheel_v.handle.max());
+                    if (t - base).abs() < 0.5 {
+                        return false; // at the edge: let an outer view scroll
+                    }
+                    wheel_v.to(t, scroll_top);
+                    true
+                })
+                .into_widget();
             container()
                 .height(h)
                 .decoration(BoxDecoration::new().color(theme.background))
@@ -1368,12 +2924,51 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     };
 
     // Overlay the command palette (all extension commands) when open.
-    let code_area: AnyWidget = if palette.open.get() {
-        let commands: Vec<crate::extensions::Command> = p
-            .extensions
+    let pal_query = if palette.open.get() {
+        palette.query.get()
+    } else {
+        String::new()
+    };
+    let code_area: AnyWidget = if palette.open.get() && pal_query.starts_with('@') {
+        let _ = lsp_ctl.h.symbols.get();
+        let ctx = crate::extensions::EditContext {
+            state,
+            history,
+            code,
+            goal,
+        };
+        let commands = lsp_ctl.symbol_commands(&pal_query);
+        let pal = extensions::palette(palette, commands, ctx, focus, theme);
+        stack(children![code_area, pal]).into_widget()
+    } else if palette.open.get() && pal_query.starts_with('#') {
+        lsp_ctl.request_workspace_symbols(&pal_query);
+        let _ = lsp_ctl.h.ws_symbols.get();
+        let ctx = crate::extensions::EditContext {
+            state,
+            history,
+            code,
+            goal,
+        };
+        let commands = lsp_ctl.workspace_symbol_commands();
+        let pal = extensions::palette(palette, commands, ctx, focus, theme);
+        stack(children![code_area, pal]).into_widget()
+    } else if palette.open.get() {
+        // Built-in editor commands first (each runnable from the palette), then extensions'.
+        let mut commands: Vec<crate::extensions::Command> = crate::actions::EditorCommand::ALL
             .iter()
-            .flat_map(|e| e.commands.iter().cloned())
+            .map(|&c| {
+                let env = cmd_env.clone();
+                let chords = p.keymap.chords_for(c);
+                let title = match chords.first() {
+                    Some(k) => format!("{}  ({k})", c.title()),
+                    None => c.title().to_string(),
+                };
+                crate::extensions::Command::new(c.id(), title, move |_| {
+                    commands::run(c, &env);
+                })
+            })
             .collect();
+        commands.extend(p.extensions.iter().flat_map(|e| e.commands.iter().cloned()));
         let ctx = crate::extensions::EditContext {
             state,
             history,
@@ -1382,6 +2977,46 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         };
         let pal = extensions::palette(palette, commands, ctx, focus, theme);
         stack(children![code_area, pal]).into_widget()
+    } else {
+        code_area
+    };
+
+    // The rename preview dialog (edits across files, accepted per file).
+    let code_area: AnyWidget = match lsp_ctl.preview_layer(theme, &p.font_family) {
+        Some(d) => stack(children![code_area, d]).into_widget(),
+        None => code_area,
+    };
+
+    // The breadcrumb dropdown (a palette of the segment's siblings / children).
+    let code_area: AnyWidget = if lsp_ctl.h.crumb_menu.open.get() {
+        let ctx = crate::extensions::EditContext {
+            state,
+            history,
+            code,
+            goal,
+        };
+        let menu = extensions::palette(
+            lsp_ctl.h.crumb_menu,
+            lsp_ctl.open_crumb_commands(),
+            ctx,
+            focus,
+            theme,
+        );
+        stack(children![code_area, menu]).into_widget()
+    } else {
+        code_area
+    };
+
+    // The code-action menu (Ctrl+. / the lightbulb), a palette of the actions.
+    let code_area: AnyWidget = if lsp_ctl.h.menu.open.get() {
+        let ctx = crate::extensions::EditContext {
+            state,
+            history,
+            code,
+            goal,
+        };
+        let menu = extensions::palette(lsp_ctl.h.menu, lsp_ctl.menu_commands(), ctx, focus, theme);
+        stack(children![code_area, menu]).into_widget()
     } else {
         code_area
     };
@@ -1404,6 +3039,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 .decoration(BoxDecoration::new().color(theme.border))
                 .into_widget(),
         );
+    }
+    if p.breadcrumbs {
+        col.push(lsp_ctl.breadcrumb_bar(theme));
     }
     col.push(code_area);
 

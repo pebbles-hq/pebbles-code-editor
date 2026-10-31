@@ -17,6 +17,32 @@ use crate::edit::{
 };
 use crate::geometry::*;
 
+thread_local! {
+    /// The change sets dispatched while [`record`] runs (snippet sessions map their stops
+    /// through every edit a key causes).
+    static LOG: RefCell<Option<Vec<crate::edit::ChangeSet>>> = const { RefCell::new(None) };
+}
+
+/// Run `f`, returning the change sets it dispatched.
+pub(crate) fn record<R>(f: impl FnOnce() -> R) -> (R, Vec<crate::edit::ChangeSet>) {
+    let outer = LOG.with(|l| l.borrow_mut().replace(Vec::new()));
+    let r = f();
+    let log = LOG
+        .with(|l| std::mem::replace(&mut *l.borrow_mut(), outer))
+        .unwrap_or_default();
+    (r, log)
+}
+
+/// Forget the change sets recorded so far (an edit that created state already in the new
+/// coordinates, e.g. a snippet insertion starting its session).
+pub(crate) fn clear_recorded() {
+    LOG.with(|l| {
+        if let Some(v) = l.borrow_mut().as_mut() {
+            v.clear();
+        }
+    });
+}
+
 /// The single mutation path: apply `tx` to the state, record its inverse for undo (edits
 /// only), and keep the public `code` signal in sync with the document.
 pub(crate) fn dispatch(
@@ -29,6 +55,11 @@ pub(crate) fn dispatch(
     let cur = state.peek();
     let (next, inverse) = cur.apply(&tx);
     if tx.is_edit() {
+        LOG.with(|l| {
+            if let Some(v) = l.borrow_mut().as_mut() {
+                v.push(tx.changes.clone());
+            }
+        });
         history
             .peek()
             .borrow_mut()
@@ -158,69 +189,102 @@ pub(crate) fn apply_key(
                     }
                 }
             }
-            // Auto-close (single caret / selection only): type an opener → insert its pair
-            // (caret between) or wrap the selection; type a closer/quote sitting right at the
-            // caret → skip over it instead of doubling.
-            if cfg.auto_close && !is_multi && s.chars().count() == 1 {
-                let ch = s.chars().next().unwrap();
+            // Auto-close / auto-surround, for EVERY cursor: an opener inserts its pair (caret
+            // between) or wraps a selection; typing a closer/quote that sits right at the caret
+            // steps over it. Like VS Code's `autoCloseBefore`, a pair only auto-closes when the
+            // next char is whitespace, a closer, punctuation or the line end.
+            if cfg.auto_close && s.chars().count() == 1 {
+                let ch = s.chars().next().unwrap_or(' ');
                 let is_quote = matches!(ch, '"' | '\'' | '`');
                 let opener = cfg.brackets.iter().find(|(o, _)| *o == ch).copied();
                 let closer_or_quote = cfg.brackets.iter().any(|(_, c)| *c == ch) || is_quote;
-                let head = primary.head;
-                let at_caret = src.get(head..).and_then(|s| s.chars().next());
-                if closer_or_quote && at_caret == Some(ch) {
-                    // Overtype the auto-inserted closer/quote.
-                    select_many(Selections::single(Selection::caret(next_char(&src, head))));
-                    return;
-                }
                 let pair = opener.or(if is_quote { Some((ch, ch)) } else { None });
-                if let Some((o, c)) = pair {
-                    // Don't pair a quote right after a word char (apostrophes in `don't`).
-                    let after_word = is_quote
-                        && head > 0
-                        && src[..head]
-                            .chars()
-                            .next_back()
-                            .is_some_and(|p| p.is_alphanumeric());
-                    if !after_word {
-                        let (lo, hi) = (primary.min(), primary.max());
-                        let (cs, caret) = if primary.is_empty() {
-                            (
-                                ChangeSet::insert(head, format!("{o}{c}")),
-                                head + o.len_utf8(),
-                            )
-                        } else {
-                            (
-                                ChangeSet::from_changes(vec![
-                                    Change {
-                                        from: lo,
-                                        to: lo,
-                                        insert: o.to_string(),
-                                    },
-                                    Change {
-                                        from: hi,
-                                        to: hi,
-                                        insert: c.to_string(),
-                                    },
-                                ]),
-                                hi + o.len_utf8(),
-                            )
-                        };
-                        let sel = if primary.is_empty() {
-                            Selections::single(Selection::caret(caret))
-                        } else {
-                            Selections::single(Selection::range(lo + o.len_utf8(), caret))
-                        };
-                        dispatch(
-                            state,
-                            history,
-                            code,
-                            Transaction::change_and_select(cs, sel),
-                            Coalesce::Never,
-                        );
-                        goal.set(col_of(&state.peek().text(), state.peek().primary().head));
-                        return;
+                let mut changes: Vec<Change> = Vec::new();
+                let mut out: Vec<Selection> = Vec::new();
+                let mut delta: isize = 0;
+                let mut special = false;
+                for r in &ranges {
+                    let head = r.head;
+                    let at_caret = src.get(head..).and_then(|x| x.chars().next());
+                    let shift = |p: usize| (p as isize + delta) as usize;
+                    if r.is_empty() && closer_or_quote && at_caret == Some(ch) {
+                        // Overtype the closer/quote.
+                        special = true;
+                        let n = next_char(&src, head);
+                        out.push(Selection::caret(shift(n)));
+                        continue;
                     }
+                    let prev = src[..r.min()].chars().next_back();
+                    let after_word =
+                        is_quote && prev.is_some_and(|p| p.is_alphanumeric() || p == '_');
+                    let next_ok = at_caret.is_none_or(|c| {
+                        c.is_whitespace()
+                            || cfg.brackets.iter().any(|(_, x)| *x == c)
+                            || matches!(c, ';' | ',' | '.' | ':' | '"' | '\'' | '`')
+                    });
+                    match pair {
+                        Some((o, c)) if !r.is_empty() => {
+                            // Surround the selection.
+                            special = true;
+                            changes.push(Change {
+                                from: r.min(),
+                                to: r.min(),
+                                insert: o.to_string(),
+                            });
+                            changes.push(Change {
+                                from: r.max(),
+                                to: r.max(),
+                                insert: c.to_string(),
+                            });
+                            let lo = shift(r.min()) + o.len_utf8();
+                            let hi = shift(r.max()) + o.len_utf8();
+                            out.push(if r.head >= r.anchor {
+                                Selection::range(lo, hi)
+                            } else {
+                                Selection::range(hi, lo)
+                            });
+                            delta += (o.len_utf8() + c.len_utf8()) as isize;
+                        }
+                        Some((o, c)) if !after_word && next_ok => {
+                            special = true;
+                            changes.push(Change {
+                                from: head,
+                                to: head,
+                                insert: format!("{o}{c}"),
+                            });
+                            out.push(Selection::caret(shift(head) + o.len_utf8()));
+                            delta += (o.len_utf8() + c.len_utf8()) as isize;
+                        }
+                        _ => {
+                            changes.push(Change {
+                                from: r.min(),
+                                to: r.max(),
+                                insert: s.clone(),
+                            });
+                            out.push(Selection::caret(shift(r.min()) + s.len()));
+                            delta += s.len() as isize - (r.max() - r.min()) as isize;
+                        }
+                    }
+                }
+                if special {
+                    let pi = primary_idx.min(out.len().saturating_sub(1));
+                    let tx = if changes.is_empty() {
+                        Transaction::select(Selections::new(out, pi))
+                    } else {
+                        Transaction::change_and_select(
+                            ChangeSet::from_changes(changes),
+                            Selections::new(out, pi),
+                        )
+                    };
+                    if tx.is_edit() {
+                        dispatch(state, history, code, tx, Coalesce::Never);
+                    } else {
+                        let (next, _) = state.peek().apply(&tx);
+                        state.set(next);
+                        history.peek().borrow_mut().break_group();
+                    }
+                    goal.set(col_of(&state.peek().text(), state.peek().primary().head));
+                    return;
                 }
             }
             replace(&s, coalesce);
@@ -369,7 +433,8 @@ pub(crate) fn apply_key(
                         Motion::Right => next_char(&src, r.head),
                         Motion::WordLeft => prev_word(&src, r.head),
                         Motion::WordRight => next_word(&src, r.head),
-                        Motion::LineStart => line_start(&src, r.head),
+                        // Smart Home: first non-blank column, then the line start.
+                        Motion::LineStart => crate::ops::smart_home(&src, r.head),
                         Motion::LineEnd => line_end(&src, r.head),
                         Motion::DocStart => 0,
                         Motion::DocEnd => len,
@@ -510,6 +575,18 @@ pub(crate) fn apply_key(
                         },
                         Coalesce::Never,
                     );
+                } else if !is_multi && p.contains('\n') {
+                    // Indent on paste: re-base the pasted block's indentation onto the caret
+                    // line's indentation when the caret sits in leading whitespace.
+                    let at = primary.min();
+                    let ls = line_start(&src, at);
+                    let before = &src[ls..at];
+                    let text = if before.chars().all(|c| c == ' ' || c == '\t') {
+                        crate::ops::reindent_paste(p.trim_start_matches([' ', '\t']), before)
+                    } else {
+                        p.clone()
+                    };
+                    replace(&text, Coalesce::Never);
                 } else {
                     replace(&p, Coalesce::Never);
                 }

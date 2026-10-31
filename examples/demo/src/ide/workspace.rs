@@ -22,6 +22,8 @@ pub struct FileEntry {
     pub scroll: Signal<f64>,
     /// Persisted fold state (folded head lines), restored on tab switch (§10 view state).
     pub folds: Signal<std::collections::BTreeSet<usize>>,
+    /// Breakpoint lines (click the glyph margin left of the line numbers).
+    pub breakpoints: Signal<std::collections::BTreeSet<usize>>,
 }
 
 /// The immutable project file set (content mutates through each entry's signal).

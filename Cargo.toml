@@ -18,14 +18,48 @@ readme = "README.md"
 keywords = ["editor", "code-editor", "syntax", "gui", "pebbles"]
 categories = ["gui", "text-editors"]
 
+
 [dependencies]
 # Pinned to a reviewed framework commit — `cargo update` won't silently ingest an
 # unreviewed `main` HEAD. Bump the rev deliberately when adopting framework changes.
-pebbles = { git = "https://github.com/pebbles-hq/pebbles", rev = "f04022739e5da81efecc2a49a483e8149433d045" }
+pebbles = { git = "https://github.com/pebbles-hq/pebbles", rev = "51eecf2906542a2e9263ffa6d91746a53287fd17" }
 # The document store: a rope for O(log n) splice + line indexing on large files.
 ropey = "1"
 # Regex search mode (find/replace). Plain + whole-word search need no engine.
 regex = "1"
+# Incremental parser-based highlighting (feature `tree-sitter`, on by default). Each grammar
+# crate compiles its generated C parser; without the feature the hand-written scanners in
+# `lang/` are used.
+tree-sitter = { version = "0.27", optional = true }
+tree-sitter-rust = { version = "0.24", optional = true }
+tree-sitter-toml-ng = { version = "0.7", optional = true }
+tree-sitter-json = { version = "0.24", optional = true }
+tree-sitter-md = { version = "0.5", optional = true }
+tree-sitter-javascript = { version = "0.25", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
+tree-sitter-python = { version = "0.25", optional = true }
+tree-sitter-go = { version = "0.25", optional = true }
+tree-sitter-c = { version = "0.24", optional = true }
+tree-sitter-cpp = { version = "0.23", optional = true }
+tree-sitter-html = { version = "0.23", optional = true }
+tree-sitter-css = { version = "0.25", optional = true }
+tree-sitter-yaml = { version = "0.7", optional = true }
+tree-sitter-bash = { version = "0.25", optional = true }
+tree-sitter-sequel = { version = "0.3", optional = true }
+
+[dev-dependencies]
+# Headless harness (semantics queries, chord presses through the shell's key routing).
+pebbles-testing = { git = "https://github.com/pebbles-hq/pebbles", rev = "51eecf2906542a2e9263ffa6d91746a53287fd17" }
+
+[features]
+default = ["tree-sitter"]
+tree-sitter = [
+    "dep:tree-sitter", "dep:tree-sitter-rust", "dep:tree-sitter-toml-ng", "dep:tree-sitter-json",
+    "dep:tree-sitter-md", "dep:tree-sitter-javascript", "dep:tree-sitter-typescript",
+    "dep:tree-sitter-python", "dep:tree-sitter-go", "dep:tree-sitter-c", "dep:tree-sitter-cpp",
+    "dep:tree-sitter-html", "dep:tree-sitter-css", "dep:tree-sitter-yaml", "dep:tree-sitter-bash",
+    "dep:tree-sitter-sequel",
+]
 
 [profile.dev]
 opt-level = 0
