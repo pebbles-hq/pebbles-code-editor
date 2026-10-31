@@ -166,7 +166,7 @@ impl Lsp {
         let mut items: Vec<AnyWidget> = Vec::new();
         for (i, label) in labels.iter().enumerate() {
             if i > 0 {
-                items.push(t.ui_text(" \u{203A} ", -1.0).color(t.muted).into_widget());
+                items.push(t.ui_text(" \u{203A} ", 0.0).color(t.muted).into_widget());
             }
             let bg = if focus == Some(i) {
                 t.selection
@@ -186,7 +186,7 @@ impl Lsp {
                                     .color(bg)
                                     .radius(BorderRadius::all(3.0)),
                             )
-                            .child(t.ui_text(label.clone(), -1.0).color(t.foreground)),
+                            .child(t.ui_text(label.clone(), 0.0).color(t.foreground)),
                     )
                     .cursor(Cursor::Pointer)
                     .on_tap(action(move || {

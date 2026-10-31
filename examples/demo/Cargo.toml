@@ -8,6 +8,6 @@ publish = false
 [dependencies]
 # Same rev as the library's `pebbles` dep — otherwise cargo builds two copies of the
 # framework and the demo's `IntoWidget`/`Widget` bounds don't match the lib's editor type.
-pebbles = { git = "https://github.com/pebbles-hq/pebbles", rev = "f91e7ef4e1eeb43e75b8cc673807e81862521f32" }
+pebbles = { git = "https://github.com/pebbles-hq/pebbles", rev = "086a8846957988522214d9a46c3f97760c675b33" }
 pebbles-code-editor = { path = "../..", version = "0.1.0" }
 

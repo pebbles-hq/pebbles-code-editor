@@ -133,28 +133,30 @@ impl HighlightStyle {
         self.style(kind).color
     }
 
-    /// The dark syntax palette (comments italic).
+    /// The dark syntax palette: Zed One Dark hues, regular weight throughout (neither VS Code
+    /// Dark Modern nor Zed One Dark bolds keywords or slants comments). Every code token is
+    /// at least 4.5:1 on the dark editor background.
     pub fn dark() -> Self {
         let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
         let s = TokenStyle::color;
         HighlightStyle {
-            keyword: s(c(0xC5, 0x92, 0xF0)).bold(),   // violet, bold
-            type_: s(c(0x6C, 0xD1, 0xC0)),            // teal
-            string: s(c(0x9E, 0xD8, 0x7A)),           // green
-            number: s(c(0xE6, 0xB4, 0x73)),           // amber
-            comment: s(c(0x5D, 0x67, 0x7A)).italic(), // muted slate, italic
-            function: s(c(0x76, 0xB2, 0xF0)),         // blue
-            macro_: s(c(0x6C, 0xD1, 0xC0)),           // teal
-            attribute: s(c(0xE6, 0xB4, 0x73)),        // amber
-            constant: s(c(0xE9, 0x8A, 0x8A)),         // soft red
-            punctuation: s(c(0x9A, 0xA4, 0xB8)),
-            property: s(c(0x76, 0xB2, 0xF0)),
-            escape: s(c(0xE6, 0xB4, 0x73)),
-            tag: s(c(0x76, 0xB2, 0xF0)),
-            namespace: s(c(0x6C, 0xD1, 0xC0)),
-            heading: s(c(0x76, 0xB2, 0xF0)).bold(),
-            link: s(c(0x6C, 0xD1, 0xC0)).underline(),
-            emphasis: s(c(0xD7, 0xDC, 0xE6)).italic(),
+            keyword: s(c(0xB4, 0x77, 0xCF)),     // violet
+            type_: s(c(0x6E, 0xB4, 0xBF)),       // teal
+            string: s(c(0xA1, 0xC1, 0x81)),      // green
+            number: s(c(0xBF, 0x95, 0x6A)),      // amber
+            comment: s(c(0x80, 0x87, 0x93)),     // muted grey, upright
+            function: s(c(0x73, 0xAD, 0xE9)),    // blue
+            macro_: s(c(0x6E, 0xB4, 0xBF)),      // teal
+            attribute: s(c(0x74, 0xAD, 0xE8)),   // blue
+            constant: s(c(0xDF, 0xC1, 0x84)),    // gold
+            punctuation: s(c(0xAC, 0xB2, 0xBE)), // light grey
+            property: s(c(0xD0, 0x72, 0x77)),    // soft red
+            escape: s(c(0xBF, 0x95, 0x6A)),
+            tag: s(c(0x74, 0xAD, 0xE8)),
+            namespace: s(c(0xDC, 0xE0, 0xE5)),
+            heading: s(c(0x73, 0xAD, 0xE9)).bold(),
+            link: s(c(0x6E, 0xB4, 0xBF)).underline(),
+            emphasis: s(c(0xDC, 0xE0, 0xE5)).italic(),
             // VS Code Dark Modern bracket colours: gold, orchid, sky.
             brackets: vec![
                 s(c(0xFF, 0xD7, 0x00)),
@@ -162,40 +164,41 @@ impl HighlightStyle {
                 s(c(0x17, 0x9F, 0xFF)),
             ],
             bracket_unmatched: s(c(0xFF, 0x12, 0x12)),
-            plain: s(c(0xD7, 0xDC, 0xE6)),
+            plain: s(c(0xDC, 0xE0, 0xE5)),
         }
     }
 
-    /// The light syntax palette (comments italic).
+    /// The light syntax palette: VS Code Light Modern hues, regular weight throughout. Every
+    /// code token is at least 4.5:1 on white.
     pub fn light() -> Self {
         let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
         let s = TokenStyle::color;
         HighlightStyle {
-            keyword: s(c(0x8A, 0x3F, 0xC8)).bold(),
-            type_: s(c(0x0F, 0x86, 0x8E)),
-            string: s(c(0x3E, 0x8A, 0x3E)),
-            number: s(c(0xB0, 0x6A, 0x14)),
-            comment: s(c(0x9A, 0xA1, 0xAD)).italic(),
-            function: s(c(0x24, 0x5F, 0xC2)),
-            macro_: s(c(0x0F, 0x86, 0x8E)),
-            attribute: s(c(0xB0, 0x6A, 0x14)),
-            constant: s(c(0xC0, 0x3A, 0x4B)),
-            punctuation: s(c(0x5A, 0x63, 0x72)),
-            property: s(c(0x24, 0x5F, 0xC2)),
-            escape: s(c(0xB0, 0x6A, 0x14)),
-            tag: s(c(0x24, 0x5F, 0xC2)),
-            namespace: s(c(0x0F, 0x86, 0x8E)),
-            heading: s(c(0x24, 0x5F, 0xC2)).bold(),
-            link: s(c(0x0F, 0x86, 0x8E)).underline(),
-            emphasis: s(c(0x24, 0x29, 0x33)).italic(),
-            // VS Code Light Modern bracket colours.
+            keyword: s(c(0xAF, 0x00, 0xDB)),
+            type_: s(c(0x26, 0x7F, 0x99)),
+            string: s(c(0xA3, 0x15, 0x15)),
+            number: s(c(0x09, 0x86, 0x58)),
+            comment: s(c(0x00, 0x80, 0x00)),
+            function: s(c(0x79, 0x5E, 0x26)),
+            macro_: s(c(0x26, 0x7F, 0x99)),
+            attribute: s(c(0x79, 0x5E, 0x26)),
+            constant: s(c(0x00, 0x70, 0xC1)),
+            punctuation: s(c(0x3B, 0x3B, 0x3B)),
+            property: s(c(0x00, 0x10, 0x80)),
+            escape: s(c(0xEE, 0x00, 0x00)),
+            tag: s(c(0x80, 0x00, 0x00)),
+            namespace: s(c(0x26, 0x7F, 0x99)),
+            heading: s(c(0x00, 0x00, 0x80)).bold(),
+            link: s(c(0x26, 0x7F, 0x99)).underline(),
+            emphasis: s(c(0x3B, 0x3B, 0x3B)).italic(),
+            // VS Code Light Modern bracket colours (the green darkened to 4.5:1).
             brackets: vec![
                 s(c(0x04, 0x31, 0xFA)),
-                s(c(0x31, 0x93, 0x31)),
+                s(c(0x2A, 0x7F, 0x2A)),
                 s(c(0x7B, 0x38, 0x14)),
             ],
             bracket_unmatched: s(c(0xCD, 0x31, 0x31)),
-            plain: s(c(0x24, 0x29, 0x33)),
+            plain: s(c(0x3B, 0x3B, 0x3B)),
         }
     }
 
@@ -412,7 +415,7 @@ impl EditorTheme {
             whitespace: a(0xFF, 0xFF, 0xFF, 0x24),
             ruler: a(0xFF, 0xFF, 0xFF, 0x10),
             matching_bracket: a(0x8A, 0xB4, 0xF8, 0x4D),
-            foreground: c(0xD7, 0xDC, 0xE6),
+            foreground: c(0xDC, 0xE0, 0xE5),
             border: a(0x9A, 0xA4, 0xB8, 0x50),
             overlay_bg: c(0x18, 0x18, 0x1B),
             muted: c(0x5D, 0x67, 0x7A),
@@ -465,7 +468,7 @@ impl EditorTheme {
             whitespace: a(0x00, 0x00, 0x00, 0x24),
             ruler: a(0x00, 0x00, 0x00, 0x0E),
             matching_bracket: a(0x24, 0x5F, 0xC2, 0x3D),
-            foreground: c(0x24, 0x29, 0x33),
+            foreground: c(0x3B, 0x3B, 0x3B),
             border: a(0x5A, 0x63, 0x72, 0x40),
             overlay_bg: c(0xFF, 0xFF, 0xFF),
             muted: c(0x9A, 0xA1, 0xAD),
@@ -624,11 +627,57 @@ mod tests {
     }
 
     #[test]
-    fn dark_syntax_carries_weight_and_slant() {
-        let h = HighlightStyle::dark();
-        assert!(h.style(TokenKind::Keyword).bold, "keywords are bold");
-        assert!(h.style(TokenKind::Comment).italic, "comments are italic");
-        assert!(!h.style(TokenKind::Plain).bold, "plain text is neither");
+    fn default_syntax_keeps_code_regular_weight() {
+        // VS Code Dark/Light Modern and Zed One Dark: no bold keywords, upright comments.
+        for h in [HighlightStyle::dark(), HighlightStyle::light()] {
+            for k in [
+                TokenKind::Keyword,
+                TokenKind::Comment,
+                TokenKind::Type,
+                TokenKind::Plain,
+            ] {
+                let st = h.style(k);
+                assert!(!st.bold && !st.italic, "{k:?} is regular weight, upright");
+            }
+            // Markup keeps its meaning.
+            assert!(h.style(TokenKind::Heading).bold);
+            assert!(h.style(TokenKind::Emphasis).italic);
+        }
+    }
+
+    #[test]
+    fn default_themes_meet_wcag_aa_for_code() {
+        use crate::lang::TokenKind as K;
+        let kinds = [
+            K::Keyword,
+            K::Type,
+            K::Str,
+            K::Number,
+            K::Comment,
+            K::Function,
+            K::Macro,
+            K::Attribute,
+            K::Constant,
+            K::Punctuation,
+            K::Property,
+            K::Escape,
+            K::Tag,
+            K::Namespace,
+            K::Heading,
+            K::Link,
+            K::Emphasis,
+            K::Plain,
+            K::Bracket(0),
+            K::Bracket(1),
+            K::Bracket(2),
+        ];
+        for t in [EditorTheme::dark(), EditorTheme::light()] {
+            for k in kinds {
+                let r = contrast(t.color(k), t.background);
+                assert!(r >= 4.5, "{k:?} contrast {r:.2}");
+            }
+            assert!(contrast(t.foreground, t.background) >= 7.0);
+        }
     }
 
     #[test]
