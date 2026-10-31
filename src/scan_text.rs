@@ -208,7 +208,7 @@ pub(crate) fn find_colors(line: &str) -> Vec<ColorLit> {
     let mut out = Vec::new();
     let b = line.as_bytes();
     let mut i = 0;
-    while i < b.len() {
+    'scan: while i < b.len() {
         if b[i] == b'#' && (i == 0 || !(b[i - 1] as char).is_ascii_alphanumeric()) {
             let mut j = i + 1;
             while j < b.len() && (b[j] as char).is_ascii_hexdigit() {
@@ -226,7 +226,10 @@ pub(crate) fn find_colors(line: &str) -> Vec<ColorLit> {
             }
         }
         for f in ["rgba(", "rgb(", "hsla(", "hsl("] {
-            if line[i..].starts_with(f) && (i == 0 || !(b[i - 1] as char).is_ascii_alphanumeric()) {
+            // Byte compare: `i` walks bytes and may sit inside a multi-byte char.
+            if b[i..].starts_with(f.as_bytes())
+                && (i == 0 || !(b[i - 1] as char).is_ascii_alphanumeric())
+            {
                 if let Some(close) = line[i..].find(')') {
                     let args: Vec<f64> = line[i + f.len()..i + close]
                         .split([',', ' ', '/'])
@@ -270,7 +273,7 @@ pub(crate) fn find_colors(line: &str) -> Vec<ColorLit> {
                             ],
                         });
                         i += close + 1;
-                        continue;
+                        continue 'scan;
                     }
                 }
             }
@@ -298,16 +301,21 @@ pub(crate) fn linked_tag_names(src: &str, pos: usize) -> Option<((usize, usize),
     let is_name = |c: char| c.is_alphanumeric() || matches!(c, '-' | '_' | ':' | '.');
     // Find the name around pos.
     let bytes = src.as_bytes();
-    let mut a = pos.min(src.len());
+    // Snap a mid-character `pos` back to its char start (callers pass raw byte offsets).
+    let mut pos = pos.min(src.len());
+    while !src.is_char_boundary(pos) {
+        pos -= 1;
+    }
+    let mut a = pos;
     while a > 0 && src[..a].chars().next_back().is_some_and(is_name) {
         a -= src[..a].chars().next_back().map_or(1, char::len_utf8);
     }
-    let mut b = pos.min(src.len());
+    let mut b = pos;
     while b < src.len() && src[b..].chars().next().is_some_and(is_name) {
         b += src[b..].chars().next().map_or(1, char::len_utf8);
     }
     // Preceded by `<` (open) or `</` (close)?
-    let closing = a >= 2 && &src[a - 2..a] == "</";
+    let closing = a >= 2 && src.get(a - 2..a) == Some("</");
     let opening = !closing && a >= 1 && bytes[a - 1] == b'<';
     if !closing && !opening {
         return None;
@@ -357,6 +365,38 @@ pub(crate) fn linked_tag_names(src: &str, pos: usize) -> Option<((usize, usize),
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Owner crash 2026-11-01: Gravel's Cargo.toml has `# … — …` comments; the colour
+    /// scanner sliced `line[i..]` inside the em dash and panicked on every paint.
+    #[test]
+    fn find_colors_survives_non_ascii_lines() {
+        assert!(find_colors("# pebbles — the UI toolkit").is_empty());
+        let c = find_colors("é — rgb(255, 0, 0) ü #00ff00 日本 hsl(0, 100%, 50%)");
+        assert_eq!(c.len(), 3);
+        for s in [
+            "—",
+            "日本語",
+            "👩\u{200d}💻 rgba(",
+            "#",
+            "rgb(",
+            "é#fff",
+            "\u{0}\u{ff}",
+        ] {
+            let _ = find_colors(s);
+        }
+        let all: String = (0..0x3000u32).filter_map(char::from_u32).collect();
+        let _ = find_colors(&all);
+    }
+
+    #[test]
+    fn linked_tags_and_links_survive_any_byte_offset() {
+        let src = "—x <é>日</é> </—a> https://é.—/ 🎉<a></a>";
+        for pos in 0..=src.len() + 2 {
+            let _ = linked_tag_names(src, pos);
+        }
+        assert!(linked_tag_names("<é>日</é>", 1).is_some());
+        let _ = find_links(src);
+    }
 
     #[test]
     fn unicode_highlighting_classifies_characters() {
