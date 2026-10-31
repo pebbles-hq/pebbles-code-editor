@@ -67,6 +67,14 @@ opt-level = 0
 [profile.dev.package."*"]
 opt-level = 2
 
+# Optimised but low-memory build for the slow ignored tests (`--profile fuzz -- --ignored`).
+[profile.fuzz]
+inherits = "release"
+opt-level = 2
+debug = false
+codegen-units = 16
+incremental = true
+
 # Lints for the editor crate. An editor slices and indexes text constantly, so these are
 # WARN, not DENY: they flag every raw `&str` slice / unchecked index / unguarded arithmetic
 # as a spot to double-check a panic can't reach it (the memory-safety class this crate cares

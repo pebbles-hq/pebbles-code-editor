@@ -116,6 +116,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         rulers: Vec::new(),
         minimap: false,
         sticky_scroll: false,
+        folding: true,
         auto_close: true,
         match_brackets: true,
         semantic: None,
@@ -209,6 +210,7 @@ pub struct CodeEditor {
     rulers: Vec<usize>,
     minimap: bool,
     sticky_scroll: bool,
+    folding: bool,
     auto_close: bool,
     match_brackets: bool,
     semantic: Option<Signal<Vec<Token>>>,
@@ -409,6 +411,13 @@ impl CodeEditor {
     /// Only shown when the editor has a fixed `height`. Default off.
     pub fn sticky_scroll(mut self, on: bool) -> Self {
         self.sticky_scroll = on;
+        self
+    }
+    /// Code folding (VS Code `editor.folding`, default on). Off: no fold chevrons, no
+    /// foldable regions (indentation, syntax, `#region` or manual), the fold commands do
+    /// nothing and the syntax fold computation is skipped — e.g. for large-file mode.
+    pub fn folding(mut self, on: bool) -> Self {
+        self.folding = on;
         self
     }
     /// Auto-close brackets and quotes: typing an opener inserts its closer, typing the
@@ -857,6 +866,7 @@ pub(crate) struct Props {
     pub(crate) rulers: Vec<usize>,
     pub(crate) minimap: bool,
     pub(crate) sticky_scroll: bool,
+    pub(crate) folding: bool,
     pub(crate) auto_close: bool,
     pub(crate) match_brackets: bool,
     pub(crate) semantic: Option<Signal<Vec<Token>>>,
@@ -985,6 +995,7 @@ impl From<CodeEditor> for Props {
             rulers: e.rulers,
             minimap: e.minimap,
             sticky_scroll: e.sticky_scroll,
+            folding: e.folding,
             auto_close,
             match_brackets,
             semantic: e.semantic,

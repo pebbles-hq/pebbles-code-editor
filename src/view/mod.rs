@@ -1596,7 +1596,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             }
             let (_, sess) = slot.as_mut()?;
             sess.update(&src);
-            if src.len() > SYNTAX_FOLD_MAX_BYTES {
+            if !p.folding || src.len() > SYNTAX_FOLD_MAX_BYTES {
                 return None;
             }
             let fc = syntax_folds.peek();
@@ -1610,6 +1610,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let li = {
         let cell = line_cache.peek();
         let mut lc = cell.borrow_mut();
+        lc.set_folding(p.folding);
         lc.sync(&src);
         lc.set_syntax_regions(syntax_regions.as_ref());
         let li = lc.sync(&src);

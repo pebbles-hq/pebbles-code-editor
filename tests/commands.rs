@@ -187,6 +187,23 @@ fn multi_stroke_chord_folds_all_and_unfolds() {
 }
 
 #[test]
+fn folding_off_makes_every_fold_command_a_no_op() {
+    // VS Code `editor.folding: false`: no indentation, syntax or #region ranges.
+    let src = "// #region top\nfn a() {\n    x\n}\n// #endregion\n";
+    let mut h = harness_cfg(src, Keymap::new(), |e| e.folding(false));
+    h.press("Ctrl+K");
+    h.press("Ctrl+0");
+    assert!(h.folds.get().is_empty());
+    h.caret(2, 0);
+    h.press("Ctrl+Shift+[");
+    assert!(h.folds.get().is_empty());
+    h.press("Ctrl+K");
+    h.press("Ctrl+2");
+    assert!(h.folds.get().is_empty());
+    assert_eq!(h.code.get(), src);
+}
+
+#[test]
 fn fold_level_and_region_markers() {
     let src = "// #region top\nfn a() {\n    if x {\n        y\n    }\n}\n// #endregion\n";
     let mut h = harness(src);

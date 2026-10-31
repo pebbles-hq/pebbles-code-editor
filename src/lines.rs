@@ -161,6 +161,9 @@ pub(crate) struct LineIndex {
     manual: Vec<(usize, usize)>,
     /// `regions()` with the manual ranges merged in (`None` when there are none).
     with_manual: Option<Rc<Vec<(usize, usize)>>>,
+    /// `Some(empty)` when folding is turned off (`CodeEditor::folding(false)`): no line
+    /// heads a region, so there are no chevrons and fold commands do nothing.
+    folding_off: Option<Rc<Vec<(usize, usize)>>>,
     max_cols: usize,
     len: usize,
 }
@@ -189,6 +192,7 @@ impl LineIndex {
             syntax: None,
             manual: Vec::new(),
             with_manual: None,
+            folding_off: None,
             max_cols,
             len: src.len(),
         }
@@ -204,8 +208,9 @@ impl LineIndex {
     }
     /// The foldable regions (same as `fold::foldable`).
     pub(crate) fn regions(&self) -> &Rc<Vec<(usize, usize)>> {
-        self.with_manual
+        self.folding_off
             .as_ref()
+            .or(self.with_manual.as_ref())
             .or(self.syntax.as_ref())
             .unwrap_or(&self.regions)
     }
@@ -332,6 +337,14 @@ impl LineCache {
     /// Drain the recorded line shifts (for line-anchored state: folds, breakpoints).
     pub(crate) fn take_shifts(&mut self) -> Vec<(usize, usize, usize)> {
         std::mem::take(&mut self.shifts)
+    }
+
+    /// Turn folding on or off (VS Code `editor.folding`). Off: `regions()` is empty.
+    pub(crate) fn set_folding(&mut self, on: bool) {
+        if self.index.folding_off.is_none() == on {
+            return;
+        }
+        Rc::make_mut(&mut self.index).folding_off = (!on).then(|| Rc::new(Vec::new()));
     }
 
     /// Replace the manual folding ranges (line ranges, `head < last`).

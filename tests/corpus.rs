@@ -213,13 +213,13 @@ fn unterminated_constructs_in_every_grammar() {
 }
 
 #[test]
-#[ignore = "slow in the opt-level-0 test build; run with --ignored"]
+#[ignore = "slow; run with `cargo test --profile fuzz --test corpus -- --ignored`"]
 fn ten_megabyte_single_line() {
     exercise(&"a—é 日 {[(\"".repeat(10 * 1024 * 1024 / 20), "rust");
 }
 
 #[test]
-#[ignore = "slow in the opt-level-0 test build; run with --ignored"]
+#[ignore = "slow; run with `cargo test --profile fuzz --test corpus -- --ignored`"]
 fn two_hundred_thousand_lines() {
     exercise(&"fn a() { let x = \"é\"; }\n".repeat(200_000), "rust");
 }
