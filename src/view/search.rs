@@ -347,14 +347,18 @@ pub(crate) fn bar(
             )
             .color(theme.gutter_fg),
         gap_w(6.0),
-        icon_button(IconKind::ChevronUp).size(16.0).on_pressed({
-            let prev = prev.clone();
-            move || prev()
-        }),
-        icon_button(IconKind::ChevronDown).size(16.0).on_pressed({
-            let next = next.clone();
-            move || next()
-        }),
+        icon_button(IconKind::ChevronUp)
+            .icon_size(16.0)
+            .on_pressed({
+                let prev = prev.clone();
+                move || prev()
+            }),
+        icon_button(IconKind::ChevronDown)
+            .icon_size(16.0)
+            .on_pressed({
+                let next = next.clone();
+                move || next()
+            }),
         gap_w(6.0),
         toggle_chip(st.case.peek(), "Aa", st.case),
         gap_w(4.0),
@@ -382,11 +386,11 @@ pub(crate) fn bar(
             // Select All Matches (Alt+Enter in VS Code): one cursor per match.
             let select_all = select_all.clone();
             icon_button(IconKind::Check)
-                .size(16.0)
+                .icon_size(16.0)
                 .on_pressed(move || select_all())
         },
         gap_w(6.0),
-        icon_button(IconKind::Close).size(16.0).on_pressed({
+        icon_button(IconKind::Close).icon_size(16.0).on_pressed({
             let close = close.clone();
             move || close()
         }),

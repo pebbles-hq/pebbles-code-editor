@@ -538,10 +538,12 @@ pub(crate) fn color_picker(
                     ),
                     gap_w(6.0),
                     expanded(field),
-                    icon_button(IconKind::Close).size(14.0).on_pressed(move || {
-                        picker.set(None);
-                        draft.set(String::new());
-                    }),
+                    icon_button(IconKind::Close)
+                        .icon_size(14.0)
+                        .on_pressed(move || {
+                            picker.set(None);
+                            draft.set(String::new());
+                        }),
                 ])
                 .cross_axis_alignment(CrossAxisAlignment::Center),
                 gap_h(6.0),

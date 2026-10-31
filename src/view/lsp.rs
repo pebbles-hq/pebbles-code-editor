@@ -1018,7 +1018,7 @@ impl Lsp {
         }
         header.push(
             icon_button(IconKind::Close)
-                .size(16.0)
+                .icon_size(16.0)
                 .on_pressed(move || peek.set(None))
                 .into_widget(),
         );
@@ -1372,19 +1372,19 @@ impl Lsp {
                 .into_widget(),
             gap_w(6.0).into_widget(),
             icon_button(IconKind::ChevronUp)
-                .size(16.0)
+                .icon_size(16.0)
                 .on_pressed(move || {
                     up.next_problem(false);
                 })
                 .into_widget(),
             icon_button(IconKind::ChevronDown)
-                .size(16.0)
+                .icon_size(16.0)
                 .on_pressed(move || {
                     down.next_problem(true);
                 })
                 .into_widget(),
             icon_button(IconKind::Close)
-                .size(16.0)
+                .icon_size(16.0)
                 .on_pressed(move || {
                     close.close_problem();
                 })

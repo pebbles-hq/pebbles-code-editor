@@ -322,7 +322,7 @@ impl Lsp {
                 .into_widget(),
             gap_w(6.0).into_widget(),
             icon_button(IconKind::Close)
-                .size(16.0)
+                .icon_size(16.0)
                 .on_pressed(move || hier.set(None))
                 .into_widget(),
         ])

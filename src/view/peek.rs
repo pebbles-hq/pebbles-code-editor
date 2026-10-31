@@ -105,19 +105,19 @@ pub(crate) fn block(
     header.push(gap_w(6.0).into_widget());
     header.push(
         icon_button(IconKind::ChevronUp)
-            .size(16.0)
+            .icon_size(16.0)
             .on_pressed(move || peek.set(Some((i + n_hunks - 1) % n_hunks.max(1))))
             .into_widget(),
     );
     header.push(
         icon_button(IconKind::ChevronDown)
-            .size(16.0)
+            .icon_size(16.0)
             .on_pressed(move || peek.set(Some((i + 1) % n_hunks.max(1))))
             .into_widget(),
     );
     header.push(
         icon_button(IconKind::Close)
-            .size(16.0)
+            .icon_size(16.0)
             .on_pressed(move || peek.set(None))
             .into_widget(),
     );

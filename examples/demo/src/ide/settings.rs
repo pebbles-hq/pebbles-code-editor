@@ -74,13 +74,13 @@ pub fn panel(s: Settings) -> AnyWidget {
         .main_axis_size(MainAxisSize::Min),
         spacer(),
         icon_button(IconKind::Minus)
-            .size(15.0)
+            .icon_size(15.0)
             .on_pressed(move || font.set((font.peek() - 0.5).max(9.0))),
         container()
             .padding(EdgeInsets::symmetric(8.0, 0.0))
             .child(text(format!("{:.1}", font.get())).size(12.5)),
         icon_button(IconKind::Plus)
-            .size(15.0)
+            .icon_size(15.0)
             .on_pressed(move || font.set((font.peek() + 0.5).min(28.0))),
     ])
     .cross_axis_alignment(CrossAxisAlignment::Center)
