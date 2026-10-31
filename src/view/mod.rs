@@ -72,6 +72,7 @@ pub(crate) struct Frame<'a> {
     pub(crate) lh: f64,
     /// The configured monospace family + extra letter spacing (folded into `advance`).
     pub(crate) font_family: &'a str,
+    pub(crate) font_weight: f32,
     pub(crate) letter_spacing: f64,
     pub(crate) line_px: f64,
     pub(crate) advance: f64,
@@ -470,7 +471,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let tab_focus = create_signal(false); // Ctrl+M: Tab moves focus instead of indenting
     let overtype = create_signal(false); // Insert: overtype mode
     let color_draft = create_signal(String::new()); // colour-picker hex field
-    let zoom = create_signal(0.0_f64);
+    let zoom = p.zoom.unwrap_or_else(|| create_signal(0.0_f64));
+    let wheel_zoom = p.mouse_wheel_zoom;
     let cursor_hist = create_signal(Rc::new(RefCell::new(commands::CursorHistory::default())));
     let smart_stack = create_signal::<Vec<Selections>>(Vec::new());
     let pending_keys = create_signal::<Vec<crate::actions::Stroke>>(Vec::new());
@@ -2176,6 +2178,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         fs,
         lh,
         font_family: &p.font_family,
+        font_weight: p.font_weight,
         letter_spacing: p.letter_spacing,
         line_px,
         advance,
@@ -2682,7 +2685,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         }))
         // Ctrl+wheel: font zoom (VS Code `editor.mouseWheelZoom`).
         .on_pointer_signal(move |ev| {
-            if pebbles::core::keyboard::ctrl_held() {
+            if wheel_zoom && pebbles::core::keyboard::ctrl_held() {
                 let z = zoom.peek() + if ev.delta.y < 0.0 { 1.0 } else { -1.0 };
                 zoom.set(z.clamp(-8.0, 40.0));
                 true

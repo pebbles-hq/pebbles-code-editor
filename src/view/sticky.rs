@@ -43,6 +43,7 @@ pub(crate) fn overlay(
             f.theme,
             f.fs,
             f.font_family,
+            f.font_weight,
         );
         let text_cell = container()
             .height(f.line_px)

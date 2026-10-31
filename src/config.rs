@@ -99,6 +99,9 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         line_height: 1.6,
         font_family: None,
         letter_spacing: 0.0,
+        font_weight: 400.0,
+        mouse_wheel_zoom: false,
+        zoom: None,
         height: None,
         gutter: true,
         read_only: false,
@@ -189,6 +192,9 @@ pub struct CodeEditor {
     line_height: f64,
     font_family: Option<String>,
     letter_spacing: f64,
+    font_weight: f32,
+    mouse_wheel_zoom: bool,
+    zoom: Option<Signal<f64>>,
     height: Option<f64>,
     gutter: bool,
     read_only: bool,
@@ -309,6 +315,26 @@ impl CodeEditor {
     /// caret/click/selection stay exact.
     pub fn letter_spacing(mut self, px: f64) -> Self {
         self.letter_spacing = px;
+        self
+    }
+    /// The weight of code text (CSS / VS Code `editor.fontWeight`: 100..=900, default 400).
+    /// Tokens the theme draws bold stay at least 700.
+    pub fn font_weight(mut self, weight: f32) -> Self {
+        self.font_weight = weight.clamp(1.0, 1000.0);
+        self
+    }
+    /// Ctrl+wheel zooms the font (VS Code `editor.mouseWheelZoom`, default false: Ctrl+wheel
+    /// scrolls like a plain wheel).
+    pub fn mouse_wheel_zoom(mut self, on: bool) -> Self {
+        self.mouse_wheel_zoom = on;
+        self
+    }
+    /// Bind the font zoom (px added to [`font_size`](Self::font_size); changed by
+    /// `editor.action.fontZoomIn/Out/Reset` and Ctrl+wheel) to a caller-owned signal — share
+    /// one signal across editors for VS Code's window-wide editor zoom, kept across
+    /// rebuilds. Without it each editor keeps its own zoom.
+    pub fn zoom(mut self, zoom: Signal<f64>) -> Self {
+        self.zoom = Some(zoom);
         self
     }
     /// The editor's viewport height; it scrolls within. Unset = grows to content.
@@ -813,6 +839,9 @@ pub(crate) struct Props {
     pub(crate) lh: f64,
     pub(crate) font_family: String,
     pub(crate) letter_spacing: f64,
+    pub(crate) font_weight: f32,
+    pub(crate) mouse_wheel_zoom: bool,
+    pub(crate) zoom: Option<Signal<f64>>,
     pub(crate) height: Option<f64>,
     pub(crate) gutter: bool,
     pub(crate) read_only: bool,
@@ -938,6 +967,9 @@ impl From<CodeEditor> for Props {
             lh: e.line_height,
             font_family: e.font_family.unwrap_or_else(|| crate::MONO.to_string()),
             letter_spacing: e.letter_spacing,
+            font_weight: e.font_weight,
+            mouse_wheel_zoom: e.mouse_wheel_zoom,
+            zoom: e.zoom,
             height: e.height,
             gutter: e.gutter,
             read_only: e.read_only,

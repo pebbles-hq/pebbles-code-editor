@@ -42,7 +42,16 @@ fn mouse_harness(initial: &str) -> (Ui, TextEnv, Signal<String>) {
     let code = create_root_signal(String::from(initial));
     let mut ui = Ui::new();
     let mut env = TextEnv::new();
-    ui.mount_root(View::new(white(), code_editor(code).gutter(false).autofocus()).into_widget());
+    ui.mount_root(
+        View::new(
+            white(),
+            code_editor(code)
+                .gutter(false)
+                .mouse_wheel_zoom(true)
+                .autofocus(),
+        )
+        .into_widget(),
+    );
     for _ in 0..3 {
         ui.rebuild_if_dirty();
         ui.layout(&mut env, Size::new(600.0, 400.0));
@@ -2026,4 +2035,47 @@ fn escape_closes_the_inline_suggestion_before_bubbling() {
     ui.rebuild_if_dirty();
     ui.layout(&mut env, Size::new(600.0, 400.0));
     assert!(!ui.dispatch_key(KeyInput::Escape), "then Escape bubbles");
+}
+
+#[test]
+fn ctrl_wheel_does_not_zoom_by_default_and_zoom_binds_to_a_shared_signal() {
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from("abcdefghijklmnop\ndef"));
+    let zoom = create_root_signal(0.0_f64);
+    let mut ui = Ui::new();
+    let mut env = TextEnv::new();
+    ui.mount_root(
+        View::new(
+            white(),
+            code_editor(code)
+                .gutter(false)
+                .zoom(zoom)
+                .font_weight(500.0)
+                .autofocus(),
+        )
+        .into_widget(),
+    );
+    for _ in 0..3 {
+        ui.rebuild_if_dirty();
+        ui.layout(&mut env, Size::new(600.0, 400.0));
+    }
+    // VS Code `editor.mouseWheelZoom` defaults to false: Ctrl+wheel is not a zoom.
+    pebbles::core::keyboard::set_modifiers(false, true, false, false);
+    let ev = pebbles::render::PointerScrollEvent {
+        position: at(0, 0),
+        global: at(0, 0),
+        delta: Offset::new(0.0, -120.0),
+        unit: pebbles::render::ScrollUnit::Pixels,
+    };
+    ui.dispatch_pointer_signal(at(0, 0), ev);
+    pebbles::core::keyboard::set_modifiers(false, false, false, false);
+    assert_eq!(zoom.get(), 0.0, "no wheel zoom unless enabled");
+    // The host-owned zoom drives the grid: +1 px makes column 10's spot land on column 9.
+    zoom.set(1.0);
+    ui.rebuild_if_dirty();
+    ui.layout(&mut env, Size::new(600.0, 400.0));
+    click(&mut ui, &mut env, at(0, 10));
+    key(&mut ui, &mut env, KeyInput::Insert("X".to_string()));
+    assert_eq!(code.get(), "abcdefghiXjklmnop\ndef");
 }

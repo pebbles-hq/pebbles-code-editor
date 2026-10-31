@@ -15,6 +15,7 @@ pub(crate) fn to_spans(
     theme: &EditorTheme,
     fs: f64,
     font_family: &str,
+    weight: f32,
 ) -> Vec<TextSpan> {
     let mut spans = Vec::new();
     let mut cursor = 0usize;
@@ -26,7 +27,9 @@ pub(crate) fn to_spans(
                 .size(fs as f32)
                 .font_family(font_family);
             if st.bold {
-                sp = sp.bold();
+                sp = sp.weight(weight.max(700.0));
+            } else if weight != 400.0 {
+                sp = sp.weight(weight);
             }
             if st.italic {
                 sp = sp.italic();

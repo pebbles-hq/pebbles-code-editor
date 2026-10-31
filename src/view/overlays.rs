@@ -288,7 +288,14 @@ fn code_text(f: &Frame, layers: &mut Vec<AnyWidget>) {
                     continue;
                 }
                 let toks = slice_tokens(f.tokens, bs, be);
-                let spans = to_spans(&f.src[bs..be], &toks, f.theme, f.fs, f.font_family);
+                let spans = to_spans(
+                    &f.src[bs..be],
+                    &toks,
+                    f.theme,
+                    f.fs,
+                    f.font_family,
+                    f.font_weight,
+                );
                 layers.push(
                     Positioned::new(
                         text_rich(spans)
