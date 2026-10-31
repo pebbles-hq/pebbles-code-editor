@@ -8,7 +8,8 @@ use pebbles::core::{Ui, create_root_signal};
 use pebbles::prelude::*;
 use pebbles::render::TextEnv;
 use pebbles_code_editor::{
-    BuiltinCommand, EditorController, EditorTheme, Keymap, code_editor, editor_controller,
+    BuiltinCommand, DocumentHistory, EditorController, EditorTheme, Keymap, code_editor,
+    editor_controller,
 };
 
 /// (doc A, doc B, which is shown, controller)
@@ -255,6 +256,75 @@ bbbb
     id.set(2);
     settle(&mut ui, &mut env);
     assert_eq!(ctrl.cursor().peek(), (0, 0));
+}
+
+type Hist = (
+    Signal<String>,
+    Signal<String>,
+    Signal<u8>,
+    EditorController,
+    DocumentHistory,
+    DocumentHistory,
+);
+
+thread_local! {
+    static HIST: RefCell<Option<Hist>> = const { RefCell::new(None) };
+}
+
+fn with_histories() -> AnyWidget {
+    let (a, b, which, ctrl, ha, hb) = HIST.with(|d| d.borrow().clone().expect("set"));
+    let (code, hist) = if which.get() == 0 { (a, ha) } else { (b, hb) };
+    code_editor(code)
+        .history(hist)
+        .controller(ctrl)
+        .autofocus()
+        .into_widget()
+}
+
+/// VS Code keeps each model's undo stack for the session: switching documents (which
+/// remounts the editor) and coming back must still undo/redo; a text change made while
+/// detached drops the now-stale history instead of corrupting the text.
+#[test]
+fn document_history_survives_switching_documents() {
+    let a = create_root_signal(String::from("alpha\n"));
+    let b = create_root_signal(String::from("beta\n"));
+    let which = create_root_signal(0u8);
+    let ctrl = editor_controller();
+    let (ha, hb) = (DocumentHistory::new(), DocumentHistory::new());
+    HIST.with(|d| *d.borrow_mut() = Some((a, b, which, ctrl, ha.clone(), hb.clone())));
+    let (mut ui, mut env) = mount(component(with_histories).into_widget());
+    settle(&mut ui, &mut env);
+    key(&mut ui, &mut env, KeyInput::Insert("X".into()));
+    assert_eq!(a.peek(), "Xalpha\n");
+    which.set(1);
+    settle(&mut ui, &mut env);
+    ctrl.focus();
+    settle(&mut ui, &mut env);
+    key(&mut ui, &mut env, KeyInput::Insert("Y".into()));
+    assert_eq!(b.peek(), "Ybeta\n");
+    which.set(0);
+    settle(&mut ui, &mut env);
+    ctrl.focus();
+    settle(&mut ui, &mut env);
+    assert!(ha.can_undo());
+    key(&mut ui, &mut env, KeyInput::Undo);
+    assert_eq!(
+        a.peek(),
+        "alpha\n",
+        "a's typing undone after the round trip"
+    );
+    assert!(ha.can_redo());
+    key(&mut ui, &mut env, KeyInput::Redo);
+    assert_eq!(a.peek(), "Xalpha\n");
+    // b changes on disk while a is shown: its history no longer applies.
+    b.set(String::from("reloaded\n"));
+    which.set(1);
+    settle(&mut ui, &mut env);
+    ctrl.focus();
+    settle(&mut ui, &mut env);
+    key(&mut ui, &mut env, KeyInput::Undo);
+    assert_eq!(b.peek(), "reloaded\n", "stale history dropped");
+    assert!(!hb.can_undo());
 }
 
 // ---- theming: the editor's own UI follows EditorTheme (an IDE theme drives it) ----------

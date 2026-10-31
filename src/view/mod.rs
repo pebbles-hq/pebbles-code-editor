@@ -319,7 +319,25 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // transactions (see the `edit` module). `code` (the public `Signal<String>`) is kept in
     // sync so callers still bind to a plain string.
     let state = create_signal(EditorState::new(&code.peek()));
-    let history = create_signal(Rc::new(RefCell::new(History::new())));
+    // The undo stack: the host's per-document history when given (it outlives this view —
+    // tab switches, remounts, split groups), else a view-local one.
+    let shared = p.history.clone();
+    let history = pebbles::core::create_signal_with(move || match shared {
+        Some(h) => {
+            let rc = h.0.clone();
+            {
+                let mut hist = rc.borrow_mut();
+                let now = crate::edit::text_fingerprint(&code.peek());
+                if hist.synced.is_some_and(|f| f != now) {
+                    *hist = History::new(); // the text changed while detached: stale offsets
+                }
+                hist.synced = Some(now);
+                hist.break_group(); // typing after a switch starts a new undo step
+            }
+            rc
+        }
+        None => Rc::new(RefCell::new(History::new())),
+    });
     let goal = create_signal(0usize); // preserved column for Up/Down
     let blink_stamp = create_signal(0.0_f64); // loop time of the last edit/move — caret solid then
     let drag_anchor = create_signal::<Option<Offset>>(None); // pointer-down pos for column select
@@ -533,6 +551,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // minimal `Edit` to `on_edit` (with `remote` set). Local keystrokes keep `code ==
     // state.text()`, so `remote` is false and no rebuild happens.
     let on_edit = p.on_edit.clone();
+    let shared_history = p.history.is_some();
     let prev_code = create_signal(code.peek());
     create_effect(move || {
         let new = code.get();
@@ -569,6 +588,9 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         }
         if let (Some(cb), Some(e)) = (&on_edit, &delta) {
             cb(e, remote);
+        }
+        if shared_history {
+            history.peek().borrow_mut().synced = Some(crate::edit::text_fingerprint(&new));
         }
         prev_code.set(new);
     });

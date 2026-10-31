@@ -79,7 +79,9 @@ pub use config::{
 pub use controller::{EditorController, Refresh, editor_controller};
 pub use diff::{ChangeHunk, ChangeKind};
 pub use diff_editor::{DiffEditor, DiffSideConfig, diff_editor};
-pub use edit::{ChangeSet, EditorState, History, Selection, Selections, Transaction};
+pub use edit::{
+    ChangeSet, DocumentHistory, EditorState, History, Selection, Selections, Transaction,
+};
 pub use emmet::{expand_css, expand_html};
 pub use extensions::{
     BlockWidget, Command, ConfigPatch, DecoStyle, Decoration, EditContext, Extension, GutterMark,

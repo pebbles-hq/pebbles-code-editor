@@ -140,6 +140,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         diff_base: None,
         keymap: crate::keymap::Keymap::default(),
         document_id: None,
+        history: None,
         controller: None,
         suggest_preview: false,
         format_on_paste: false,
@@ -229,6 +230,7 @@ pub struct CodeEditor {
     diff_base: Option<Signal<String>>,
     keymap: crate::keymap::Keymap,
     document_id: Option<u64>,
+    history: Option<crate::edit::DocumentHistory>,
     controller: Option<crate::controller::EditorController>,
     detect_indentation: bool,
     bracket_pair_colorization: bool,
@@ -562,6 +564,14 @@ impl CodeEditor {
         self.document_id = Some(id);
         self
     }
+    /// Keep the undo/redo history in the host's document model instead of the editor view,
+    /// so it survives remounts (switching tabs, re-opening the file) and is shared by every
+    /// editor showing the document (split groups). If the text changed while no editor held
+    /// the history (e.g. a reload from disk), the stale history is dropped on mount.
+    pub fn history(mut self, history: crate::edit::DocumentHistory) -> Self {
+        self.history = Some(history);
+        self
+    }
     /// Drive the caret, selection and scroll programmatically (e.g. "open at line") — see
     /// [`EditorController`](crate::EditorController).
     pub fn controller(mut self, controller: crate::controller::EditorController) -> Self {
@@ -807,6 +817,7 @@ pub(crate) struct Props {
     pub(crate) gutter: bool,
     pub(crate) read_only: bool,
     pub(crate) autofocus: bool,
+    pub(crate) history: Option<crate::edit::DocumentHistory>,
     pub(crate) current_line: bool,
     pub(crate) context_menu: bool,
     pub(crate) tab_size: usize,
@@ -931,6 +942,7 @@ impl From<CodeEditor> for Props {
             gutter: e.gutter,
             read_only: e.read_only,
             autofocus: e.autofocus,
+            history: e.history,
             current_line: e.current_line,
             context_menu: e.context_menu,
             tab_size,
