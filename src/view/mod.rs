@@ -368,6 +368,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     #[allow(clippy::type_complexity)]
     let syntax: Signal<Rc<RefCell<Option<(String, Box<dyn crate::lang::SyntaxSession>)>>>> =
         create_signal(Rc::new(RefCell::new(None)));
+    // Bumped by a scheduled frame while the syntax session reports `needs_more()` (a
+    // budgeted tokenizer that did not reach the end of the window), so highlighting
+    // continues in the background until the window is complete.
+    let highlight_tick = create_signal(0u64);
     // Imperative scroll handles — drive caret-into-view autoscroll (only used when a fixed
     // `height` makes the editor a scroll viewport). Held in signals so they survive renders.
     let scroll = create_signal(ScrollHandle::new()).peek(); // vertical
@@ -2148,14 +2152,19 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                         v.extend(sess.highlight_range(&src, a..b));
                     }
                 }
+                schedule_highlight_continuation(sess.as_ref(), highlight_tick);
                 return Some(Rc::new(v));
             }
             const MARGIN: usize = 50;
             let lo = li.line_start_of(first_line.saturating_sub(MARGIN));
             let hi_line = (last_line + MARGIN).min(line_count.saturating_sub(1));
             let hi = line_end(&src, li.line_start_of(hi_line));
-            Some(Rc::new(sess.highlight_range(&src, lo..hi)))
+            let toks = sess.highlight_range(&src, lo..hi);
+            schedule_highlight_continuation(sess.as_ref(), highlight_tick);
+            Some(Rc::new(toks))
         });
+    // Subscribe this render to continuation ticks (see `highlight_tick`).
+    let _ = highlight_tick.get();
     let tokens: Rc<Vec<Token>> = if let Some(t) = session_tokens {
         t
     } else if too_long {
@@ -3207,4 +3216,19 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     semantics(SemanticsRole::TextInput, p.a11y_label.clone(), body)
         .value(src.clone())
         .into_widget()
+}
+
+/// When `sess` stopped short of its requested range ([`SyntaxSession::needs_more`]),
+/// schedule a zero-delay timer that bumps `tick` — a signal the render reads — so the next
+/// frame re-requests the window and the session continues where it left off.
+fn schedule_highlight_continuation(sess: &dyn crate::lang::SyntaxSession, tick: Signal<u64>) {
+    if sess.needs_more() {
+        pebbles::core::animation::set_timeout(
+            tick.raw_id() ^ 0x484c_5f43_4f4e_5400,
+            0.0,
+            move || {
+                tick.set(tick.peek().wrapping_add(1));
+            },
+        );
+    }
 }

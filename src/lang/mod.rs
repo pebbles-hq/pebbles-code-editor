@@ -161,6 +161,13 @@ pub trait SyntaxSession {
     fn version(&self) -> u64 {
         0
     }
+    /// Whether the last [`highlight_range`](Self::highlight_range) stopped early (e.g. a
+    /// time-budgeted tokenizer ran out of budget) and left part of the range unhighlighted.
+    /// The editor polls this after highlighting and, while it is `true`, schedules another
+    /// frame so highlighting completes in the background without user input.
+    fn needs_more(&self) -> bool {
+        false
+    }
 }
 
 /// Cap on the bracket nesting the tree represents. [`SyntaxNode`] is a recursive
