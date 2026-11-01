@@ -674,7 +674,7 @@ impl Lsp {
             let loc = r.location.clone();
             rows.push(
                 GestureDetector::new(label)
-                    .cursor(Cursor::Pointer)
+                    .cursor(pebbles::widgets::action_cursor())
                     .on_tap(action(move || me.go_to(&loc)))
                     .into_widget(),
             );
@@ -1105,7 +1105,7 @@ impl Lsp {
                                 .color(t.foreground),
                             ),
                     )
-                    .cursor(Cursor::Pointer)
+                    .cursor(pebbles::widgets::action_cursor())
                     .on_tap(action(move || {
                         if let Some(mut v) = peek.peek() {
                             v.sel = i;

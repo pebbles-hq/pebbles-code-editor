@@ -2375,7 +2375,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                         .radius(BorderRadius::all(7.0)),
                 ),
             )
-            .cursor(Cursor::Pointer)
+            .cursor(Cursor::Grab)
             .on_pan_update(action_event(move |e| {
                 let cur = state.peek();
                 let text = cur.text();
@@ -2582,7 +2582,16 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let click_exts = p.extensions.clone();
     let click_link = p.on_open_link.clone();
     let click_lsp = lsp_ctl.clone();
+    // The text surface shows the I-beam (VS Code / JetBrains); Ctrl/Cmd+hover over a
+    // resolved link or definition shows the hand. Without an explicit cursor the tappable
+    // detector fell back to the framework's clickable-control cursor (the hand).
+    let text_cursor = if lsp_ctl.h.link.get().is_some() {
+        Cursor::Pointer
+    } else {
+        Cursor::Text
+    };
     let click_area = GestureDetector::new(content_box)
+        .cursor(text_cursor)
         .on_pointer_down(action_event(move |e| {
             focus.request_focus();
             let alt = pebbles::core::keyboard::alt_held();

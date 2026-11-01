@@ -133,64 +133,74 @@ impl HighlightStyle {
         self.style(kind).color
     }
 
-    /// The dark syntax palette: Zed One Dark hues, regular weight throughout (neither VS Code
-    /// Dark Modern nor Zed One Dark bolds keywords or slants comments). Every code token is
-    /// at least 4.5:1 on the dark editor background.
+    /// The dark syntax palette: IntelliJ IDEA's default New UI "Dark" editor scheme
+    /// (`expUI_darkScheme.xml`): DEFAULT_KEYWORD #CF8E6D, DEFAULT_FUNCTION_DECLARATION
+    /// #56A8F5, DEFAULT_INSTANCE_METHOD #57AAF7 (macros), DEFAULT_STRING #6AAB73,
+    /// DEFAULT_NUMBER #2AACB8, DEFAULT_INSTANCE_FIELD / DEFAULT_CONSTANT #C77DBB,
+    /// DEFAULT_METADATA #B3AE60, HTML_TAG_NAME #D5B778, CTRL_CLICKABLE #548AF7, and TEXT /
+    /// DEFAULT_IDENTIFIER / DEFAULT_CLASS_REFERENCE #BCBEC4 on #1E1F22 (IDEA leaves types and
+    /// modules in the text colour). Regular weight; constants italic as IDEA renders them. The comment grey #7A7E85 (4.0:1) is lifted
+    /// to #84888F so every code token is at least 4.5:1 on the editor background.
     pub fn dark() -> Self {
         let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
         let s = TokenStyle::color;
         HighlightStyle {
-            keyword: s(c(0xB4, 0x77, 0xCF)),     // violet
-            type_: s(c(0x6E, 0xB4, 0xBF)),       // teal
-            string: s(c(0xA1, 0xC1, 0x81)),      // green
-            number: s(c(0xBF, 0x95, 0x6A)),      // amber
-            comment: s(c(0x80, 0x87, 0x93)),     // muted grey, upright
-            function: s(c(0x73, 0xAD, 0xE9)),    // blue
-            macro_: s(c(0x6E, 0xB4, 0xBF)),      // teal
-            attribute: s(c(0x74, 0xAD, 0xE8)),   // blue
-            constant: s(c(0xDF, 0xC1, 0x84)),    // gold
-            punctuation: s(c(0xAC, 0xB2, 0xBE)), // light grey
-            property: s(c(0xD0, 0x72, 0x77)),    // soft red
-            escape: s(c(0xBF, 0x95, 0x6A)),
-            tag: s(c(0x74, 0xAD, 0xE8)),
-            namespace: s(c(0xDC, 0xE0, 0xE5)),
-            heading: s(c(0x73, 0xAD, 0xE9)).bold(),
-            link: s(c(0x6E, 0xB4, 0xBF)).underline(),
-            emphasis: s(c(0xDC, 0xE0, 0xE5)).italic(),
-            // VS Code Dark Modern bracket colours: gold, orchid, sky.
+            keyword: s(c(0xCF, 0x8E, 0x6D)),
+            type_: s(c(0xBC, 0xBE, 0xC4)),
+            string: s(c(0x6A, 0xAB, 0x73)),
+            number: s(c(0x2A, 0xAC, 0xB8)),
+            comment: s(c(0x84, 0x88, 0x8F)),
+            function: s(c(0x56, 0xA8, 0xF5)),
+            macro_: s(c(0x57, 0xAA, 0xF7)),
+            attribute: s(c(0xB3, 0xAE, 0x60)),
+            constant: s(c(0xC7, 0x7D, 0xBB)).italic(),
+            punctuation: s(c(0xBC, 0xBE, 0xC4)),
+            property: s(c(0xC7, 0x7D, 0xBB)),
+            escape: s(c(0xCF, 0x8E, 0x6D)),
+            tag: s(c(0xD5, 0xB7, 0x78)),
+            namespace: s(c(0xBC, 0xBE, 0xC4)),
+            heading: s(c(0xCF, 0x8E, 0x6D)).bold(),
+            link: s(c(0x54, 0x8A, 0xF7)).underline(),
+            emphasis: s(c(0xBC, 0xBE, 0xC4)).italic(),
+            // VS Code Dark Modern bracket colours: gold, orchid, sky (JetBrains has no
+            // bracket-pair colorization by default).
             brackets: vec![
                 s(c(0xFF, 0xD7, 0x00)),
                 s(c(0xDA, 0x70, 0xD6)),
                 s(c(0x17, 0x9F, 0xFF)),
             ],
             bracket_unmatched: s(c(0xFF, 0x12, 0x12)),
-            plain: s(c(0xDC, 0xE0, 0xE5)),
+            plain: s(c(0xBC, 0xBE, 0xC4)),
         }
     }
 
-    /// The light syntax palette: VS Code Light Modern hues, regular weight throughout. Every
-    /// code token is at least 4.5:1 on white.
+    /// The light syntax palette: IntelliJ IDEA's default New UI "Light" editor scheme
+    /// (`expUI_lightScheme.xml`): DEFAULT_KEYWORD #0033B3, DEFAULT_FUNCTION_DECLARATION /
+    /// DEFAULT_STATIC_METHOD #00627A (macros), DEFAULT_STRING #067D17, DEFAULT_NUMBER #1750EB,
+    /// DEFAULT_INSTANCE_FIELD / DEFAULT_CONSTANT #871094, DEFAULT_VALID_STRING_ESCAPE #0037A6,
+    /// CTRL_CLICKABLE #006DCC, TEXT #080808 on white. The comment grey #8C8C8C and metadata #9E880D are darkened to #757575
+    /// / #897300 so every code token is at least 4.5:1 on white; comments stay upright.
     pub fn light() -> Self {
         let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
         let s = TokenStyle::color;
         HighlightStyle {
-            keyword: s(c(0xAF, 0x00, 0xDB)),
-            type_: s(c(0x26, 0x7F, 0x99)),
-            string: s(c(0xA3, 0x15, 0x15)),
-            number: s(c(0x09, 0x86, 0x58)),
-            comment: s(c(0x00, 0x80, 0x00)),
-            function: s(c(0x79, 0x5E, 0x26)),
-            macro_: s(c(0x26, 0x7F, 0x99)),
-            attribute: s(c(0x79, 0x5E, 0x26)),
-            constant: s(c(0x00, 0x70, 0xC1)),
-            punctuation: s(c(0x3B, 0x3B, 0x3B)),
-            property: s(c(0x00, 0x10, 0x80)),
-            escape: s(c(0xEE, 0x00, 0x00)),
-            tag: s(c(0x80, 0x00, 0x00)),
-            namespace: s(c(0x26, 0x7F, 0x99)),
-            heading: s(c(0x00, 0x00, 0x80)).bold(),
-            link: s(c(0x26, 0x7F, 0x99)).underline(),
-            emphasis: s(c(0x3B, 0x3B, 0x3B)).italic(),
+            keyword: s(c(0x00, 0x33, 0xB3)),
+            type_: s(c(0x08, 0x08, 0x08)),
+            string: s(c(0x06, 0x7D, 0x17)),
+            number: s(c(0x17, 0x50, 0xEB)),
+            comment: s(c(0x75, 0x75, 0x75)),
+            function: s(c(0x00, 0x62, 0x7A)),
+            macro_: s(c(0x00, 0x62, 0x7A)),
+            attribute: s(c(0x89, 0x73, 0x00)),
+            constant: s(c(0x87, 0x10, 0x94)).italic(),
+            punctuation: s(c(0x08, 0x08, 0x08)),
+            property: s(c(0x87, 0x10, 0x94)),
+            escape: s(c(0x00, 0x37, 0xA6)),
+            tag: s(c(0x00, 0x33, 0xB3)),
+            namespace: s(c(0x08, 0x08, 0x08)),
+            heading: s(c(0x00, 0x33, 0xB3)).bold(),
+            link: s(c(0x00, 0x6D, 0xCC)).underline(),
+            emphasis: s(c(0x08, 0x08, 0x08)).italic(),
             // VS Code Light Modern bracket colours (the green darkened to 4.5:1).
             brackets: vec![
                 s(c(0x04, 0x31, 0xFA)),
@@ -198,7 +208,7 @@ impl HighlightStyle {
                 s(c(0x7B, 0x38, 0x14)),
             ],
             bracket_unmatched: s(c(0xCD, 0x31, 0x31)),
-            plain: s(c(0x3B, 0x3B, 0x3B)),
+            plain: s(c(0x08, 0x08, 0x08)),
         }
     }
 
@@ -396,38 +406,38 @@ impl EditorTheme {
         }
     }
 
-    /// A calm dark theme — warm-neutral background, high-legibility hues.
+    /// JetBrains New UI Dark editor chrome: #1E1F22 editor, #4B5059 / #A1A3AB line numbers,
+    /// #26282E caret row, #214283 selection, #2B2D30 popups.
     pub fn dark() -> Self {
         let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
         let a = Color::from_rgba8;
         EditorTheme {
-            // A simple neutral dark, matching the framework's default dark background.
-            background: c(0x0A, 0x0A, 0x0B),
-            gutter_bg: c(0x0A, 0x0A, 0x0B),
-            gutter_fg: c(0x44, 0x4C, 0x5C),
-            gutter_active_fg: c(0x9A, 0xA4, 0xB8),
-            current_line: a(0xFF, 0xFF, 0xFF, 0x0C),
-            caret: c(0x8A, 0xB4, 0xF8),
-            selection: a(0x3D, 0x59, 0x8F, 0x66),
-            selection_inactive: a(0x3D, 0x59, 0x8F, 0x33),
-            indent_guide: a(0xFF, 0xFF, 0xFF, 0x12),
-            indent_guide_active: a(0xFF, 0xFF, 0xFF, 0x30),
+            background: c(0x1E, 0x1F, 0x22),
+            gutter_bg: c(0x1E, 0x1F, 0x22),
+            gutter_fg: c(0x4B, 0x50, 0x59),
+            gutter_active_fg: c(0xA1, 0xA3, 0xAB),
+            current_line: c(0x26, 0x28, 0x2E),
+            caret: c(0xCE, 0xD0, 0xD6),
+            selection: a(0x23, 0x59, 0xC4, 0x99),
+            selection_inactive: a(0x23, 0x59, 0xC4, 0x4D),
+            indent_guide: c(0x31, 0x34, 0x38),
+            indent_guide_active: c(0x66, 0x68, 0x70),
             whitespace: a(0xFF, 0xFF, 0xFF, 0x24),
             ruler: a(0xFF, 0xFF, 0xFF, 0x10),
             matching_bracket: a(0x8A, 0xB4, 0xF8, 0x4D),
-            foreground: c(0xDC, 0xE0, 0xE5),
-            border: a(0x9A, 0xA4, 0xB8, 0x50),
-            overlay_bg: c(0x18, 0x18, 0x1B),
-            muted: c(0x5D, 0x67, 0x7A),
-            accent: c(0x76, 0xB2, 0xF0),
+            foreground: c(0xBC, 0xBE, 0xC4),
+            border: c(0x39, 0x3B, 0x40),
+            overlay_bg: c(0x2B, 0x2D, 0x30),
+            muted: c(0x6F, 0x73, 0x7A),
+            accent: c(0x54, 0x8A, 0xF7),
             search_match: a(0xE6, 0xB4, 0x73, 0x47),
             search_match_current: a(0xE6, 0xB4, 0x73, 0x8C),
             scrollbar: a(0xFF, 0xFF, 0xFF, 0x1E),
             scrollbar_active: a(0xFF, 0xFF, 0xFF, 0x3C),
             diag_error: c(0xE9, 0x8A, 0x8A),
             diag_warning: c(0xE6, 0xB4, 0x73),
-            diag_info: c(0x76, 0xB2, 0xF0),
-            diag_hint: c(0x5D, 0x67, 0x7A),
+            diag_info: c(0x54, 0x8A, 0xF7),
+            diag_hint: c(0x6F, 0x73, 0x7A),
             diff_added: a(0x6C, 0xD1, 0x8A, 0x22),
             diff_removed: a(0xE9, 0x6A, 0x6A, 0xC0),
             change_added: a(0x2E, 0xA0, 0x43, 0xFF),
@@ -450,37 +460,38 @@ impl EditorTheme {
         }
     }
 
-    /// A clean light theme.
+    /// JetBrains New UI Light editor chrome: white editor, #AEB3C2 / #767A8A line numbers,
+    /// #F5F8FE caret row, #A6D2FF selection.
     pub fn light() -> Self {
         let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
         let a = Color::from_rgba8;
         EditorTheme {
             background: c(0xFF, 0xFF, 0xFF),
-            gutter_bg: c(0xFB, 0xFB, 0xFC),
-            gutter_fg: c(0xB6, 0xBD, 0xC9),
-            gutter_active_fg: c(0x5A, 0x63, 0x72),
-            current_line: a(0x00, 0x00, 0x00, 0x08),
-            caret: c(0x24, 0x5F, 0xC2),
-            selection: a(0x2F, 0x62, 0xE0, 0x33),
-            selection_inactive: a(0x2F, 0x62, 0xE0, 0x1A),
-            indent_guide: a(0x00, 0x00, 0x00, 0x12),
-            indent_guide_active: a(0x00, 0x00, 0x00, 0x2E),
+            gutter_bg: c(0xFF, 0xFF, 0xFF),
+            gutter_fg: c(0xAE, 0xB3, 0xC2),
+            gutter_active_fg: c(0x76, 0x7A, 0x8A),
+            current_line: c(0xF5, 0xF8, 0xFE),
+            caret: c(0x00, 0x00, 0x00),
+            selection: a(0x4D, 0xA5, 0xFF, 0x80),
+            selection_inactive: a(0x4D, 0xA5, 0xFF, 0x40),
+            indent_guide: c(0xEB, 0xEC, 0xF0),
+            indent_guide_active: c(0xAE, 0xB3, 0xC2),
             whitespace: a(0x00, 0x00, 0x00, 0x24),
             ruler: a(0x00, 0x00, 0x00, 0x0E),
             matching_bracket: a(0x24, 0x5F, 0xC2, 0x3D),
-            foreground: c(0x3B, 0x3B, 0x3B),
-            border: a(0x5A, 0x63, 0x72, 0x40),
+            foreground: c(0x08, 0x08, 0x08),
+            border: c(0xEB, 0xEC, 0xF0),
             overlay_bg: c(0xFF, 0xFF, 0xFF),
-            muted: c(0x9A, 0xA1, 0xAD),
-            accent: c(0x24, 0x5F, 0xC2),
+            muted: c(0x81, 0x85, 0x94),
+            accent: c(0x35, 0x74, 0xF0),
             search_match: a(0xB0, 0x6A, 0x14, 0x33),
             search_match_current: a(0xB0, 0x6A, 0x14, 0x66),
             scrollbar: a(0x00, 0x00, 0x00, 0x22),
             scrollbar_active: a(0x00, 0x00, 0x00, 0x44),
             diag_error: c(0xC0, 0x3A, 0x4B),
             diag_warning: c(0xB0, 0x6A, 0x14),
-            diag_info: c(0x24, 0x5F, 0xC2),
-            diag_hint: c(0x9A, 0xA1, 0xAD),
+            diag_info: c(0x35, 0x74, 0xF0),
+            diag_hint: c(0x81, 0x85, 0x94),
             diff_added: a(0x3E, 0x8A, 0x3E, 0x1F),
             diff_removed: a(0xC0, 0x3A, 0x4B, 0xB0),
             change_added: a(0x2E, 0xA0, 0x43, 0xFF),
@@ -628,7 +639,7 @@ mod tests {
 
     #[test]
     fn default_syntax_keeps_code_regular_weight() {
-        // VS Code Dark/Light Modern and Zed One Dark: no bold keywords, upright comments.
+        // JetBrains New UI Dark/Light: no bold keywords; comments kept upright.
         for h in [HighlightStyle::dark(), HighlightStyle::light()] {
             for k in [
                 TokenKind::Keyword,

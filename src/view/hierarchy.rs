@@ -372,7 +372,7 @@ impl Lsp {
                                 .cross_axis_alignment(CrossAxisAlignment::Center),
                             ),
                     )
-                    .cursor(Cursor::Pointer)
+                    .cursor(pebbles::widgets::action_cursor())
                     .on_tap(action(move || {
                         // Select the row and toggle its expansion.
                         if let Some(mut v) = me1.h.hier.peek() {

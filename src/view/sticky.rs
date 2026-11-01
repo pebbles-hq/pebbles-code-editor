@@ -95,7 +95,7 @@ pub(crate) fn overlay(
                     .height(f.line_px)
                     .child(row(cells).cross_axis_alignment(CrossAxisAlignment::Start)),
             )
-            .cursor(Cursor::Pointer)
+            .cursor(pebbles::widgets::action_cursor())
             .on_tap(action(move || jump(at, target)))
             .into_widget(),
         );

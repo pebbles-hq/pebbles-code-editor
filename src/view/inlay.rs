@@ -250,7 +250,7 @@ impl Lsp {
                     .or(hint.tooltip.as_ref())
                     .map(|t| t.value.clone());
                 let clickable = GestureDetector::new(label)
-                    .cursor(Cursor::Pointer)
+                    .cursor(pebbles::widgets::action_cursor())
                     .on_tap(action(move || me.click_part(h.clone(), i)));
                 let w = semantics(
                     SemanticsRole::Button,
@@ -336,7 +336,7 @@ impl Lsp {
                         GestureDetector::new(
                             text(title.clone()).size((fs * 0.85) as f32).color(t.muted),
                         )
-                        .cursor(Cursor::Pointer)
+                        .cursor(pebbles::widgets::action_cursor())
                         .on_tap(action(move || {
                             if let Some(s) = &me.svc {
                                 s.execute_command(&c);

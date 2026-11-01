@@ -76,7 +76,7 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
                             .height(h)
                             .decoration(BoxDecoration::new().color(color)),
                     )
-                    .cursor(Cursor::Pointer)
+                    .cursor(pebbles::widgets::action_cursor())
                     .on_tap(action(move || {
                         peek.set(if peek.peek() == Some(hunk) {
                             None
@@ -113,7 +113,7 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
                                 ),
                             ),
                     )
-                    .cursor(Cursor::Pointer)
+                    .cursor(pebbles::widgets::action_cursor())
                     .on_tap(action(move || {
                         sig.update(|s| {
                             if !s.remove(&n) {
@@ -160,7 +160,7 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
                         .color(f.theme.gutter_fg),
                     ),
             )
-            .cursor(Cursor::Pointer)
+            .cursor(pebbles::widgets::action_cursor())
             .on_tap(action(move || {
                 folds.update(|s| {
                     if !s.remove(&n) {
@@ -203,7 +203,7 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
                 SemanticsRole::Button,
                 "Show Code Actions",
                 GestureDetector::new(icon(tabler::BULB).size(sz).color(color))
-                    .cursor(Cursor::Pointer)
+                    .cursor(pebbles::widgets::action_cursor())
                     .on_tap(action(move || l.open_menu(actions.clone()))),
             ))
             .left(1.0)

@@ -298,7 +298,7 @@ pub(crate) fn color_swatches(
                         .border(Border::new(f.theme.border, 1.0)),
                 ),
             )
-            .cursor(Cursor::Pointer)
+            .cursor(pebbles::widgets::action_cursor())
             .on_tap(action(move || picker.set(Some(at))));
             layers.push(
                 Positioned::new(swatch)
@@ -345,7 +345,7 @@ pub(crate) fn fold_badges(f: &Frame, layers: &mut Vec<AnyWidget>) {
                         .color(f.theme.muted),
                 ),
         )
-        .cursor(Cursor::Pointer)
+        .cursor(pebbles::widgets::action_cursor())
         .on_tap(action(move || {
             folds.update(|s| {
                 s.remove(&head);
@@ -498,7 +498,7 @@ pub(crate) fn color_picker(
                             .radius(BorderRadius::all(3.0)),
                     ),
             )
-            .cursor(Cursor::Pointer)
+            .cursor(pebbles::widgets::action_cursor())
             .on_tap(action(move || apply(hex.clone())))
             .into_widget(),
         );

@@ -188,7 +188,7 @@ impl Lsp {
                             )
                             .child(t.ui_text(label.clone(), 0.0).color(t.foreground)),
                     )
-                    .cursor(Cursor::Pointer)
+                    .cursor(pebbles::widgets::action_cursor())
                     .on_tap(action(move || {
                         me.h.crumb_focus.set(Some(i));
                         me.open_crumb(i);
