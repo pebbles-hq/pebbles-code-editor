@@ -806,6 +806,15 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                             KeyEventResult::Ignored
                         };
                     }
+                    crate::keymap::HostKey::Intent(k) => {
+                        pending_keys.set(Vec::new());
+                        let run = builtin_run.borrow().clone();
+                        return if run.is_some_and(|run| run(k, true)) {
+                            KeyEventResult::Handled
+                        } else {
+                            KeyEventResult::Ignored
+                        };
+                    }
                     crate::keymap::HostKey::Ignored => {}
                 }
             }

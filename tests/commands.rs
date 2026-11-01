@@ -608,7 +608,7 @@ fn host_resolver_sees_every_key_first_with_the_editor_state() {
     let seen = create_root_signal(Vec::<(usize, bool)>::new());
     let k = |c: &str| pebbles::core::shortcuts::parse(c).unwrap();
     let (ctrl_k, ctrl_e, x) = (k("Ctrl+K"), k("Ctrl+E"), k("X"));
-    let (alt_j, ctrl_q) = (k("Alt+J"), k("Ctrl+Q"));
+    let (alt_j, ctrl_q, alt_u) = (k("Alt+J"), k("Ctrl+Q"), k("Alt+U"));
     let km = Keymap::new()
         .unbind_all_commands()
         .disable_all()
@@ -622,6 +622,8 @@ fn host_resolver_sees_every_key_first_with_the_editor_state() {
                 HostKey::Handled
             } else if seq == [alt_j] {
                 HostKey::Command(EditorCommand::MoveLinesDown)
+            } else if seq == [alt_u] {
+                HostKey::Intent(KeyInput::Undo)
             } else if seq == [ctrl_q] {
                 HostKey::Builtin(BuiltinCommand::ToggleComment)
             } else {
@@ -655,8 +657,12 @@ fn host_resolver_sees_every_key_first_with_the_editor_state() {
         "cd\n// ab\n",
         "the caret moved with its line"
     );
-    h.press("Ctrl+Q");
-    assert_eq!(h.code.peek(), "cd\nab\n");
+    h.press("Alt+U");
+    assert_eq!(
+        h.code.peek(),
+        "cd\nab\n",
+        "an intent on another chord (undo)"
+    );
     // The host runs a disabled built-in through the controller.
     h.ctrl.run_builtin(BuiltinCommand::ToggleComment);
     h.frame();

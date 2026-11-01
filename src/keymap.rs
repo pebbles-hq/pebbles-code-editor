@@ -22,7 +22,7 @@ impl std::fmt::Debug for HostCommand {
 }
 
 /// What a [`Keymap::host_resolver`] did with a keystroke sequence.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HostKey {
     /// The host ran a command for the sequence (the key is consumed, any chord ends).
     Handled,
@@ -35,6 +35,9 @@ pub enum HostKey {
     Command(crate::actions::EditorCommand),
     /// Run this built-in's editing intent now (as its default chord would).
     Builtin(BuiltinCommand),
+    /// Run this editing intent now (`undo`, `editor.action.clipboardCopyAction`, `cursorUp`,
+    /// … bound to another chord).
+    Intent(KeyInput),
 }
 
 /// Editor state a [`Keymap::host_resolver`] can test (VS Code context keys
