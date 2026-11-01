@@ -2,8 +2,8 @@
 //! gutter, caret, selection, borders, scrollbar, diagnostics, …) and a [`HighlightStyle`]
 //! — the syntax palette, one [`TokenStyle`] (color + bold/italic/underline) per
 //! [`TokenKind`]. The two are separable: swap `theme.syntax` alone to re-color code without
-//! touching the UI chrome. Gravel Dark / Gravel Light (the defaults, [`EditorTheme::dark`]/[`light`]) and IntelliJ
-//! Dark / IntelliJ Light are bundled, by name via [`EditorTheme::named`]; build your own by filling the struct, or compose one
+//! touching the UI chrome. Gravel Dark (One Dark Pro Night Flat) / Gravel Light (the defaults,
+//! [`EditorTheme::dark`]/[`light`]) and IntelliJ Dark / IntelliJ Light are bundled, by name via [`EditorTheme::named`]; build your own by filling the struct, or compose one
 //! over a base with an extension's `theme` transform.
 
 use pebbles::prelude::Color;
@@ -143,91 +143,54 @@ impl HighlightStyle {
         Self::gravel_light()
     }
 
-    /// Gravel Dark: the Gravel brand palette (purple / blue / green with teal, lavender, pink
-    /// and amber accents) for the near-black #0F0F11 editor. Keywords #B888FF, functions
-    /// #6CB0FF, strings #7FD18B, numbers #4FD1C5, types / namespaces #9AA8FF, macros #8FB4FF,
-    /// fields / constants #F29FC9 (upright), attributes #E6C07B, escapes #F2A65A, comments
-    /// #7D7F99, text and punctuation #CDD0E0; brackets cycle purple, blue, green, teal.
-    /// Every token is at least 4.5:1 on the editor and on the caret line.
+    /// Gravel Dark: One Dark Pro Night Flat (`zhuangtongfa.Material-theme`,
+    /// `themes/OneDark-Pro-night-flat.json`), copied verbatim — `tokenColors` resolved the way
+    /// VS Code resolves them for the Rust grammar plus rust-analyzer's semantic tokens:
+    /// `keyword`/`storage` #c678dd, `entity.name.function` #61afef, `string` #98c379,
+    /// `constant.numeric`/`constant` #d19a66, `entity.name.type`/`support.class`/
+    /// `entity.name.namespace`/`entity.name.lifetime.rust` #e5c07b, `variable.other.readwrite`/
+    /// `entity.name.tag`/`markup.heading` #e06c75, `entity.other.attribute-name` and the
+    /// semantic `macro` #d19a66, `constant.character.escape` #56b6c2, `comment` #7f848e,
+    /// `keyword.operator`/punctuation #abb2bf, `markup.italic`/`markup.underline.link` #c678dd;
+    /// brackets `editorBracketHighlight.foreground1..3` #d19a66 #c678dd #56b6c2. No contrast
+    /// nudging: these are the extension's exact colours.
     pub fn gravel_dark() -> Self {
-        let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
-        let s = TokenStyle::color;
-        let (purple, blue, green, teal) = (
-            c(0xB8, 0x88, 0xFF),
-            c(0x6C, 0xB0, 0xFF),
-            c(0x7F, 0xD1, 0x8B),
-            c(0x4F, 0xD1, 0xC5),
-        );
-        let (lavender, pink, text) = (
-            c(0x9A, 0xA8, 0xFF),
-            c(0xF2, 0x9F, 0xC9),
-            c(0xCD, 0xD0, 0xE0),
-        );
+        Self::one_dark_pro_night_flat()
+    }
+
+    /// One Dark Pro Night Flat's syntax palette (see [`gravel_dark`](Self::gravel_dark)).
+    pub fn one_dark_pro_night_flat() -> Self {
+        let c = |v: u32| Color::from_rgba8((v >> 16) as u8, (v >> 8) as u8, v as u8, 0xFF);
+        let s = |v| TokenStyle::color(c(v));
         HighlightStyle {
-            keyword: s(purple),
-            type_: s(lavender),
-            string: s(green),
-            number: s(teal),
-            comment: s(c(0x7D, 0x7F, 0x99)),
-            function: s(blue),
-            macro_: s(c(0x8F, 0xB4, 0xFF)),
-            attribute: s(c(0xE6, 0xC0, 0x7B)),
-            constant: s(pink),
-            punctuation: s(text),
-            property: s(pink),
-            escape: s(c(0xF2, 0xA6, 0x5A)),
-            tag: s(purple),
-            namespace: s(lavender),
-            heading: s(purple).bold(),
-            link: s(blue).underline(),
-            emphasis: s(text).italic(),
-            brackets: vec![s(purple), s(blue), s(green), s(teal)],
-            bracket_unmatched: s(c(0xFF, 0x6B, 0x6B)),
-            plain: s(text),
+            keyword: s(0xc678dd),
+            type_: s(0xe5c07b),
+            string: s(0x98c379),
+            number: s(0xd19a66),
+            comment: s(0x7f848e),
+            function: s(0x61afef),
+            macro_: s(0xd19a66),
+            attribute: s(0xd19a66),
+            constant: s(0xd19a66),
+            punctuation: s(0xabb2bf),
+            property: s(0xe06c75),
+            escape: s(0x56b6c2),
+            tag: s(0xe06c75),
+            namespace: s(0xe5c07b),
+            heading: s(0xe06c75).bold(),
+            link: s(0xc678dd).underline(),
+            emphasis: s(0xc678dd).italic(),
+            brackets: vec![s(0xd19a66), s(0xc678dd), s(0x56b6c2)],
+            // Not set by the theme: VS Code's default #ff1212cc.
+            bracket_unmatched: TokenStyle::color(Color::from_rgba8(0xFF, 0x12, 0x12, 0xCC)),
+            plain: s(0xabb2bf),
         }
     }
 
-    /// Gravel Light: the Gravel Dark hue families darkened for a white editor. Keywords
-    /// #7A3DF0, functions #1F6ED5, strings #2A803F, numbers #0D7E79, types / namespaces
-    /// #4B57C9, macros #3B63D0, fields / constants #C2357F, attributes #926900, escapes
-    /// #B5520F, comments #6D6F84, text #1A1A22. Every token is at least 4.5:1 on white and
-    /// on the #F5F5FA caret line.
+    /// Gravel Light: One Dark Pro ships no light variant, so Gravel Light stays the IntelliJ
+    /// Light palette (= [`intellij_light`](Self::intellij_light)).
     pub fn gravel_light() -> Self {
-        let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
-        let s = TokenStyle::color;
-        let (purple, blue, green, teal) = (
-            c(0x7A, 0x3D, 0xF0),
-            c(0x1F, 0x6E, 0xD5),
-            c(0x2A, 0x80, 0x3F),
-            c(0x0D, 0x7E, 0x79),
-        );
-        let (lavender, pink, text) = (
-            c(0x4B, 0x57, 0xC9),
-            c(0xC2, 0x35, 0x7F),
-            c(0x1A, 0x1A, 0x22),
-        );
-        HighlightStyle {
-            keyword: s(purple),
-            type_: s(lavender),
-            string: s(green),
-            number: s(teal),
-            comment: s(c(0x6D, 0x6F, 0x84)),
-            function: s(blue),
-            macro_: s(c(0x3B, 0x63, 0xD0)),
-            attribute: s(c(0x92, 0x69, 0x00)),
-            constant: s(pink),
-            punctuation: s(text),
-            property: s(pink),
-            escape: s(c(0xB5, 0x52, 0x0F)),
-            tag: s(purple),
-            namespace: s(lavender),
-            heading: s(purple).bold(),
-            link: s(blue).underline(),
-            emphasis: s(text).italic(),
-            brackets: vec![s(purple), s(blue), s(green), s(teal)],
-            bracket_unmatched: s(c(0xD0, 0x31, 0x2D)),
-            plain: s(text),
-        }
+        Self::intellij_light()
     }
 
     /// The IntelliJ Dark syntax palette: IntelliJ IDEA's default New UI "Dark" editor scheme
@@ -519,6 +482,7 @@ impl EditorTheme {
             "gravel light" => Self::gravel_light(),
             "intellij dark" => Self::intellij_dark(),
             "intellij light" => Self::intellij_light(),
+            "one dark pro night flat" => Self::one_dark_pro_night_flat(),
             _ => return None,
         })
     }
@@ -533,115 +497,75 @@ impl EditorTheme {
         Self::gravel_light()
     }
 
-    /// Gravel Dark chrome: near-black neutral #0F0F11 editor and gutter, #17171B caret line,
-    /// #4A4A55 / #A6A8BA line numbers, #22222A / #3A3A46 indent guides, #2E2A4A
-    /// purple-tinted selection, #B888FF caret, #1A1A1F popups with #26262D borders, #7C5CFF
-    /// accent.
+    /// Gravel Dark: One Dark Pro Night Flat's `colors`, verbatim — `editor.background`
+    /// #16191d, `editorLineNumber` #667187 / active #abb2bf, `editor.lineHighlightBackground`
+    /// #2c313c, `editorCursor` #528bff, `editor.selectionBackground` #67769660, indent guides
+    /// #3b4048 / #c8c8c859, `editorWidget.background` #1e2227, find #d19a6644 / #ffffff22,
+    /// scrollbar #4e566660 / #747d9180, gutter #109868 / #948B60 / #9A353D, error #c24038,
+    /// warning #d19a66. Keys the theme leaves unset use VS Code's dark defaults.
     pub fn gravel_dark() -> Self {
-        let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
-        let a = Color::from_rgba8;
+        Self::one_dark_pro_night_flat()
+    }
+
+    /// One Dark Pro Night Flat (see [`gravel_dark`](Self::gravel_dark)).
+    pub fn one_dark_pro_night_flat() -> Self {
+        let x = |v: u32| Color::from_rgba8((v >> 16) as u8, (v >> 8) as u8, v as u8, 0xFF);
+        // #rrggbbaa
+        let xa =
+            |v: u32| Color::from_rgba8((v >> 24) as u8, (v >> 16) as u8, (v >> 8) as u8, v as u8);
         EditorTheme {
-            background: c(0x0F, 0x0F, 0x11),
-            gutter_bg: c(0x0F, 0x0F, 0x11),
-            gutter_fg: c(0x4A, 0x4A, 0x55),
-            gutter_active_fg: c(0xA6, 0xA8, 0xBA),
-            current_line: c(0x17, 0x17, 0x1B),
-            caret: c(0xB8, 0x88, 0xFF),
-            selection: c(0x2E, 0x2A, 0x4A),
-            selection_inactive: c(0x22, 0x20, 0x33),
-            indent_guide: c(0x22, 0x22, 0x2A),
-            indent_guide_active: c(0x3A, 0x3A, 0x46),
-            whitespace: a(0xFF, 0xFF, 0xFF, 0x24),
-            ruler: a(0xFF, 0xFF, 0xFF, 0x10),
-            matching_bracket: a(0xB8, 0x88, 0xFF, 0x40),
-            foreground: c(0xCD, 0xD0, 0xE0),
-            border: c(0x26, 0x26, 0x2D),
-            overlay_bg: c(0x1A, 0x1A, 0x1F),
-            muted: c(0x8A, 0x8C, 0xA0),
-            accent: c(0x7C, 0x5C, 0xFF),
-            search_match: a(0xE6, 0xC0, 0x7B, 0x40),
-            search_match_current: a(0xE6, 0xC0, 0x7B, 0x80),
-            scrollbar: a(0xFF, 0xFF, 0xFF, 0x1E),
-            scrollbar_active: a(0xFF, 0xFF, 0xFF, 0x3C),
-            diag_error: c(0xF2, 0x77, 0x7A),
-            diag_warning: c(0xE6, 0xC0, 0x7B),
-            diag_info: c(0x6C, 0xB0, 0xFF),
-            diag_hint: c(0x8A, 0x8C, 0xA0),
-            diff_added: a(0x7F, 0xD1, 0x8B, 0x22),
-            diff_removed: a(0xF2, 0x77, 0x7A, 0xC0),
-            change_added: a(0x4F, 0xB8, 0x6A, 0xFF),
-            diff_removed_line: a(0xFF, 0x00, 0x00, 0x26),
-            diff_inserted_text: a(0x7F, 0xD1, 0x8B, 0x40),
-            diff_removed_text: a(0xFF, 0x00, 0x00, 0x40),
-            change_modified: a(0x6C, 0xB0, 0xFF, 0xFF),
-            change_deleted: a(0xF2, 0x77, 0x7A, 0xFF),
-            overview_cursor: a(0xA6, 0xA8, 0xBA, 0xCC),
-            unicode_highlight: a(0xE6, 0xC0, 0x7B, 0xFF),
-            bracket_guide: a(0xA6, 0xA8, 0xBA, 0x80),
-            ghost_text: a(0xFF, 0xFF, 0xFF, 0x56),
-            fold_badge: a(0x7C, 0x5C, 0xFF, 0x33),
-            linked_editing: a(0xFF, 0x00, 0x00, 0x4D),
-            breakpoint: c(0xE5, 0x14, 0x00),
-            syntax: HighlightStyle::gravel_dark(),
+            background: x(0x16191d),
+            gutter_bg: x(0x16191d),
+            gutter_fg: x(0x667187),
+            gutter_active_fg: x(0xabb2bf),
+            current_line: x(0x2c313c),
+            caret: x(0x528bff),
+            selection: xa(0x67769660),
+            selection_inactive: x(0x3a3d41), // VS Code default
+            indent_guide: x(0x3b4048),
+            indent_guide_active: xa(0xc8c8c859),
+            whitespace: xa(0xffffff1d),
+            ruler: xa(0xabb2bf26),
+            matching_bracket: x(0x515a6b),
+            foreground: x(0xabb2bf),
+            border: x(0x181a1f),
+            overlay_bg: x(0x1e2227),
+            muted: x(0x9da5b4),
+            accent: x(0x4d78cc),
+            search_match: xa(0xffffff22),
+            search_match_current: xa(0xd19a6644),
+            scrollbar: xa(0x4e566660),
+            scrollbar_active: xa(0x747d9180),
+            diag_error: x(0xc24038),
+            diag_warning: x(0xd19a66),
+            diag_info: x(0x3794ff),     // VS Code default
+            diag_hint: xa(0xeeeeeeb3),  // VS Code default
+            diff_added: xa(0x9bb95533), // VS Code default insertedLineBackground
+            diff_removed: x(0x9a353d),
+            change_added: x(0x109868),
+            diff_removed_line: xa(0xff000033), // VS Code default
+            diff_inserted_text: xa(0x00809b33),
+            diff_removed_text: xa(0xff000033), // VS Code default
+            change_modified: x(0x948b60),
+            change_deleted: x(0x9a353d),
+            overview_cursor: xa(0xa0a0a0cc), // VS Code default
+            unicode_highlight: x(0xcca700),  // VS Code default
+            bracket_guide: xa(0xc8c8c859),
+            ghost_text: xa(0xffffff56), // VS Code default
+            fold_badge: xa(0x67769633),
+            linked_editing: xa(0xd2e0ff1a),
+            breakpoint: x(0xe51400), // VS Code default
+            syntax: HighlightStyle::one_dark_pro_night_flat(),
             ui_font_size: 12.5,
             ui_font_family: None,
             overlay_radius: 8.0,
         }
     }
 
-    /// Gravel Light chrome: white editor, #F5F5FA caret line, #A8A9B8 / #5E6070 line
-    /// numbers, #ECECF2 / #B8B9C6 indent guides, #DCD3FC purple-tinted selection, #7A3DF0
-    /// caret, white popups with #E2E2E8 borders, #7C5CFF accent.
+    /// Gravel Light: One Dark Pro ships no light variant, so Gravel Light stays the IntelliJ
+    /// Light theme (= [`intellij_light`](Self::intellij_light)).
     pub fn gravel_light() -> Self {
-        let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
-        let a = Color::from_rgba8;
-        EditorTheme {
-            background: c(0xFF, 0xFF, 0xFF),
-            gutter_bg: c(0xFF, 0xFF, 0xFF),
-            gutter_fg: c(0xA8, 0xA9, 0xB8),
-            gutter_active_fg: c(0x5E, 0x60, 0x70),
-            current_line: c(0xF5, 0xF5, 0xFA),
-            caret: c(0x7A, 0x3D, 0xF0),
-            selection: c(0xDC, 0xD3, 0xFC),
-            selection_inactive: c(0xEB, 0xE6, 0xFD),
-            indent_guide: c(0xEC, 0xEC, 0xF2),
-            indent_guide_active: c(0xB8, 0xB9, 0xC6),
-            whitespace: a(0x00, 0x00, 0x00, 0x24),
-            ruler: a(0x00, 0x00, 0x00, 0x0E),
-            matching_bracket: a(0x7A, 0x3D, 0xF0, 0x30),
-            foreground: c(0x1A, 0x1A, 0x22),
-            border: c(0xE2, 0xE2, 0xE8),
-            overlay_bg: c(0xFF, 0xFF, 0xFF),
-            muted: c(0x6D, 0x6F, 0x84),
-            accent: c(0x7C, 0x5C, 0xFF),
-            search_match: a(0xC9, 0x8A, 0x00, 0x33),
-            search_match_current: a(0xC9, 0x8A, 0x00, 0x66),
-            scrollbar: a(0x00, 0x00, 0x00, 0x22),
-            scrollbar_active: a(0x00, 0x00, 0x00, 0x44),
-            diag_error: c(0xC6, 0x28, 0x3C),
-            diag_warning: c(0x92, 0x69, 0x00),
-            diag_info: c(0x1F, 0x6E, 0xD5),
-            diag_hint: c(0x6D, 0x6F, 0x84),
-            diff_added: a(0x2A, 0x80, 0x3F, 0x1F),
-            diff_removed: a(0xC6, 0x28, 0x3C, 0xB0),
-            change_added: a(0x2E, 0xA0, 0x43, 0xFF),
-            diff_removed_line: a(0xFF, 0x00, 0x00, 0x26),
-            diff_inserted_text: a(0x9C, 0xCC, 0x2C, 0x40),
-            diff_removed_text: a(0xFF, 0x00, 0x00, 0x40),
-            change_modified: a(0x1F, 0x6E, 0xD5, 0xFF),
-            change_deleted: a(0xF8, 0x51, 0x49, 0xFF),
-            overview_cursor: a(0x60, 0x60, 0x60, 0xCC),
-            unicode_highlight: a(0xBF, 0x88, 0x03, 0xFF),
-            bracket_guide: a(0x60, 0x60, 0x60, 0x80),
-            ghost_text: a(0x00, 0x00, 0x00, 0x77),
-            fold_badge: a(0x7A, 0x3D, 0xF0, 0x26),
-            linked_editing: a(0xFF, 0x00, 0x00, 0x30),
-            breakpoint: c(0xE5, 0x14, 0x00),
-            syntax: HighlightStyle::gravel_light(),
-            ui_font_size: 12.5,
-            ui_font_family: None,
-            overlay_radius: 8.0,
-        }
+        Self::intellij_light()
     }
 
     /// IntelliJ Dark: JetBrains New UI Dark editor chrome: #1E1F22 editor, #4B5059 / #A1A3AB line numbers,
@@ -924,7 +848,6 @@ mod tests {
             K::Bracket(0),
             K::Bracket(1),
             K::Bracket(2),
-            K::Bracket(3),
         ];
         for name in EditorTheme::NAMES {
             let t = EditorTheme::named(name).unwrap();
@@ -934,16 +857,16 @@ mod tests {
             }
             assert!(contrast(t.foreground, t.background) >= 7.0);
         }
-        // Gravel also keeps every token at 4.5:1 on the caret line and the plain text
-        // readable on the selection.
-        for t in [EditorTheme::gravel_dark(), EditorTheme::gravel_light()] {
-            for k in kinds {
-                let r = contrast(t.color(k), t.current_line);
-                assert!(r >= 4.5, "caret line {k:?} contrast {r:.2}");
-            }
-            assert!(contrast(t.color(K::BracketUnmatched), t.background) >= 4.5);
-            assert!(contrast(t.foreground, t.selection) >= 7.0);
-        }
+        // Documented exception: Gravel Dark is One Dark Pro Night Flat copied exactly (the
+        // owner wants the extension's colours, no nudging). Its tokens clear 4.5:1 on the
+        // editor background (asserted above); on the #2c313c caret line the comment grey
+        // #7f848e is ~3.4:1, exactly as in VS Code, so no caret-line assertion is made.
+        assert!(
+            contrast(
+                EditorTheme::gravel_dark().foreground,
+                EditorTheme::gravel_dark().current_line
+            ) >= 4.5
+        );
     }
 
     #[test]
@@ -961,11 +884,13 @@ mod tests {
             EditorTheme::light().caret,
             EditorTheme::gravel_light().caret
         );
-        let near_black = EditorTheme::dark().background.to_rgba8();
+        let bg = EditorTheme::dark().background.to_rgba8();
         assert_eq!(
-            (near_black.r, near_black.g, near_black.b),
-            (0x0F, 0x0F, 0x11)
+            (bg.r, bg.g, bg.b),
+            (0x16, 0x19, 0x1D),
+            "One Dark Pro Night Flat"
         );
+        assert!(EditorTheme::named("One Dark Pro Night Flat").is_some());
         assert!(!EditorTheme::dark().style(TokenKind::Constant).italic);
         assert!(
             EditorTheme::intellij_dark()
