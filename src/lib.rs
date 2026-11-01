@@ -99,7 +99,7 @@ pub use providers::{
     InlineSuggestionProvider, Severity, SignatureHelp, SignatureProvider,
 };
 pub use snippets::{Snippet, builtin_snippets};
-pub use theme::{EditorTheme, HighlightStyle, TokenStyle};
+pub use theme::{EditorTheme, HighlightStyle, ScopeStyles, TokenStyle};
 
 /// The monospace family used for all editor text.
 pub(crate) const MONO: &str = "JetBrains Mono";

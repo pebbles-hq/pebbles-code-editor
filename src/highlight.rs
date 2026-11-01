@@ -19,9 +19,9 @@ pub(crate) fn to_spans(
 ) -> Vec<TextSpan> {
     let mut spans = Vec::new();
     let mut cursor = 0usize;
-    let push = |text: &str, kind: TokenKind, spans: &mut Vec<TextSpan>| {
+    let push = |text: &str, kind: TokenKind, scope: u16, spans: &mut Vec<TextSpan>| {
         if !text.is_empty() {
-            let st = theme.style(kind);
+            let st = theme.style_token(kind, scope);
             let mut sp = span(text.to_string())
                 .color(st.color)
                 .size(fs as f32)
@@ -51,13 +51,13 @@ pub(crate) fn to_spans(
             continue;
         }
         if start > cursor {
-            push(&src[cursor..start], TokenKind::Plain, &mut spans);
+            push(&src[cursor..start], TokenKind::Plain, 0, &mut spans);
         }
-        push(&src[start..end], t.kind, &mut spans);
+        push(&src[start..end], t.kind, t.scope, &mut spans);
         cursor = end;
     }
     if cursor < src.len() {
-        push(&src[cursor..], TokenKind::Plain, &mut spans);
+        push(&src[cursor..], TokenKind::Plain, 0, &mut spans);
     }
     spans
 }
@@ -106,6 +106,7 @@ pub(crate) fn overlay_split(base: &[Token], over: &[Token]) -> Vec<Token> {
                             start: s,
                             len: o.start - s,
                             kind: t.kind,
+                            scope: t.scope,
                         });
                     }
                     s = s.max(o.start + o.len);
@@ -116,6 +117,7 @@ pub(crate) fn overlay_split(base: &[Token], over: &[Token]) -> Vec<Token> {
                         start: s,
                         len: e - s,
                         kind: t.kind,
+                        scope: t.scope,
                     });
                     s = e;
                 }
@@ -165,6 +167,7 @@ pub(crate) fn bracket_tokens(
                 start: at,
                 len: ch.len_utf8(),
                 kind: TokenKind::Bracket(depth.max(0) as u8),
+                scope: 0,
             });
             depth += 1;
         } else {
@@ -178,6 +181,7 @@ pub(crate) fn bracket_tokens(
                 start: at,
                 len: ch.len_utf8(),
                 kind,
+                scope: 0,
             });
             depth = depth.max(0);
         }
@@ -233,6 +237,7 @@ pub(crate) fn slice_tokens(tokens: &[Token], from: usize, to: usize) -> Vec<Toke
                     start: s - from,
                     len: e - s,
                     kind: t.kind,
+                    scope: t.scope,
                 })
             } else {
                 None
@@ -252,17 +257,20 @@ mod tests {
                 start: 0,
                 len: 3,
                 kind: TokenKind::Keyword,
+                scope: 0,
             },
             Token {
                 start: 4,
                 len: 3,
                 kind: TokenKind::Plain,
+                scope: 0,
             },
         ];
         let sem = vec![Token {
             start: 4,
             len: 3,
             kind: TokenKind::Type,
+            scope: 0,
         }];
         let m = merge_tokens(&lex, &sem);
         assert!(m.iter().any(|t| t.start == 4 && t.kind == TokenKind::Type));
@@ -279,11 +287,13 @@ mod tests {
             start: 0,
             len: 3,
             kind: TokenKind::Punctuation,
+            scope: 0,
         }];
         let over = [Token {
             start: 1,
             len: 1,
             kind: TokenKind::Bracket(0),
+            scope: 0,
         }];
         let m = overlay_split(&base, &over);
         assert_eq!(m.len(), 3);
@@ -299,6 +309,7 @@ mod tests {
             start: 4,
             len: 3,
             kind: TokenKind::Str,
+            scope: 0,
         }];
         let b = bracket_tokens(
             src,

@@ -36,6 +36,37 @@ pub(crate) fn kind_for(ty: &str, modifiers: &[String]) -> Option<TokenKind> {
     })
 }
 
+/// VS Code's TextMate fallback scope for a standard semantic token type.
+pub(crate) fn textmate_for(ty: &str) -> Option<&'static str> {
+    Some(match ty {
+        "namespace" | "module" => "entity.name.namespace",
+        "type" | "builtinType" | "typeAlias" | "selfType" => "entity.name.type",
+        "class" => "entity.name.type.class",
+        "enum" => "entity.name.type.enum",
+        "interface" => "entity.name.type.interface",
+        "struct" => "entity.name.type.struct",
+        "typeParameter" => "entity.name.type.parameter",
+        "function" => "entity.name.function",
+        "method" => "entity.name.function.member",
+        "macro" => "entity.name.function.macro",
+        "variable" => "variable.other.readwrite",
+        "parameter" => "variable.parameter",
+        "property" => "variable.other.property",
+        "enumMember" => "variable.other.enummember",
+        "decorator" | "attribute" | "derive" => "entity.name.decorator",
+        "keyword" | "modifier" => "keyword",
+        "selfKeyword" => "variable.language.self",
+        "comment" => "comment",
+        "string" => "string",
+        "number" => "constant.numeric",
+        "boolean" => "constant.language.boolean",
+        "regexp" => "string.regexp",
+        "escapeSequence" => "constant.character.escape",
+        "operator" => "keyword.operator",
+        _ => return None,
+    })
+}
+
 /// Decode `data` into byte-range theme tokens over `text`.
 pub(crate) fn tokens_from(
     data: &[u32],
@@ -47,10 +78,14 @@ pub(crate) fn tokens_from(
         .filter_map(|t| {
             let kind = kind_for(&t.token_type, &t.modifiers)?;
             let (a, b) = lsp::range_to_bytes(text, t.range);
+            let scope = textmate_for(&t.token_type)
+                .map(crate::lang::scope::intern_scope)
+                .unwrap_or(0);
             (b > a).then_some(Token {
                 start: a,
                 len: b - a,
                 kind,
+                scope,
             })
         })
         .collect()
@@ -189,6 +224,7 @@ mod tests {
             start,
             len,
             kind: TokenKind::Function,
+            scope: 0,
         };
         let toks = vec![t(0, 3), t(4, 3), t(8, 3)];
         // An insert before a token shifts it.

@@ -25,6 +25,7 @@ use tree_sitter::{
     InputEdit, Parser, Point, Query, QueryCursor, Range as TsRange, StreamingIterator, Tree,
 };
 
+use super::scope::{ScopeId, intern_scope};
 use super::{Language, SyntaxSession, Token, TokenKind};
 
 /// Map a tree-sitter highlight capture name (`keyword`, `function.method`, `string.escape`,
@@ -90,6 +91,10 @@ pub struct GrammarDef {
     highlights: Query,
     /// Capture index → token kind (precomputed from the query's capture names).
     kinds: Vec<Option<TokenKind>>,
+    /// Capture index → TextMate scope (without the language suffix).
+    scopes: Vec<Option<&'static str>>,
+    /// The language's root scope (`source.rust`).
+    root_scope: String,
     injections: Option<Query>,
     line_comment: Option<&'static str>,
     block_comment: Option<(&'static str, &'static str)>,
@@ -346,6 +351,11 @@ fn build(s: &Spec) -> Result<GrammarDef, String> {
         .iter()
         .map(|n| kind_for_capture(n))
         .collect();
+    let scopes = highlights
+        .capture_names()
+        .iter()
+        .map(|n| super::scope::textmate_scope(n))
+        .collect();
     let injections = if s.injections.is_empty() {
         None
     } else {
@@ -357,6 +367,8 @@ fn build(s: &Spec) -> Result<GrammarDef, String> {
         language,
         highlights,
         kinds,
+        scopes,
+        root_scope: super::scope::root_scope(s.id),
         injections,
         line_comment: s.line_comment,
         block_comment: s.block_comment,
@@ -530,7 +542,7 @@ impl SyntaxSession for Session {
         };
         let start = range.start.min(src.len());
         let end = range.end.clamp(start, src.len());
-        let mut paint: Vec<Option<TokenKind>> = vec![None; end - start];
+        let mut paint: Vec<Paint> = vec![None; end - start];
         paint_layer(&self.grammar, tree, src, start..end, &mut paint, 0);
         runs(&paint, start)
     }
@@ -609,7 +621,7 @@ fn paint_layer(
     tree: &Tree,
     src: &str,
     range: Range<usize>,
-    paint: &mut [Option<TokenKind>],
+    paint: &mut [Paint],
     depth: usize,
 ) {
     paint_into(g, tree, src, range.clone(), paint, range.start);
@@ -666,7 +678,7 @@ fn paint_layer(
             // Clear only spans the host painted as plain strings/raw text, so host
             // punctuation (``` fences) stays; injected tokens then paint on top.
             for k in slot.iter_mut() {
-                if matches!(k, Some(TokenKind::Str)) {
+                if matches!(k, Some((TokenKind::Str, _))) {
                     *k = None;
                 }
             }
@@ -681,7 +693,7 @@ fn paint_layer_at(
     tree: &Tree,
     src: &str,
     range: Range<usize>,
-    paint: &mut [Option<TokenKind>],
+    paint: &mut [Paint],
     base: usize,
     depth: usize,
 ) {
@@ -700,24 +712,60 @@ fn paint_into(
     tree: &Tree,
     src: &str,
     range: Range<usize>,
-    paint: &mut [Option<TokenKind>],
+    paint: &mut [Paint],
     base: usize,
 ) {
     let mut cursor = QueryCursor::new();
     cursor.set_byte_range(range.clone());
     cursor.set_match_limit(1024);
-    let mut spans: Vec<(usize, usize, usize, TokenKind)> = Vec::new();
+    let mut spans: Vec<(usize, usize, usize, (TokenKind, ScopeId))> = Vec::new();
+    let mut ids: HashMap<(u32, String), ScopeId> = HashMap::new();
     let mut matches = cursor.matches(&g.highlights, tree.root_node(), src.as_bytes());
     while let Some(m) = matches.next() {
         for c in m.captures() {
-            if let Some(Some(kind)) = g.kinds.get(c.index as usize) {
-                let r = c.node.byte_range();
-                spans.push((r.start, r.end, m.pattern_index, *kind));
+            let i = c.index as usize;
+            let mut kind = g.kinds.get(i).copied().flatten();
+            let mut tm = g.scopes.get(i).copied().flatten();
+            if kind.is_none() && tm.is_none() {
+                continue;
             }
+            // Numeric literals some grammars capture as `@constant.builtin`.
+            let nk = c.node.kind();
+            if kind == Some(TokenKind::Constant)
+                && (nk.contains("integer") || nk.contains("float") || nk.contains("number"))
+            {
+                kind = Some(TokenKind::Number);
+                tm = Some("constant.numeric");
+            }
+            let id = match tm {
+                Some(tm) => {
+                    let metas = meta_stack(c.node);
+                    *ids.entry((c.index, format!("{metas}{tm}")))
+                        .or_insert_with(|| {
+                            let lang = g.root_scope.rsplit('.').next().unwrap_or("");
+                            intern_scope(&format!("{} {metas}{tm}.{lang}", g.root_scope))
+                        })
+                }
+                None => 0,
+            };
+            let r = c.node.byte_range();
+            spans.push((
+                r.start,
+                r.end,
+                m.pattern_index,
+                (kind.unwrap_or(TokenKind::Plain), id),
+            ));
         }
     }
     drop(matches);
-    spans.sort_by(|a, b| (b.1 - b.0).cmp(&(a.1 - a.0)).then(b.2.cmp(&a.2)));
+    // Scope-only captures (`@variable`) paint first so a coloured capture of the same node
+    // (`@tag` on a JSX identifier) wins whatever the pattern order.
+    spans.sort_by(|a, b| {
+        (b.1 - b.0)
+            .cmp(&(a.1 - a.0))
+            .then((a.3.0 != TokenKind::Plain).cmp(&(b.3.0 != TokenKind::Plain)))
+            .then(b.2.cmp(&a.2))
+    });
     for (s, e, _, kind) in spans {
         let lo = s.max(range.start).saturating_sub(base);
         let hi = e.min(range.end).saturating_sub(base);
@@ -727,8 +775,36 @@ fn paint_into(
     }
 }
 
+/// One painted byte: its kind and interned scope stack.
+type Paint = Option<(TokenKind, ScopeId)>;
+
+/// The `meta.*` scopes of `node`'s ancestors, outermost first, each followed by a space.
+fn meta_stack(node: tree_sitter::Node<'_>) -> String {
+    let mut metas: Vec<&'static str> = Vec::new();
+    let mut n = node.parent();
+    let mut hops = 0;
+    while let Some(p) = n {
+        if let Some(m) = super::scope::meta_scope(p.kind())
+            && metas.last() != Some(&m)
+        {
+            metas.push(m);
+        }
+        hops += 1;
+        if hops > 32 {
+            break;
+        }
+        n = p.parent();
+    }
+    let mut out = String::new();
+    for m in metas.iter().rev() {
+        out.push_str(m);
+        out.push(' ');
+    }
+    out
+}
+
 /// Run-length encode a paint buffer into sorted, non-overlapping tokens.
-fn runs(paint: &[Option<TokenKind>], base: usize) -> Vec<Token> {
+fn runs(paint: &[Paint], base: usize) -> Vec<Token> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < paint.len() {
@@ -737,11 +813,12 @@ fn runs(paint: &[Option<TokenKind>], base: usize) -> Vec<Token> {
         while j < paint.len() && paint[j] == k {
             j += 1;
         }
-        if let Some(kind) = k {
+        if let Some((kind, scope)) = k {
             out.push(Token {
                 start: base + i,
                 len: j - i,
                 kind,
+                scope,
             });
         }
         i = j;
@@ -934,5 +1011,72 @@ mod tests {
         assert!(k.session().is_none());
         assert_eq!(super::super::by_name("nonesuch").name(), "Plain Text");
         assert_eq!(super::super::for_path("src/App.tsx").name(), "TSX");
+    }
+
+    #[test]
+    fn rust_keywords_numbers_and_scope_stacks() {
+        let src = "pub fn main() { let x = 1; }\nstruct A;\nimpl A { fn f(&self) {} }\n";
+        let mut sess = TreeSitter::new("rust").unwrap().session().unwrap();
+        let toks = sess.highlight_range(src, 0..src.len());
+        let at = |w: &str| {
+            let at = src.find(w).unwrap();
+            *toks
+                .iter()
+                .find(|t| t.start <= at && at < t.start + t.len)
+                .unwrap_or_else(|| panic!("token at {w:?}"))
+        };
+        assert_eq!(at("fn main").kind, TokenKind::Keyword);
+        assert_eq!(at("struct").kind, TokenKind::Keyword);
+        assert_eq!(at("let").kind, TokenKind::Keyword);
+        assert_eq!(
+            at("1;").kind,
+            TokenKind::Number,
+            "integer literal is a number"
+        );
+        let name = |w: &str| {
+            super::super::scope::scope_name(at(w).scope)
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(
+            name("fn main"),
+            "source.rust meta.function keyword.other.rust"
+        );
+        assert_eq!(
+            name("main"),
+            "source.rust meta.function entity.name.function.rust"
+        );
+        assert_eq!(
+            name("1;"),
+            "source.rust meta.function constant.numeric.rust"
+        );
+        assert_eq!(
+            name("self"),
+            "source.rust meta.class meta.function variable.language.rust"
+        );
+        assert!(name("A;").starts_with("source.rust meta.class entity.name.type"));
+    }
+
+    /// Every capture of every bundled grammar either colours its token or is one of the
+    /// intentionally uncoloured ones (identifiers / parameters / embedded regions), and
+    /// every colouring capture has a TextMate scope.
+    #[test]
+    fn every_capture_is_mapped() {
+        for id in GRAMMAR_IDS {
+            let g = grammar(id).unwrap();
+            for n in g.highlights.capture_names() {
+                let kind = kind_for_capture(n);
+                let tm = super::super::scope::textmate_scope(n);
+                let intentional = n.starts_with("variable")
+                    || n.starts_with("injection")
+                    || n.starts_with('_')
+                    || matches!(*n, "parameter" | "embedded" | "none" | "spell");
+                assert!(kind.is_some() || intentional, "{id}: @{n} falls through");
+                assert!(
+                    tm.is_some() || kind.is_none(),
+                    "{id}: @{n} has no TextMate scope"
+                );
+            }
+        }
     }
 }

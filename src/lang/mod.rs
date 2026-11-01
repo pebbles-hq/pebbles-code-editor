@@ -63,11 +63,19 @@ pub struct Token {
     pub len: usize,
     /// The token's semantic kind (drives its color).
     pub kind: TokenKind,
+    /// Its interned TextMate-like scope stack (`0` = none; see [`scope`]). A theme with
+    /// scope rules styles the token by this, falling back to [`kind`](Self::kind).
+    pub scope: scope::ScopeId,
 }
 
 impl Token {
     fn new(start: usize, len: usize, kind: TokenKind) -> Self {
-        Token { start, len, kind }
+        Token {
+            start,
+            len,
+            kind,
+            scope: 0,
+        }
     }
 }
 
@@ -238,6 +246,7 @@ pub use json::Json;
 pub use python::Python;
 pub use rust::Rust;
 
+pub mod scope;
 #[cfg(feature = "tree-sitter")]
 pub mod treesitter;
 #[cfg(feature = "tree-sitter")]

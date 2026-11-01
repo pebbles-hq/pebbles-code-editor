@@ -8,7 +8,12 @@
 
 use pebbles::prelude::Color;
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use crate::lang::TokenKind;
+use crate::lang::scope::ScopeId;
 
 /// The visual style of one syntax token: a color plus optional weight/slant/underline.
 /// This is what makes styling "not just colors" — a theme can render comments italic,
@@ -97,9 +102,59 @@ pub struct HighlightStyle {
     pub bracket_unmatched: TokenStyle,
     /// Identifiers / whitespace / unclassified tokens.
     pub plain: TokenStyle,
+    /// Optional per-scope styling (TextMate-style themes): tokens carrying a scope stack
+    /// are styled by it when it resolves, else by their kind.
+    pub scopes: Option<ScopeStyles>,
+}
+
+/// A scope-stack resolver with a per-scope cache (shared by clones).
+#[derive(Clone)]
+pub struct ScopeStyles {
+    resolve: Rc<dyn Fn(&str) -> Option<TokenStyle>>,
+    cache: Rc<RefCell<HashMap<ScopeId, Option<TokenStyle>>>>,
+}
+
+impl ScopeStyles {
+    /// Style tokens by `resolve(scope_stack)` (`None` = fall back to the token kind).
+    pub fn new(resolve: impl Fn(&str) -> Option<TokenStyle> + 'static) -> Self {
+        ScopeStyles {
+            resolve: Rc::new(resolve),
+            cache: Rc::new(RefCell::new(HashMap::new())),
+        }
+    }
+
+    /// The style for an interned scope stack (cached).
+    pub fn get(&self, id: ScopeId) -> Option<TokenStyle> {
+        if id == 0 {
+            return None;
+        }
+        if let Some(hit) = self.cache.borrow().get(&id) {
+            return *hit;
+        }
+        let st = crate::lang::scope::scope_name(id).and_then(|n| (self.resolve)(&n));
+        self.cache.borrow_mut().insert(id, st);
+        st
+    }
+}
+
+impl std::fmt::Debug for ScopeStyles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ScopeStyles")
+    }
 }
 
 impl HighlightStyle {
+    /// The style for a token: its scope stack when the theme has scope rules that match it,
+    /// else its kind.
+    pub fn style_token(&self, kind: TokenKind, scope: ScopeId) -> TokenStyle {
+        if let Some(sc) = &self.scopes
+            && let Some(st) = sc.get(scope)
+        {
+            return st;
+        }
+        self.style(kind)
+    }
+
     /// The full style for a token kind.
     pub fn style(&self, kind: TokenKind) -> TokenStyle {
         match kind {
@@ -183,6 +238,7 @@ impl HighlightStyle {
             brackets: vec![s(0xd19a66), s(0xc678dd), s(0x56b6c2)],
             // Not set by the theme: VS Code's default #ff1212cc.
             bracket_unmatched: TokenStyle::color(Color::from_rgba8(0xFF, 0x12, 0x12, 0xCC)),
+            scopes: None,
             plain: s(0xabb2bf),
         }
     }
@@ -230,6 +286,7 @@ impl HighlightStyle {
                 s(c(0x17, 0x9F, 0xFF)),
             ],
             bracket_unmatched: s(c(0xFF, 0x12, 0x12)),
+            scopes: None,
             plain: s(c(0xBC, 0xBE, 0xC4)),
         }
     }
@@ -268,6 +325,7 @@ impl HighlightStyle {
                 s(c(0x7B, 0x38, 0x14)),
             ],
             bracket_unmatched: s(c(0xCD, 0x31, 0x31)),
+            scopes: None,
             plain: s(c(0x08, 0x08, 0x08)),
         }
     }
@@ -300,6 +358,7 @@ impl HighlightStyle {
                 s(c(0x87, 0xCE, 0xFA)),
             ],
             bracket_unmatched: s(c(0xFF, 0x32, 0x32)),
+            scopes: None,
             plain: s(c(0xFF, 0xFF, 0xFF)),
         }
     }
@@ -332,6 +391,7 @@ impl HighlightStyle {
                 s(c(0x7B, 0x38, 0x14)),
             ],
             bracket_unmatched: s(c(0xB5, 0x20, 0x0D)),
+            scopes: None,
             plain: s(c(0x29, 0x29, 0x29)),
         }
     }
@@ -453,6 +513,10 @@ impl EditorTheme {
     /// The full style for a token kind (delegates to [`syntax`](Self::syntax)).
     pub fn style(&self, kind: TokenKind) -> TokenStyle {
         self.syntax.style(kind)
+    }
+    /// The style for a token's kind + scope stack (delegates to [`syntax`](Self::syntax)).
+    pub fn style_token(&self, kind: TokenKind, scope: ScopeId) -> TokenStyle {
+        self.syntax.style_token(kind, scope)
     }
 
     /// The editor theme matching the app's current Pebbles theme: [`light`](Self::light) or
@@ -980,5 +1044,25 @@ mod tests {
             assert!(contrast(t.gutter_fg, t.background) >= 7.0);
             assert!(contrast(t.caret, t.background) >= 7.0);
         }
+    }
+
+    #[test]
+    fn scope_styles_win_and_fall_back_to_kind() {
+        let mut h = EditorTheme::dark().syntax;
+        let red = Color::from_rgb8(255, 0, 0);
+        h.scopes = Some(ScopeStyles::new(move |stack| {
+            stack
+                .starts_with("source.rust ")
+                .then_some(TokenStyle::color(red))
+        }));
+        let rs = crate::lang::scope::intern_scope("source.rust keyword.other.rust");
+        let py = crate::lang::scope::intern_scope("source.python keyword.other.python");
+        assert_eq!(h.style_token(TokenKind::Keyword, rs).color, red);
+        assert_eq!(
+            h.style_token(TokenKind::Keyword, py).color,
+            h.keyword.color,
+            "unmatched scope falls back to the kind"
+        );
+        assert_eq!(h.style_token(TokenKind::Keyword, 0).color, h.keyword.color);
     }
 }

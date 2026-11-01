@@ -296,7 +296,7 @@ pub(crate) fn code_spans(
         if a > at {
             out.push(plain(&code[at..a]));
         }
-        let st = theme.style(t.kind);
+        let st = theme.style_token(t.kind, t.scope);
         let mut s = span(code[a..b].to_string())
             .font_family(mono)
             .size(fs)

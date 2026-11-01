@@ -131,14 +131,14 @@ pub(crate) fn panel(
                 while ti < tokens.len() && tokens[ti].start + tokens[ti].len <= byte {
                     ti += 1;
                 }
-                let kind = match tokens.get(ti) {
-                    Some(t) if t.start <= byte => t.kind,
-                    _ => TokenKind::Plain,
+                let (kind, scope) = match tokens.get(ti) {
+                    Some(t) if t.start <= byte => (t.kind, t.scope),
+                    _ => (TokenKind::Plain, 0),
                 };
-                let color = if kind == TokenKind::Plain {
+                let color = if kind == TokenKind::Plain && scope == 0 {
                     fg
                 } else {
-                    f.theme.style(kind).color
+                    f.theme.style_token(kind, scope).color
                 };
                 match run {
                     Some((_, c)) if c == color => {}
