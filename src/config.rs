@@ -138,6 +138,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         selection_handles: false,
         folds: None,
         snippets: Vec::new(),
+        language_configuration: None,
         builtin_snippets: true,
         breakpoints: None,
         soft_wrap: false,
@@ -233,6 +234,7 @@ pub struct CodeEditor {
     folds: Option<Signal<std::collections::BTreeSet<usize>>>,
     breakpoints: Option<Signal<std::collections::BTreeSet<usize>>>,
     snippets: Vec<crate::snippets::Snippet>,
+    language_configuration: Option<crate::langconfig::LanguageConfiguration>,
     builtin_snippets: bool,
     soft_wrap: bool,
     diff_base: Option<Signal<String>>,
@@ -563,6 +565,13 @@ impl CodeEditor {
         self.snippets = snippets.into();
         self
     }
+    /// Declarative editing behaviour (VS Code `language-configuration.json`): comments,
+    /// brackets, auto-closing / surrounding pairs, folding markers, indentation and on-Enter
+    /// rules. Overrides the [`Language`]'s comment and bracket metadata.
+    pub fn language_configuration(mut self, cfg: crate::langconfig::LanguageConfiguration) -> Self {
+        self.language_configuration = Some(cfg);
+        self
+    }
     /// Offer the language's built-in snippets ([`builtin_snippets`](crate::builtin_snippets);
     /// default on).
     pub fn builtin_snippets(mut self, v: bool) -> Self {
@@ -889,6 +898,7 @@ pub(crate) struct Props {
     pub(crate) folds: Option<Signal<std::collections::BTreeSet<usize>>>,
     pub(crate) breakpoints: Option<Signal<std::collections::BTreeSet<usize>>>,
     pub(crate) snippets: Vec<crate::snippets::Snippet>,
+    pub(crate) lang_cfg: Option<std::rc::Rc<crate::langconfig::Compiled>>,
     pub(crate) builtin_snippets: bool,
     pub(crate) soft_wrap: bool,
     pub(crate) diff_base: Option<Signal<String>>,
@@ -1020,6 +1030,9 @@ impl From<CodeEditor> for Props {
             folds: e.folds,
             breakpoints: e.breakpoints,
             snippets: e.snippets,
+            lang_cfg: e
+                .language_configuration
+                .map(|c| std::rc::Rc::new(crate::langconfig::Compiled::new(c))),
             builtin_snippets: e.builtin_snippets,
             soft_wrap: e.soft_wrap,
             diff_base: e.diff_base,

@@ -253,6 +253,40 @@ pub(crate) fn word_provider() -> CompletionProvider {
     })
 }
 
+/// Word-based suggestions where a word is a match of the language configuration's
+/// `wordPattern` (e.g. `?`/`!`-suffixed Elixir or Ruby names).
+pub(crate) fn pattern_word_provider(re: regex::Regex) -> CompletionProvider {
+    Rc::new(move |cx: &CompletionContext| {
+        const SPAN: usize = 16 * 1024;
+        let src = cx.src;
+        let lo = crate::geometry::floor_char_boundary(src, cx.cursor.saturating_sub(SPAN));
+        let mut hi = (cx.cursor + SPAN).min(src.len());
+        while !src.is_char_boundary(hi) {
+            hi += 1;
+        }
+        let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for m in re.find_iter(&src[lo..hi]) {
+            let (s, e) = (lo + m.start(), lo + m.end());
+            let w = m.as_str();
+            if w.chars().count() >= 2
+                && e != cx.cursor
+                && !w.chars().next().is_some_and(|c| c.is_ascii_digit())
+            {
+                let d = s.abs_diff(cx.cursor);
+                let x = seen.entry(w).or_insert(d);
+                *x = (*x).min(d);
+            }
+        }
+        let mut words: Vec<(&str, usize)> = seen.into_iter().collect();
+        words.sort_by_key(|&(w, d)| (d, w));
+        words
+            .into_iter()
+            .take(200)
+            .map(|(w, _)| CompletionItem::new(w, CompletionKind::Text))
+            .collect()
+    })
+}
+
 /// The identifier prefix start immediately before `caret`.
 pub(crate) fn prefix_start(src: &str, caret: usize) -> usize {
     let mut b = crate::geometry::floor_char_boundary(src, caret);

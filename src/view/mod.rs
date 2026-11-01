@@ -355,6 +355,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         create_signal(Rc::new(RefCell::new((String::new(), Rc::new(Vec::new())))));
     // Syntax fold-range cache: (parse version, ranges).
     #[allow(clippy::type_complexity)]
+    // Folding-marker regions cache: (text, base regions id, merged regions).
+    #[allow(clippy::type_complexity)]
+    let marker_folds: Signal<Rc<RefCell<(String, usize, Option<Rc<Vec<(usize, usize)>>>)>>> =
+        create_signal(Rc::new(RefCell::new((String::new(), 0, None))));
     let syntax_folds: Signal<Rc<RefCell<(u64, Option<Rc<Vec<(usize, usize)>>>)>>> =
         create_signal(Rc::new(RefCell::new((u64::MAX, None))));
     // Bracket-colorization prefix cache: (text before the window, bracket depth there).
@@ -649,16 +653,23 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     // Language-derived editing config (owned, so it can travel into the 'static handler).
     let cfg = Rc::new(EditCfg {
         tab: indent_unit.clone(),
-        line_comment: p
-            .language
-            .as_ref()
-            .and_then(|l| l.line_comment().map(String::from)),
-        brackets: p
-            .language
-            .as_ref()
-            .map(|l| l.brackets().to_vec())
-            .unwrap_or_else(|| DEFAULT_BRACKETS.to_vec()),
+        line_comment: match p.lang_cfg.as_ref().filter(|c| c.cfg.line_comment.is_some()) {
+            Some(c) => c.cfg.line_comment.clone(),
+            None => p
+                .language
+                .as_ref()
+                .and_then(|l| l.line_comment().map(String::from)),
+        },
+        brackets: match p.lang_cfg.as_ref().filter(|c| !c.cfg.brackets.is_empty()) {
+            Some(c) => crate::langconfig::char_pairs(&c.cfg.brackets),
+            None => p
+                .language
+                .as_ref()
+                .map(|l| l.brackets().to_vec())
+                .unwrap_or_else(|| DEFAULT_BRACKETS.to_vec()),
+        },
         auto_close: p.auto_close,
+        lang_cfg: p.lang_cfg.clone(),
     });
     // Editor command environment (shared by the raw-key resolver and the palette).
     let eff_fs = (p.fs + zoom.get()).max(6.0);
@@ -666,10 +677,17 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         tab: indent_unit.clone(),
         tab_size: tab_size.max(1),
         line_comment: cfg.line_comment.clone(),
-        block_comment: p.language.as_ref().and_then(|l| {
-            l.block_comment()
-                .map(|(a, b)| (a.to_string(), b.to_string()))
-        }),
+        block_comment: match p
+            .lang_cfg
+            .as_ref()
+            .filter(|c| c.cfg.block_comment.is_some())
+        {
+            Some(c) => c.cfg.block_comment.clone(),
+            None => p.language.as_ref().and_then(|l| {
+                l.block_comment()
+                    .map(|(a, b)| (a.to_string(), b.to_string()))
+            }),
+        },
         brackets: cfg.brackets.clone(),
     });
     let cmd_env = commands::Env {
@@ -789,10 +807,14 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         let cfg = cfg.clone();
         // The local completion source: the host's old-style provider, else word-based
         // suggestions (used when the language service does not do completion).
-        let local = p
-            .completion
-            .clone()
-            .or_else(|| p.word_based_suggestions.then(completion::word_provider));
+        let local = p.completion.clone().or_else(|| {
+            p.word_based_suggestions.then(|| {
+                match p.lang_cfg.as_ref().and_then(|c| c.word.clone()) {
+                    Some(re) => completion::pattern_word_provider(re),
+                    None => completion::word_provider(),
+                }
+            })
+        });
         // Snippets (built-in for the language + the host's) join the completion list.
         let mut snips = p.snippets.clone();
         if p.builtin_snippets
@@ -1539,6 +1561,27 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                         cmd_env.lsp.refresh(what);
                         None
                     }
+                    crate::controller::Request::InsertSnippet(body) => {
+                        let sel = cur.primary();
+                        // `\t` is one indent unit (as for completion snippets).
+                        let body = body.replace('\t', &cfg.tab);
+                        crate::snippet::insert(
+                            state,
+                            history,
+                            code,
+                            snippet,
+                            sel.min(),
+                            sel.max(),
+                            &body,
+                            Vec::new(),
+                            &crate::snippet::InsertOpts {
+                                uri: &p.document_uri,
+                                line_comment: cfg.line_comment.as_deref(),
+                                adjust_indent: true,
+                            },
+                        );
+                        None
+                    }
                 };
                 if let Some(sel) = sel {
                     state.set(EditorState {
@@ -1607,6 +1650,37 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             }
             fc.1.clone().filter(|r| !r.is_empty())
         });
+    // Language-configuration `folding.markers` regions join the syntax (or indentation)
+    // regions; a marker region replaces another region with the same head.
+    let syntax_regions = match &p.lang_cfg {
+        Some(lc)
+            if p.folding
+                && lc.cfg.folding_markers.is_some()
+                && src.len() <= SYNTAX_FOLD_MAX_BYTES =>
+        {
+            let cell = marker_folds.peek();
+            let mut mc = cell.borrow_mut();
+            let base_id = syntax_regions
+                .as_ref()
+                .map_or(0, |r| Rc::as_ptr(r) as usize);
+            if mc.0 != src.as_str() || mc.1 != base_id || mc.2.is_none() {
+                let marks = lc.marker_regions(&src);
+                let mut merged: Vec<(usize, usize)> = match &syntax_regions {
+                    Some(r) => r.to_vec(),
+                    None => crate::lines::regions_of(&src),
+                };
+                merged.retain(|x| !marks.iter().any(|m| m.0 == x.0));
+                merged.extend(marks);
+                merged.sort_unstable();
+                mc.0.clear();
+                mc.0.push_str(&src);
+                mc.1 = base_id;
+                mc.2 = Some(Rc::new(merged));
+            }
+            mc.2.clone()
+        }
+        _ => syntax_regions,
+    };
     let li = {
         let cell = line_cache.peek();
         let mut lc = cell.borrow_mut();
@@ -2087,13 +2161,17 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     };
     // Bracket-pair colorization over the rendered window: depth at the window start comes
     // from a cached prefix scan (re-scanned only when the text above the window changes).
+    let color_pairs: Vec<(char, char)> = match &p.lang_cfg {
+        Some(c) if c.cfg.colorized_bracket_pairs.is_some() => c.colorized(),
+        _ => cfg.brackets.clone(),
+    };
     let tokens: Rc<Vec<Token>> = if p.bracket_pair_colorization {
         let lo = vis_ranges.first().map_or(0, |r| r.0);
         let cell = bracket_cache.peek();
         let mut c = cell.borrow_mut();
         let prefix = &src[..lo];
         if c.0 != prefix {
-            c.1 = crate::highlight::bracket_depth(prefix, &cfg.brackets);
+            c.1 = crate::highlight::bracket_depth(prefix, &color_pairs);
             c.0.clear();
             c.0.push_str(prefix);
         }
@@ -2103,10 +2181,10 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         for &(a, b) in &vis_ranges {
             if a > at {
                 // Skipped (clipped) text between ranges still nests.
-                depth = crate::highlight::bracket_depth_from(depth, &src[at..a], &cfg.brackets);
+                depth = crate::highlight::bracket_depth_from(depth, &src[at..a], &color_pairs);
             }
-            let part = crate::highlight::bracket_tokens(&src, a, b, depth, &cfg.brackets, &tokens);
-            depth = crate::highlight::bracket_depth_from(depth, &src[a..b], &cfg.brackets);
+            let part = crate::highlight::bracket_tokens(&src, a, b, depth, &color_pairs, &tokens);
+            depth = crate::highlight::bracket_depth_from(depth, &src[a..b], &color_pairs);
             br.extend(part);
             at = b;
         }

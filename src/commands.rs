@@ -76,6 +76,8 @@ pub(crate) struct EditCfg {
     pub(crate) line_comment: Option<String>,
     pub(crate) brackets: Vec<(char, char)>,
     pub(crate) auto_close: bool,
+    /// The language configuration (VS Code `language-configuration.json`), when set.
+    pub(crate) lang_cfg: Option<Rc<crate::langconfig::Compiled>>,
 }
 
 pub(crate) fn apply_key(
@@ -153,6 +155,104 @@ pub(crate) fn apply_key(
             } else {
                 Coalesce::Never
             };
+            // A language configuration drives typing: auto-closing pairs (with `notIn`,
+            // `autoCloseBefore`, multi-char openers), surrounding pairs, closer overtype,
+            // and `decreaseIndentPattern` re-indent of the typed line.
+            if let Some(lc) = cfg.lang_cfg.as_ref()
+                && s.chars().count() == 1
+            {
+                let ch = s.chars().next().unwrap_or(' ');
+                let mut changes: Vec<Change> = Vec::new();
+                let mut out: Vec<Selection> = Vec::new();
+                let mut delta: isize = 0;
+                for r in &ranges {
+                    let shift = |p: usize| (p as isize + delta) as usize;
+                    let head = r.head;
+                    let at_caret = src.get(head..).and_then(|x| x.chars().next());
+                    if cfg.auto_close && r.is_empty() && at_caret == Some(ch) && lc.is_closer(ch) {
+                        out.push(Selection::caret(shift(next_char(&src, head))));
+                        continue;
+                    }
+                    if cfg.auto_close
+                        && !r.is_empty()
+                        && let Some((o, c)) = lc.surround(ch)
+                    {
+                        changes.push(Change {
+                            from: r.min(),
+                            to: r.min(),
+                            insert: o.clone(),
+                        });
+                        changes.push(Change {
+                            from: r.max(),
+                            to: r.max(),
+                            insert: c.clone(),
+                        });
+                        let lo = shift(r.min()) + o.len();
+                        let hi = shift(r.max()) + o.len();
+                        out.push(if r.head >= r.anchor {
+                            Selection::range(lo, hi)
+                        } else {
+                            Selection::range(hi, lo)
+                        });
+                        delta += (o.len() + c.len()) as isize;
+                        continue;
+                    }
+                    let (ins, caret) = match cfg.auto_close && r.is_empty() {
+                        true => lc
+                            .auto_close(&src, head, ch)
+                            .unwrap_or((s.clone(), s.len())),
+                        false => (s.clone(), s.len()),
+                    };
+                    changes.push(Change {
+                        from: r.min(),
+                        to: r.max(),
+                        insert: ins.clone(),
+                    });
+                    out.push(Selection::caret(shift(r.min()) + caret));
+                    delta += ins.len() as isize - (r.max() - r.min()) as isize;
+                }
+                let pi = primary_idx.min(out.len().saturating_sub(1));
+                let tx = if changes.is_empty() {
+                    Transaction::select(Selections::new(out, pi))
+                } else {
+                    Transaction::change_and_select(
+                        ChangeSet::from_changes(changes),
+                        Selections::new(out, pi),
+                    )
+                };
+                if tx.is_edit() {
+                    dispatch(state, history, code, tx, coalesce);
+                } else {
+                    let (next, _) = state.peek().apply(&tx);
+                    state.set(next);
+                    history.peek().borrow_mut().break_group();
+                }
+                // Re-indent the typed line when it now matches `decreaseIndentPattern`.
+                if !is_multi && !ch.is_whitespace() {
+                    let st2 = state.peek();
+                    let t2 = st2.text();
+                    let h2 = st2.primary().head;
+                    if let Some((a, b, ind)) = lc.reindent_line(&t2, h2, tab) {
+                        let caret = (h2 as isize + ind.len() as isize - (b - a) as isize) as usize;
+                        dispatch(
+                            state,
+                            history,
+                            code,
+                            Transaction::change_and_select(
+                                ChangeSet::from_changes(vec![Change {
+                                    from: a,
+                                    to: b,
+                                    insert: ind,
+                                }]),
+                                Selections::single(Selection::caret(caret)),
+                            ),
+                            Coalesce::Typing,
+                        );
+                    }
+                }
+                goal.set(col_of(&state.peek().text(), state.peek().primary().head));
+                return;
+            }
             // Language-aware reindent: typing a closing bracket on an otherwise-blank line
             // dedents that line one level, so `}` / `)` / `]` line up under their opener.
             if !is_multi && primary.is_empty() && s.chars().count() == 1 {
@@ -290,6 +390,45 @@ pub(crate) fn apply_key(
             replace(&s, coalesce);
         }
         KeyInput::Enter if !read_only => {
+            // A language configuration's on-Enter / indentation rules decide the new line.
+            if let Some(lc) = cfg.lang_cfg.as_ref() {
+                let mut changes: Vec<Change> = Vec::new();
+                let mut out: Vec<Selection> = Vec::new();
+                let mut delta: isize = 0;
+                for r in &ranges {
+                    let at = r.min();
+                    let (ins, caret) = lc.on_enter(&src, at, tab).unwrap_or_else(|| {
+                        let ls = line_start(&src, at);
+                        let ind: String = src[ls..at]
+                            .chars()
+                            .take_while(|c| *c == ' ' || *c == '\t')
+                            .collect();
+                        let t = format!("\n{ind}");
+                        let n = t.len();
+                        (t, n)
+                    });
+                    out.push(Selection::caret((at as isize + delta) as usize + caret));
+                    delta += ins.len() as isize - (r.max() - r.min()) as isize;
+                    changes.push(Change {
+                        from: r.min(),
+                        to: r.max(),
+                        insert: ins,
+                    });
+                }
+                let pi = primary_idx.min(out.len().saturating_sub(1));
+                dispatch(
+                    state,
+                    history,
+                    code,
+                    Transaction::change_and_select(
+                        ChangeSet::from_changes(changes),
+                        Selections::new(out, pi),
+                    ),
+                    Coalesce::Never,
+                );
+                goal.set(col_of(&state.peek().text(), state.peek().primary().head));
+                return;
+            }
             // Pressing Enter with the caret between a bracket pair (`{|}`) opens the block:
             // the caret lands on an indented middle line and the closer drops below it.
             if !is_multi && primary.is_empty() {

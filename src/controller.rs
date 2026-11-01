@@ -27,6 +27,8 @@ pub(crate) enum Request {
     ApplyEdits(Vec<crate::language::TextEdit>),
     /// Drop cached language-service results and ask again.
     Refresh(Refresh),
+    /// Insert a snippet body (VS Code snippet syntax) over the primary selection.
+    InsertSnippet(String),
 }
 
 /// Which language-service results [`EditorController::refresh`] re-requests — the LSP
@@ -125,6 +127,16 @@ impl EditorController {
     /// change (the server asked for a refresh, e.g. after a project reload).
     pub fn refresh(&self, what: Refresh) {
         self.requests.update(|r| r.push(Request::Refresh(what)));
+    }
+
+    /// Insert `body` (VS Code / LSP snippet syntax: `$1`, `${1:default}`, `${1|a,b|}`,
+    /// variables, `$0`) over the primary selection and start its tab-stop session — VS Code's
+    /// "Insert Snippet" (`editor.action.insertSnippet`). `$TM_SELECTED_TEXT` is the replaced
+    /// selection.
+    pub fn insert_snippet(&self, body: impl Into<String>) {
+        let body = body.into();
+        self.requests
+            .update(|r| r.push(Request::InsertSnippet(body)));
     }
 
     /// The last finished [`format_for_save`](Self::format_for_save) ticket (reactive).
