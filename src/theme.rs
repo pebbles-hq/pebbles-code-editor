@@ -2,8 +2,8 @@
 //! gutter, caret, selection, borders, scrollbar, diagnostics, …) and a [`HighlightStyle`]
 //! — the syntax palette, one [`TokenStyle`] (color + bold/italic/underline) per
 //! [`TokenKind`]. The two are separable: swap `theme.syntax` alone to re-color code without
-//! touching the UI chrome. Two of each are bundled ([`EditorTheme::dark`]/[`light`],
-//! [`HighlightStyle::dark`]/[`light`]); build your own by filling the struct, or compose one
+//! touching the UI chrome. Gravel Dark / Gravel Light (the defaults, [`EditorTheme::dark`]/[`light`]) and IntelliJ
+//! Dark / IntelliJ Light are bundled, by name via [`EditorTheme::named`]; build your own by filling the struct, or compose one
 //! over a base with an extension's `theme` transform.
 
 use pebbles::prelude::Color;
@@ -133,7 +133,104 @@ impl HighlightStyle {
         self.style(kind).color
     }
 
-    /// The dark syntax palette: IntelliJ IDEA's default New UI "Dark" editor scheme
+    /// The default dark syntax palette: Gravel Dark (= [`gravel_dark`](Self::gravel_dark)).
+    pub fn dark() -> Self {
+        Self::gravel_dark()
+    }
+
+    /// The default light syntax palette: Gravel Light (= [`gravel_light`](Self::gravel_light)).
+    pub fn light() -> Self {
+        Self::gravel_light()
+    }
+
+    /// Gravel Dark: the Gravel brand palette (purple / blue / green with teal, lavender, pink
+    /// and amber accents) for the near-black #0F0F11 editor. Keywords #B888FF, functions
+    /// #6CB0FF, strings #7FD18B, numbers #4FD1C5, types / namespaces #9AA8FF, macros #8FB4FF,
+    /// fields / constants #F29FC9 (upright), attributes #E6C07B, escapes #F2A65A, comments
+    /// #7D7F99, text and punctuation #CDD0E0; brackets cycle purple, blue, green, teal.
+    /// Every token is at least 4.5:1 on the editor and on the caret line.
+    pub fn gravel_dark() -> Self {
+        let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
+        let s = TokenStyle::color;
+        let (purple, blue, green, teal) = (
+            c(0xB8, 0x88, 0xFF),
+            c(0x6C, 0xB0, 0xFF),
+            c(0x7F, 0xD1, 0x8B),
+            c(0x4F, 0xD1, 0xC5),
+        );
+        let (lavender, pink, text) = (
+            c(0x9A, 0xA8, 0xFF),
+            c(0xF2, 0x9F, 0xC9),
+            c(0xCD, 0xD0, 0xE0),
+        );
+        HighlightStyle {
+            keyword: s(purple),
+            type_: s(lavender),
+            string: s(green),
+            number: s(teal),
+            comment: s(c(0x7D, 0x7F, 0x99)),
+            function: s(blue),
+            macro_: s(c(0x8F, 0xB4, 0xFF)),
+            attribute: s(c(0xE6, 0xC0, 0x7B)),
+            constant: s(pink),
+            punctuation: s(text),
+            property: s(pink),
+            escape: s(c(0xF2, 0xA6, 0x5A)),
+            tag: s(purple),
+            namespace: s(lavender),
+            heading: s(purple).bold(),
+            link: s(blue).underline(),
+            emphasis: s(text).italic(),
+            brackets: vec![s(purple), s(blue), s(green), s(teal)],
+            bracket_unmatched: s(c(0xFF, 0x6B, 0x6B)),
+            plain: s(text),
+        }
+    }
+
+    /// Gravel Light: the Gravel Dark hue families darkened for a white editor. Keywords
+    /// #7A3DF0, functions #1F6ED5, strings #2A803F, numbers #0D7E79, types / namespaces
+    /// #4B57C9, macros #3B63D0, fields / constants #C2357F, attributes #926900, escapes
+    /// #B5520F, comments #6D6F84, text #1A1A22. Every token is at least 4.5:1 on white and
+    /// on the #F5F5FA caret line.
+    pub fn gravel_light() -> Self {
+        let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
+        let s = TokenStyle::color;
+        let (purple, blue, green, teal) = (
+            c(0x7A, 0x3D, 0xF0),
+            c(0x1F, 0x6E, 0xD5),
+            c(0x2A, 0x80, 0x3F),
+            c(0x0D, 0x7E, 0x79),
+        );
+        let (lavender, pink, text) = (
+            c(0x4B, 0x57, 0xC9),
+            c(0xC2, 0x35, 0x7F),
+            c(0x1A, 0x1A, 0x22),
+        );
+        HighlightStyle {
+            keyword: s(purple),
+            type_: s(lavender),
+            string: s(green),
+            number: s(teal),
+            comment: s(c(0x6D, 0x6F, 0x84)),
+            function: s(blue),
+            macro_: s(c(0x3B, 0x63, 0xD0)),
+            attribute: s(c(0x92, 0x69, 0x00)),
+            constant: s(pink),
+            punctuation: s(text),
+            property: s(pink),
+            escape: s(c(0xB5, 0x52, 0x0F)),
+            tag: s(purple),
+            namespace: s(lavender),
+            heading: s(purple).bold(),
+            link: s(blue).underline(),
+            emphasis: s(text).italic(),
+            brackets: vec![s(purple), s(blue), s(green), s(teal)],
+            bracket_unmatched: s(c(0xD0, 0x31, 0x2D)),
+            plain: s(text),
+        }
+    }
+
+    /// The IntelliJ Dark syntax palette: IntelliJ IDEA's default New UI "Dark" editor scheme
     /// (`expUI_darkScheme.xml`): DEFAULT_KEYWORD #CF8E6D, DEFAULT_FUNCTION_DECLARATION
     /// #56A8F5, DEFAULT_INSTANCE_METHOD #57AAF7 (macros), DEFAULT_STRING #6AAB73,
     /// DEFAULT_NUMBER #2AACB8, DEFAULT_INSTANCE_FIELD / DEFAULT_CONSTANT #C77DBB,
@@ -141,7 +238,7 @@ impl HighlightStyle {
     /// DEFAULT_IDENTIFIER / DEFAULT_CLASS_REFERENCE #BCBEC4 on #1E1F22 (IDEA leaves types and
     /// modules in the text colour). Regular weight; constants italic as IDEA renders them. The comment grey #7A7E85 (4.0:1) is lifted
     /// to #84888F so every code token is at least 4.5:1 on the editor background.
-    pub fn dark() -> Self {
+    pub fn intellij_dark() -> Self {
         let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
         let s = TokenStyle::color;
         HighlightStyle {
@@ -174,13 +271,13 @@ impl HighlightStyle {
         }
     }
 
-    /// The light syntax palette: IntelliJ IDEA's default New UI "Light" editor scheme
+    /// The IntelliJ Light syntax palette: IntelliJ IDEA's default New UI "Light" editor scheme
     /// (`expUI_lightScheme.xml`): DEFAULT_KEYWORD #0033B3, DEFAULT_FUNCTION_DECLARATION /
     /// DEFAULT_STATIC_METHOD #00627A (macros), DEFAULT_STRING #067D17, DEFAULT_NUMBER #1750EB,
     /// DEFAULT_INSTANCE_FIELD / DEFAULT_CONSTANT #871094, DEFAULT_VALID_STRING_ESCAPE #0037A6,
     /// CTRL_CLICKABLE #006DCC, TEXT #080808 on white. The comment grey #8C8C8C and metadata #9E880D are darkened to #757575
     /// / #897300 so every code token is at least 4.5:1 on white; comments stay upright.
-    pub fn light() -> Self {
+    pub fn intellij_light() -> Self {
         let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
         let s = TokenStyle::color;
         HighlightStyle {
@@ -406,9 +503,150 @@ impl EditorTheme {
         }
     }
 
-    /// JetBrains New UI Dark editor chrome: #1E1F22 editor, #4B5059 / #A1A3AB line numbers,
-    /// #26282E caret row, #214283 selection, #2B2D30 popups.
+    /// The bundled named themes, by display name (`workbench.colorTheme` values).
+    pub const NAMES: [&'static str; 4] = [
+        "Gravel Dark",
+        "Gravel Light",
+        "IntelliJ Dark",
+        "IntelliJ Light",
+    ];
+
+    /// A bundled theme by display name (case-insensitive): see [`NAMES`](Self::NAMES).
+    pub fn named(name: &str) -> Option<Self> {
+        let n = name.trim().to_ascii_lowercase();
+        Some(match n.as_str() {
+            "gravel dark" => Self::gravel_dark(),
+            "gravel light" => Self::gravel_light(),
+            "intellij dark" => Self::intellij_dark(),
+            "intellij light" => Self::intellij_light(),
+            _ => return None,
+        })
+    }
+
+    /// The default dark theme: Gravel Dark.
     pub fn dark() -> Self {
+        Self::gravel_dark()
+    }
+
+    /// The default light theme: Gravel Light.
+    pub fn light() -> Self {
+        Self::gravel_light()
+    }
+
+    /// Gravel Dark chrome: near-black neutral #0F0F11 editor and gutter, #17171B caret line,
+    /// #4A4A55 / #A6A8BA line numbers, #22222A / #3A3A46 indent guides, #2E2A4A
+    /// purple-tinted selection, #B888FF caret, #1A1A1F popups with #26262D borders, #7C5CFF
+    /// accent.
+    pub fn gravel_dark() -> Self {
+        let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
+        let a = Color::from_rgba8;
+        EditorTheme {
+            background: c(0x0F, 0x0F, 0x11),
+            gutter_bg: c(0x0F, 0x0F, 0x11),
+            gutter_fg: c(0x4A, 0x4A, 0x55),
+            gutter_active_fg: c(0xA6, 0xA8, 0xBA),
+            current_line: c(0x17, 0x17, 0x1B),
+            caret: c(0xB8, 0x88, 0xFF),
+            selection: c(0x2E, 0x2A, 0x4A),
+            selection_inactive: c(0x22, 0x20, 0x33),
+            indent_guide: c(0x22, 0x22, 0x2A),
+            indent_guide_active: c(0x3A, 0x3A, 0x46),
+            whitespace: a(0xFF, 0xFF, 0xFF, 0x24),
+            ruler: a(0xFF, 0xFF, 0xFF, 0x10),
+            matching_bracket: a(0xB8, 0x88, 0xFF, 0x40),
+            foreground: c(0xCD, 0xD0, 0xE0),
+            border: c(0x26, 0x26, 0x2D),
+            overlay_bg: c(0x1A, 0x1A, 0x1F),
+            muted: c(0x8A, 0x8C, 0xA0),
+            accent: c(0x7C, 0x5C, 0xFF),
+            search_match: a(0xE6, 0xC0, 0x7B, 0x40),
+            search_match_current: a(0xE6, 0xC0, 0x7B, 0x80),
+            scrollbar: a(0xFF, 0xFF, 0xFF, 0x1E),
+            scrollbar_active: a(0xFF, 0xFF, 0xFF, 0x3C),
+            diag_error: c(0xF2, 0x77, 0x7A),
+            diag_warning: c(0xE6, 0xC0, 0x7B),
+            diag_info: c(0x6C, 0xB0, 0xFF),
+            diag_hint: c(0x8A, 0x8C, 0xA0),
+            diff_added: a(0x7F, 0xD1, 0x8B, 0x22),
+            diff_removed: a(0xF2, 0x77, 0x7A, 0xC0),
+            change_added: a(0x4F, 0xB8, 0x6A, 0xFF),
+            diff_removed_line: a(0xFF, 0x00, 0x00, 0x26),
+            diff_inserted_text: a(0x7F, 0xD1, 0x8B, 0x40),
+            diff_removed_text: a(0xFF, 0x00, 0x00, 0x40),
+            change_modified: a(0x6C, 0xB0, 0xFF, 0xFF),
+            change_deleted: a(0xF2, 0x77, 0x7A, 0xFF),
+            overview_cursor: a(0xA6, 0xA8, 0xBA, 0xCC),
+            unicode_highlight: a(0xE6, 0xC0, 0x7B, 0xFF),
+            bracket_guide: a(0xA6, 0xA8, 0xBA, 0x80),
+            ghost_text: a(0xFF, 0xFF, 0xFF, 0x56),
+            fold_badge: a(0x7C, 0x5C, 0xFF, 0x33),
+            linked_editing: a(0xFF, 0x00, 0x00, 0x4D),
+            breakpoint: c(0xE5, 0x14, 0x00),
+            syntax: HighlightStyle::gravel_dark(),
+            ui_font_size: 12.5,
+            ui_font_family: None,
+            overlay_radius: 8.0,
+        }
+    }
+
+    /// Gravel Light chrome: white editor, #F5F5FA caret line, #A8A9B8 / #5E6070 line
+    /// numbers, #ECECF2 / #B8B9C6 indent guides, #DCD3FC purple-tinted selection, #7A3DF0
+    /// caret, white popups with #E2E2E8 borders, #7C5CFF accent.
+    pub fn gravel_light() -> Self {
+        let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
+        let a = Color::from_rgba8;
+        EditorTheme {
+            background: c(0xFF, 0xFF, 0xFF),
+            gutter_bg: c(0xFF, 0xFF, 0xFF),
+            gutter_fg: c(0xA8, 0xA9, 0xB8),
+            gutter_active_fg: c(0x5E, 0x60, 0x70),
+            current_line: c(0xF5, 0xF5, 0xFA),
+            caret: c(0x7A, 0x3D, 0xF0),
+            selection: c(0xDC, 0xD3, 0xFC),
+            selection_inactive: c(0xEB, 0xE6, 0xFD),
+            indent_guide: c(0xEC, 0xEC, 0xF2),
+            indent_guide_active: c(0xB8, 0xB9, 0xC6),
+            whitespace: a(0x00, 0x00, 0x00, 0x24),
+            ruler: a(0x00, 0x00, 0x00, 0x0E),
+            matching_bracket: a(0x7A, 0x3D, 0xF0, 0x30),
+            foreground: c(0x1A, 0x1A, 0x22),
+            border: c(0xE2, 0xE2, 0xE8),
+            overlay_bg: c(0xFF, 0xFF, 0xFF),
+            muted: c(0x6D, 0x6F, 0x84),
+            accent: c(0x7C, 0x5C, 0xFF),
+            search_match: a(0xC9, 0x8A, 0x00, 0x33),
+            search_match_current: a(0xC9, 0x8A, 0x00, 0x66),
+            scrollbar: a(0x00, 0x00, 0x00, 0x22),
+            scrollbar_active: a(0x00, 0x00, 0x00, 0x44),
+            diag_error: c(0xC6, 0x28, 0x3C),
+            diag_warning: c(0x92, 0x69, 0x00),
+            diag_info: c(0x1F, 0x6E, 0xD5),
+            diag_hint: c(0x6D, 0x6F, 0x84),
+            diff_added: a(0x2A, 0x80, 0x3F, 0x1F),
+            diff_removed: a(0xC6, 0x28, 0x3C, 0xB0),
+            change_added: a(0x2E, 0xA0, 0x43, 0xFF),
+            diff_removed_line: a(0xFF, 0x00, 0x00, 0x26),
+            diff_inserted_text: a(0x9C, 0xCC, 0x2C, 0x40),
+            diff_removed_text: a(0xFF, 0x00, 0x00, 0x40),
+            change_modified: a(0x1F, 0x6E, 0xD5, 0xFF),
+            change_deleted: a(0xF8, 0x51, 0x49, 0xFF),
+            overview_cursor: a(0x60, 0x60, 0x60, 0xCC),
+            unicode_highlight: a(0xBF, 0x88, 0x03, 0xFF),
+            bracket_guide: a(0x60, 0x60, 0x60, 0x80),
+            ghost_text: a(0x00, 0x00, 0x00, 0x77),
+            fold_badge: a(0x7A, 0x3D, 0xF0, 0x26),
+            linked_editing: a(0xFF, 0x00, 0x00, 0x30),
+            breakpoint: c(0xE5, 0x14, 0x00),
+            syntax: HighlightStyle::gravel_light(),
+            ui_font_size: 12.5,
+            ui_font_family: None,
+            overlay_radius: 8.0,
+        }
+    }
+
+    /// IntelliJ Dark: JetBrains New UI Dark editor chrome: #1E1F22 editor, #4B5059 / #A1A3AB line numbers,
+    /// #26282E caret row, #214283 selection, #2B2D30 popups.
+    pub fn intellij_dark() -> Self {
         let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
         let a = Color::from_rgba8;
         EditorTheme {
@@ -453,16 +691,16 @@ impl EditorTheme {
             fold_badge: a(0x76, 0xB2, 0xF0, 0x33),
             linked_editing: a(0xFF, 0x00, 0x00, 0x4D),
             breakpoint: c(0xE5, 0x14, 0x00),
-            syntax: HighlightStyle::dark(),
+            syntax: HighlightStyle::intellij_dark(),
             ui_font_size: 12.5,
             ui_font_family: None,
             overlay_radius: 8.0,
         }
     }
 
-    /// JetBrains New UI Light editor chrome: white editor, #AEB3C2 / #767A8A line numbers,
+    /// IntelliJ Light: JetBrains New UI Light editor chrome: white editor, #AEB3C2 / #767A8A line numbers,
     /// #F5F8FE caret row, #A6D2FF selection.
-    pub fn light() -> Self {
+    pub fn intellij_light() -> Self {
         let c = |r, g, b| Color::from_rgba8(r, g, b, 0xFF);
         let a = Color::from_rgba8;
         EditorTheme {
@@ -507,7 +745,7 @@ impl EditorTheme {
             fold_badge: a(0x24, 0x5F, 0xC2, 0x26),
             linked_editing: a(0xFF, 0x00, 0x00, 0x30),
             breakpoint: c(0xE5, 0x14, 0x00),
-            syntax: HighlightStyle::light(),
+            syntax: HighlightStyle::intellij_light(),
             ui_font_size: 12.5,
             ui_font_family: None,
             overlay_radius: 8.0,
@@ -640,7 +878,12 @@ mod tests {
     #[test]
     fn default_syntax_keeps_code_regular_weight() {
         // JetBrains New UI Dark/Light: no bold keywords; comments kept upright.
-        for h in [HighlightStyle::dark(), HighlightStyle::light()] {
+        for h in [
+            HighlightStyle::gravel_dark(),
+            HighlightStyle::gravel_light(),
+            HighlightStyle::intellij_dark(),
+            HighlightStyle::intellij_light(),
+        ] {
             for k in [
                 TokenKind::Keyword,
                 TokenKind::Comment,
@@ -681,14 +924,54 @@ mod tests {
             K::Bracket(0),
             K::Bracket(1),
             K::Bracket(2),
+            K::Bracket(3),
         ];
-        for t in [EditorTheme::dark(), EditorTheme::light()] {
+        for name in EditorTheme::NAMES {
+            let t = EditorTheme::named(name).unwrap();
             for k in kinds {
                 let r = contrast(t.color(k), t.background);
-                assert!(r >= 4.5, "{k:?} contrast {r:.2}");
+                assert!(r >= 4.5, "{name} {k:?} contrast {r:.2}");
             }
             assert!(contrast(t.foreground, t.background) >= 7.0);
         }
+        // Gravel also keeps every token at 4.5:1 on the caret line and the plain text
+        // readable on the selection.
+        for t in [EditorTheme::gravel_dark(), EditorTheme::gravel_light()] {
+            for k in kinds {
+                let r = contrast(t.color(k), t.current_line);
+                assert!(r >= 4.5, "caret line {k:?} contrast {r:.2}");
+            }
+            assert!(contrast(t.color(K::BracketUnmatched), t.background) >= 4.5);
+            assert!(contrast(t.foreground, t.selection) >= 7.0);
+        }
+    }
+
+    #[test]
+    fn named_themes_resolve_and_gravel_is_the_default() {
+        for name in EditorTheme::NAMES {
+            assert!(EditorTheme::named(name).is_some(), "{name}");
+            assert!(EditorTheme::named(&name.to_uppercase()).is_some());
+        }
+        assert!(EditorTheme::named("Nope").is_none());
+        assert_eq!(
+            EditorTheme::dark().background,
+            EditorTheme::gravel_dark().background
+        );
+        assert_eq!(
+            EditorTheme::light().caret,
+            EditorTheme::gravel_light().caret
+        );
+        let near_black = EditorTheme::dark().background.to_rgba8();
+        assert_eq!(
+            (near_black.r, near_black.g, near_black.b),
+            (0x0F, 0x0F, 0x11)
+        );
+        assert!(!EditorTheme::dark().style(TokenKind::Constant).italic);
+        assert!(
+            EditorTheme::intellij_dark()
+                .style(TokenKind::Constant)
+                .italic
+        );
     }
 
     #[test]
