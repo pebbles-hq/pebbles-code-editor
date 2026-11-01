@@ -21,6 +21,8 @@ pub(crate) enum Request {
     Focus,
     /// Run a built-in editor command.
     Run(crate::actions::EditorCommand),
+    /// Run a built-in's editing intent.
+    Builtin(crate::keymap::BuiltinCommand),
     /// Format the document through the language service, then publish the ticket.
     FormatForSave(u64),
     /// Apply text edits as one undo step (a workspace edit from the host).
@@ -102,6 +104,12 @@ impl EditorController {
     /// any command from a host menu.
     pub fn run_command(&self, cmd: crate::actions::EditorCommand) {
         self.requests.update(|r| r.push(Request::Run(cmd)));
+    }
+
+    /// Run a built-in's editing intent (Find, Format, Ctrl+D, …) as if its chord were
+    /// pressed — for a host that resolves keys itself and disabled the defaults.
+    pub fn run_builtin(&self, cmd: crate::keymap::BuiltinCommand) {
+        self.requests.update(|r| r.push(Request::Builtin(cmd)));
     }
 
     /// Format on save (VS Code `editor.formatOnSave`): format the document through the

@@ -601,3 +601,66 @@ fn host_chords_run_the_host_command_and_keep_editor_chords() {
     h.press("Ctrl+K Ctrl+X".split(' ').nth(1).unwrap());
     assert_eq!(h.code.peek(), "a\nb\n");
 }
+
+#[test]
+fn host_resolver_sees_every_key_first_with_the_editor_state() {
+    use pebbles_code_editor::{BuiltinCommand, HostKey};
+    let seen = create_root_signal(Vec::<(usize, bool)>::new());
+    let k = |c: &str| pebbles::core::shortcuts::parse(c).unwrap();
+    let (ctrl_k, ctrl_e, x) = (k("Ctrl+K"), k("Ctrl+E"), k("X"));
+    let (alt_j, ctrl_q) = (k("Alt+J"), k("Ctrl+Q"));
+    let km = Keymap::new()
+        .unbind_all_commands()
+        .disable_all()
+        .host_resolver(move |seq, cx| {
+            seen.update(|v| v.push((seq.len(), cx.has_selection)));
+            if seq == [ctrl_e] {
+                HostKey::Handled
+            } else if seq == [ctrl_k] {
+                HostKey::Pending
+            } else if seq == [ctrl_k, x] {
+                HostKey::Handled
+            } else if seq == [alt_j] {
+                HostKey::Command(EditorCommand::MoveLinesDown)
+            } else if seq == [ctrl_q] {
+                HostKey::Builtin(BuiltinCommand::ToggleComment)
+            } else {
+                HostKey::Ignored
+            }
+        });
+    let mut h = harness_with("ab\ncd\n", km);
+    assert!(h.press("Ctrl+E"));
+    // A two-stroke host chord: X is not typed.
+    assert!(h.press("Ctrl+K"));
+    assert!(h.press("X"));
+    assert_eq!(h.code.peek(), "ab\ncd\n");
+    // Ignored keys reach the editor; its unbound defaults no longer run (Alt+Down).
+    h.press("Alt+Down");
+    assert_eq!(h.code.peek(), "ab\ncd\n", "Move Line Down is unbound");
+    h.ctrl.select((0, 0), (0, 2));
+    h.frame();
+    h.press("Ctrl+E");
+    assert_eq!(
+        seen.peek(),
+        vec![(1, false), (1, false), (2, false), (1, false), (1, true)]
+    );
+    seen.set(Vec::new());
+    // The resolver can name an editor command or a built-in to run right away.
+    h.caret(0, 0);
+    h.press("Alt+J");
+    assert_eq!(h.code.peek(), "cd\nab\n");
+    h.press("Ctrl+Q");
+    assert_eq!(
+        h.code.peek(),
+        "cd\n// ab\n",
+        "the caret moved with its line"
+    );
+    h.press("Ctrl+Q");
+    assert_eq!(h.code.peek(), "cd\nab\n");
+    // The host runs a disabled built-in through the controller.
+    h.ctrl.run_builtin(BuiltinCommand::ToggleComment);
+    h.frame();
+    h.frame();
+    assert_eq!(h.code.peek(), "cd\n// ab\n");
+    assert_eq!(BuiltinCommand::Find.id(), "actions.find");
+}

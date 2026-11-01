@@ -90,7 +90,9 @@ pub use extensions::{
     BlockWidget, Command, ConfigPatch, DecoStyle, Decoration, EditContext, Extension, GutterMark,
     Snapshot, extension,
 };
-pub use keymap::{BuiltinCommand, HostCommand, Keymap};
+pub use keymap::{
+    BuiltinCommand, HostCommand, HostKey, HostKeyContext, HostResolver, KeyStroke, Keymap,
+};
 pub use lang::{Language, SyntaxNode, SyntaxSession, Token, TokenKind, bracket_tree};
 pub use langconfig::{
     AutoClosingPair, IndentAction, IndentationRules, LanguageConfiguration, NotIn, OnEnterRule,

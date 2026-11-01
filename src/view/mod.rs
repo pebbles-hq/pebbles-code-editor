@@ -724,12 +724,18 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
         doc_uri: p.document_uri.clone(),
         lsp: lsp_ctl.clone(),
     };
+    // The built-in intent runner, for `EditorController::run_builtin` (set below).
+    type BuiltinRun = Rc<dyn Fn(KeyInput, bool) -> bool>;
+    let builtin_run: Rc<RefCell<Option<BuiltinRun>>> = Rc::new(RefCell::new(None));
     // Raw-key command resolver: runs BEFORE the framework maps the key to an editing intent,
     // so editor chords (Alt+Up, Ctrl+Shift+K, Ctrl+K Ctrl+0, …) win over caret motion.
     {
         let table = Rc::new(crate::actions::key_table(&p.keymap));
         let host_table = Rc::new(crate::actions::host_table(&p.keymap));
         let host_cmds = Rc::new(p.keymap.host_commands.clone());
+        let host_resolver = p.keymap.host_resolver.clone();
+        let builtin_run = builtin_run.clone();
+        let read_only = p.read_only;
         let env = cmd_env.clone();
         focus.on_key_event(Rc::new(move |ev: &pebbles::core::KeyEvent| {
             use pebbles::core::{KeyEventKind, KeyEventResult};
@@ -763,6 +769,46 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             }
             // A bare modifier press never resolves or cancels a pending chord.
             let pending = pending_keys.peek();
+            if let Some(r) = &host_resolver {
+                let mut seq = pending.clone();
+                seq.push(stroke);
+                let st = state.peek();
+                let ranges = st.selection.ranges();
+                let cx = crate::keymap::HostKeyContext {
+                    has_selection: ranges.iter().any(|s| !s.is_empty()),
+                    has_multiple_selections: ranges.len() > 1,
+                    read_only,
+                    find_widget_visible: find.open.peek() > 0,
+                };
+                match (r.0)(&seq, &cx) {
+                    crate::keymap::HostKey::Handled => {
+                        pending_keys.set(Vec::new());
+                        return KeyEventResult::Handled;
+                    }
+                    crate::keymap::HostKey::Pending => {
+                        pending_keys.set(seq);
+                        return KeyEventResult::Handled;
+                    }
+                    crate::keymap::HostKey::Command(cmd) => {
+                        pending_keys.set(Vec::new());
+                        return if commands::run(cmd, &env) {
+                            KeyEventResult::Handled
+                        } else {
+                            KeyEventResult::Ignored
+                        };
+                    }
+                    crate::keymap::HostKey::Builtin(b) => {
+                        pending_keys.set(Vec::new());
+                        let run = builtin_run.borrow().clone();
+                        return if run.is_some_and(|run| run(b.key(), true)) {
+                            KeyEventResult::Handled
+                        } else {
+                            KeyEventResult::Ignored
+                        };
+                    }
+                    crate::keymap::HostKey::Ignored => {}
+                }
+            }
             let host = crate::actions::resolve(&host_table, &pending, &stroke);
             if let crate::actions::Resolved::Run(i) = host {
                 pending_keys.set(Vec::new());
@@ -1426,6 +1472,7 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
             let h = handle.clone();
             focus.register_code_editor_bubbling(Rc::new(move |k: KeyInput| h(k, false)));
         }
+        *builtin_run.borrow_mut() = Some(handle.clone());
         // Host-added chords for built-ins (`Keymap::bind`), active only while focused.
         for (chord, cmd) in p.keymap.bindings.iter().cloned() {
             let h = handle.clone();
@@ -1544,6 +1591,13 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     }
                     crate::controller::Request::Run(cmd) => {
                         commands::run(cmd, &cmd_env);
+                        None
+                    }
+                    crate::controller::Request::Builtin(b) => {
+                        let run = builtin_run.borrow().clone();
+                        if let Some(run) = run {
+                            run(b.key(), true);
+                        }
                         None
                     }
                     crate::controller::Request::FormatForSave(t) => {

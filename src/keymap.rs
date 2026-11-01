@@ -21,6 +21,56 @@ impl std::fmt::Debug for HostCommand {
     }
 }
 
+/// What a [`Keymap::host_resolver`] did with a keystroke sequence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostKey {
+    /// The host ran a command for the sequence (the key is consumed, any chord ends).
+    Handled,
+    /// The sequence is the prefix of a host chord: wait for the next stroke.
+    Pending,
+    /// Not the host's: the editor resolves the key itself.
+    Ignored,
+    /// Run this editor command now (the key is consumed when the command applies, else it
+    /// falls through to the editing intents, as for a default chord).
+    Command(crate::actions::EditorCommand),
+    /// Run this built-in's editing intent now (as its default chord would).
+    Builtin(BuiltinCommand),
+}
+
+/// Editor state a [`Keymap::host_resolver`] can test (VS Code context keys
+/// `editorHasSelection`, `editorHasMultipleSelections`, `editorReadonly`,
+/// `findWidgetVisible`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HostKeyContext {
+    /// Some range selects text.
+    pub has_selection: bool,
+    /// More than one cursor.
+    pub has_multiple_selections: bool,
+    /// The editor is read-only.
+    pub read_only: bool,
+    /// The find / replace bar is open.
+    pub find_widget_visible: bool,
+}
+
+/// One keystroke: modifiers + key.
+pub type KeyStroke = (
+    pebbles::core::shortcuts::Mods,
+    pebbles::prelude::ShortcutKey,
+);
+
+/// The resolver function: pending strokes + the new one, and the editor's state.
+pub type HostResolveFn = dyn Fn(&[KeyStroke], &HostKeyContext) -> HostKey;
+
+/// The host's keybinding resolver (see [`Keymap::host_resolver`]).
+#[derive(Clone)]
+pub struct HostResolver(pub(crate) std::rc::Rc<HostResolveFn>);
+
+impl std::fmt::Debug for HostResolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HostResolver")
+    }
+}
+
 /// An editor command that has a built-in keybinding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BuiltinCommand {
@@ -43,6 +93,46 @@ pub enum BuiltinCommand {
 }
 
 impl BuiltinCommand {
+    /// Every built-in.
+    pub const ALL: &'static [BuiltinCommand] = &[
+        Self::Find,
+        Self::Replace,
+        Self::CommandPalette,
+        Self::TriggerCompletion,
+        Self::GoToDefinition,
+        Self::Format,
+        Self::SelectNextOccurrence,
+        Self::ToggleComment,
+    ];
+
+    /// The VS Code command id.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Find => "actions.find",
+            Self::Replace => "editor.action.startFindReplaceAction",
+            Self::CommandPalette => "editor.action.quickCommand",
+            Self::TriggerCompletion => "editor.action.triggerSuggest",
+            Self::GoToDefinition => "editor.action.revealDefinition",
+            Self::Format => "editor.action.formatDocument",
+            Self::SelectNextOccurrence => "editor.action.addSelectionToNextFindMatch",
+            Self::ToggleComment => "editor.action.commentLine",
+        }
+    }
+
+    /// The default chord (VS Code Linux).
+    pub fn default_key(self) -> &'static str {
+        match self {
+            Self::Find => "Ctrl+F",
+            Self::Replace => "Ctrl+H",
+            Self::CommandPalette => "Ctrl+Shift+P",
+            Self::TriggerCompletion => "Ctrl+Space",
+            Self::GoToDefinition => "F12",
+            Self::Format => "Shift+Alt+F",
+            Self::SelectNextOccurrence => "Ctrl+D",
+            Self::ToggleComment => "Ctrl+/",
+        }
+    }
+
     /// The command a framework intent invokes, if it is one of the overridable built-ins.
     pub fn of_key(k: &KeyInput) -> Option<Self> {
         Some(match k {
@@ -94,6 +184,8 @@ pub struct Keymap {
     pub(crate) command_bindings: Vec<(String, crate::actions::EditorCommand)>,
     /// Host (workbench) chords the focused editor runs instead of swallowing.
     pub(crate) host_commands: Vec<(String, HostCommand)>,
+    /// The host's resolver, asked first for every keystroke.
+    pub(crate) host_resolver: Option<HostResolver>,
 }
 
 impl Keymap {
@@ -166,6 +258,33 @@ impl Keymap {
     pub fn host_command(mut self, chord: impl Into<String>, f: impl Fn() + 'static) -> Self {
         self.host_commands
             .push((chord.into(), HostCommand(std::rc::Rc::new(f))));
+        self
+    }
+
+    /// Hand every keystroke to the host first (VS Code's keybinding service sitting above the
+    /// editor): `f` gets the pending chord strokes plus the new one and the editor's state,
+    /// and returns [`HostKey::Handled`] (consumed), [`HostKey::Pending`] (a chord prefix) or
+    /// [`HostKey::Ignored`] (the editor's own tables and editing intents take it). The
+    /// resolver is consulted live, so a host whose bindings change (a reloaded
+    /// `keybindings.json`) needs no new keymap.
+    pub fn host_resolver(
+        mut self,
+        f: impl Fn(&[KeyStroke], &HostKeyContext) -> HostKey + 'static,
+    ) -> Self {
+        self.host_resolver = Some(HostResolver(std::rc::Rc::new(f)));
+        self
+    }
+
+    /// Remove the default chords of **every** editor command (a host that resolves every
+    /// key itself through [`host_resolver`](Self::host_resolver)).
+    pub fn unbind_all_commands(mut self) -> Self {
+        self.unbound = crate::actions::EditorCommand::ALL.to_vec();
+        self
+    }
+
+    /// Disable the default chord of **every** built-in (see [`disable`](Self::disable)).
+    pub fn disable_all(mut self) -> Self {
+        self.disabled = BuiltinCommand::ALL.to_vec();
         self
     }
 
