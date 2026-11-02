@@ -30,7 +30,11 @@ pub(crate) fn overlay(
 ) -> AnyWidget {
     let lines = scoped_lines(f, scroll_top);
     if lines.is_empty() {
-        return scroller;
+        // The SAME tree shape as with headers (scroller at child 0 of a stack, an empty
+        // positioned slot after it): returning the bare scroller here re-parented the
+        // scroll view the moment the first header appeared, remounting it at offset 0 —
+        // a touchpad swipe (which has no programmatic goal to re-apply) jumped to the top.
+        return with_panel(scroller, container().into_widget(), 0.0);
     }
     let sl = scroll_left.get();
     let mut rows: Vec<AnyWidget> = Vec::new();
@@ -121,6 +125,11 @@ pub(crate) fn overlay(
     )
     .on_pointer_down(action_event(|_| {}))
     .on_hover_move(action_event(|_| {}));
+    with_panel(scroller, panel.into_widget(), sticky_h)
+}
+
+/// `scroller` with `panel` pinned over its top `h` px. Always one shape (see `overlay`).
+fn with_panel(scroller: AnyWidget, panel: AnyWidget, sticky_h: f64) -> AnyWidget {
     stack(children![
         scroller,
         // The scroller is the text column only: the minimap and the vertical bar are its

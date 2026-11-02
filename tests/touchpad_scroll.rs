@@ -176,3 +176,100 @@ fn fractional_line_deltas_accumulate_without_snapping_back() {
         );
     }
 }
+
+/// The owner's report: a long touchpad swipe (with big momentum bursts) runs fine for a
+/// while, then — well before the end of the file — jumps back to the top. Swipe the whole
+/// document and far past its end: the offset must only ever grow, and end pinned at max.
+#[test]
+fn long_touchpad_swipe_to_the_end_never_jumps_back_to_the_top() {
+    for smooth in [false, true] {
+        for beyond in [false, true] {
+            pebbles::core::keyboard::set_modifiers(false, false, false, false);
+            let code = create_root_signal(lines(3000));
+            let mut h = Harness::new().window(800.0, H);
+            h.mount_widget(
+                code_editor(code)
+                    .language(pebbles_code_editor::lang::by_name("rust"))
+                    .height(H)
+                    .smooth_scrolling(smooth)
+                    .scroll_beyond_last_line(beyond)
+                    .minimap(true)
+                    .on_scroll(|_| {}),
+            );
+            h.frames(3);
+            let at = Offset::new(300.0, 200.0);
+            let mut prev = top(&h);
+            for i in 0..2000 {
+                // Swipes of growing size plus momentum bursts up to 400 px per event.
+                let d = [8.0, 30.0, 120.0, 400.0, 2.5][i % 5];
+                h.wheel(at, Offset::new(0.0, d), ScrollUnit::Pixels);
+                let now = top(&h);
+                assert!(
+                    now >= prev - 0.01,
+                    "smooth={smooth} beyond={beyond} event {i}: jumped back {prev} -> {now}"
+                );
+                prev = now;
+            }
+            h.settle();
+            let id = h
+                .find_all::<RenderScroll>()
+                .into_iter()
+                .find(|&id| h.object::<RenderScroll>(id).axis == Axis::Vertical)
+                .unwrap();
+            let s = h.object::<RenderScroll>(id);
+            assert!(s.max_offset > 3000.0 * 10.0, "max {}", s.max_offset);
+            assert!(
+                (s.offset - s.max_offset).abs() < 1.0,
+                "smooth={smooth} beyond={beyond}: ends at {} of {}",
+                s.offset,
+                s.max_offset
+            );
+        }
+    }
+}
+
+/// Root cause of the owner's "jumps back to the top": once a scope header (sticky scroll)
+/// or the horizontal bar appeared, the editor wrapped its scroll view in a stack — a new
+/// tree position, so the scroll view was REMOUNTED at offset 0. Scroll a file whose first
+/// line opens a scope (and that has one long line further down), ticking the springs as
+/// the shell does, with the caret at 1:1: the offset must only grow.
+#[test]
+fn sticky_header_or_hbar_appearing_does_not_remount_the_scroll_view() {
+    for smooth in [false, true] {
+        pebbles::core::keyboard::set_modifiers(false, false, false, false);
+        let mut src = String::from("fn main() {\n");
+        for i in 0..1500 {
+            if i == 300 {
+                src.push_str(&format!("    let long = \"{}\";\n", "x".repeat(400)));
+            }
+            src.push_str(&format!("    let v{i} = {i};\n"));
+        }
+        src.push_str("}\n");
+        let code = create_root_signal(src);
+        let mut h = Harness::new().window(800.0, H);
+        h.mount_widget(
+            code_editor(code)
+                .language(pebbles_code_editor::lang::by_name("rust"))
+                .height(H)
+                .smooth_scrolling(smooth)
+                .sticky_scroll(true)
+                .on_scroll(|_| {}),
+        );
+        h.frames(3);
+        let at = Offset::new(300.0, 200.0);
+        let mut prev = top(&h);
+        for i in 0..900 {
+            let d = [6.0, 12.0, 30.0, 3.0][i % 4];
+            h.wheel(at, Offset::new(0.0, d), ScrollUnit::Pixels);
+            h.tick(1.0 / 60.0);
+            let now = top(&h);
+            assert!(
+                now >= prev - 0.01,
+                "smooth={smooth} event {i}: jumped back {prev} -> {now}"
+            );
+            prev = now;
+        }
+        h.settle();
+        assert!(top(&h) > 9000.0, "smooth={smooth}: ended at {}", top(&h));
+    }
+}

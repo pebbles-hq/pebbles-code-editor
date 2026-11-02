@@ -3024,22 +3024,24 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                 jump_v.to(t.min(jump_v.handle.max()), scroll_top);
             });
             let scroller = sticky::overlay(&frame, scroller, scroll_top, scroll_left, on_jump);
-            let scroller = match content_w.and_then(|cw| {
+            // One tree shape whether or not the horizontal bar shows (a long line scrolling
+            // into the window toggles it): switching between `scroller` and a stack
+            // re-parented the vertical scroll view, remounting it at offset 0.
+            let hb = content_w.and_then(|cw| {
                 scrollbar::horizontal(theme, hscroll.clone(), scroll_left, cw, h_view, hbar)
-            }) {
-                Some(hb) => stack(vec![
-                    scroller,
-                    Positioned::new(hb)
-                        .left(if p.gutter { gutter_w_est } else { 0.0 })
-                        .right(0.0)
-                        .bottom(0.0)
-                        .height(scrollbar::SIZE)
-                        .into_widget(),
-                ])
-                .fit(StackFit::Expand)
-                .into_widget(),
-                None => scroller,
-            };
+            });
+            let hb_h = if hb.is_some() { scrollbar::SIZE } else { 0.0 };
+            let scroller = stack(vec![
+                scroller,
+                Positioned::new(hb.unwrap_or_else(|| container().into_widget()))
+                    .left(if p.gutter { gutter_w_est } else { 0.0 })
+                    .right(0.0)
+                    .bottom(0.0)
+                    .height(hb_h)
+                    .into_widget(),
+            ])
+            .fit(StackFit::Expand)
+            .into_widget();
             // VS Code: text | minimap | ONE vertical bar at the right edge, the overview
             // ruler drawn in its track.
             let mut parts: Vec<AnyWidget> = vec![expanded(scroller).into_widget()];
