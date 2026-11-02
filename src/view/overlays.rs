@@ -36,7 +36,7 @@ pub(crate) fn build(f: &Frame) -> Vec<AnyWidget> {
     f.lsp.inlay_layers(f, &mut layers);
     diagnostics(f, &mut layers);
     whitespace(f, &mut layers);
-    carets(f, &mut layers);
+    // Carets are their own slice (`carets`), so the blink never rebuilds these layers.
     layers
 }
 
@@ -485,7 +485,7 @@ fn inlay_hints(f: &Frame, layers: &mut Vec<AnyWidget>) {
 }
 
 /// One blinking caret per cursor head in the visible window (all in phase).
-fn carets(f: &Frame, layers: &mut Vec<AnyWidget>) {
+pub(crate) fn carets(f: &Frame, layers: &mut Vec<AnyWidget>) {
     use crate::config::{CursorBlinking as B, CursorStyle as S};
     if !f.caret_on {
         return;

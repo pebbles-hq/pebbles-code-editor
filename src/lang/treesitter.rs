@@ -568,7 +568,10 @@ impl SyntaxSession for Session {
             if node.is_named() && depth > 0 && last > s {
                 out.push((s, last));
             }
-            if depth < 64 && cursor.goto_first_child() {
+            // A node on one line has only one-line descendants (never a region): skip its
+            // subtree. Most of the tree is such leaves, so this walk costs the multi-line
+            // nodes only (it ran on every keystroke over every token).
+            if depth < 64 && e > s && cursor.goto_first_child() {
                 depth += 1;
                 continue;
             }

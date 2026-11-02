@@ -21,20 +21,27 @@ use crate::view::{Frame, gutter};
 /// area and never wrapped. Clicking a header puts the caret at that line's start and scrolls the real line to where
 /// the header was
 /// (`on_jump(byte, scroll_target)`).
-pub(crate) fn overlay(
+///
+/// The panel is its own slice (see `panel`): the scroller is always child 0 of the same
+/// stack — returning the bare scroller when no header showed re-parented the scroll view
+/// the moment the first header appeared, remounting it at offset 0 (a touchpad swipe,
+/// which has no programmatic goal to re-apply, jumped to the top).
+pub(crate) fn overlay(scroller: AnyWidget, panel: AnyWidget) -> AnyWidget {
+    with_panel(scroller, panel)
+}
+
+/// The sticky-header panel for the current scroll offset (an empty 0-height box when no
+/// scope has scrolled above the top). Reads `scroll_top` untracked: the caller's slice
+/// subscribes to the scroll row instead, so this rebuilds once per row scrolled.
+pub(crate) fn panel(
     f: &Frame,
-    scroller: AnyWidget,
     scroll_top: Signal<f64>,
     scroll_left: Signal<f64>,
     on_jump: Rc<dyn Fn(usize, f64)>,
 ) -> AnyWidget {
     let lines = scoped_lines(f, scroll_top);
     if lines.is_empty() {
-        // The SAME tree shape as with headers (scroller at child 0 of a stack, an empty
-        // positioned slot after it): returning the bare scroller here re-parented the
-        // scroll view the moment the first header appeared, remounting it at offset 0 —
-        // a touchpad swipe (which has no programmatic goal to re-apply) jumped to the top.
-        return with_panel(scroller, container().into_widget(), 0.0);
+        return container().height(0.0).into_widget();
     }
     let sl = scroll_left.get();
     let mut rows: Vec<AnyWidget> = Vec::new();
@@ -125,11 +132,11 @@ pub(crate) fn overlay(
     )
     .on_pointer_down(action_event(|_| {}))
     .on_hover_move(action_event(|_| {}));
-    with_panel(scroller, panel.into_widget(), sticky_h)
+    panel.into_widget()
 }
 
 /// `scroller` with `panel` pinned over its top `h` px. Always one shape (see `overlay`).
-fn with_panel(scroller: AnyWidget, panel: AnyWidget, sticky_h: f64) -> AnyWidget {
+fn with_panel(scroller: AnyWidget, panel: AnyWidget) -> AnyWidget {
     stack(children![
         scroller,
         // The scroller is the text column only: the minimap and the vertical bar are its
@@ -138,7 +145,6 @@ fn with_panel(scroller: AnyWidget, panel: AnyWidget, sticky_h: f64) -> AnyWidget
             .left(0.0)
             .right(0.0)
             .top(0.0)
-            .height(sticky_h)
             .into_widget(),
     ])
     .fit(StackFit::Expand)
@@ -159,7 +165,7 @@ fn scoped_lines(f: &Frame, scroll_top: Signal<f64>) -> Vec<usize> {
             Some(s.chars().take_while(|c| *c == ' ' || *c == '\t').count())
         }
     };
-    let top = scroll_top.get();
+    let top = scroll_top.peek();
     // The buffer line at the viewport top, in visual-row space (folds collapse rows, soft
     // wrap splits them).
     let top_row = ((top - f.pad_t) / f.line_px).floor().max(0.0) as usize;

@@ -43,6 +43,7 @@
 #![forbid(unsafe_code)]
 
 pub mod actions;
+pub mod debug;
 pub mod edit;
 mod emmet;
 pub mod extensions;

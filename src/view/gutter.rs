@@ -11,9 +11,26 @@ use crate::view::Frame;
 
 /// Wrap `content` with the line-number gutter on its left (or return it unchanged when the
 /// gutter is disabled).
-pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
+pub(crate) fn wrap(f: &Frame, content: AnyWidget, numbers: AnyWidget) -> AnyWidget {
     if !f.p.gutter {
         return content;
+    }
+    let gutter_col = container()
+        .width(width(f))
+        .height(f.content_h)
+        .decoration(BoxDecoration::new().color(f.theme.gutter_bg))
+        .child(numbers)
+        .into_widget();
+    row(children![gutter_col, expanded(content)])
+        .cross_axis_alignment(CrossAxisAlignment::Start)
+        .into_widget()
+}
+
+/// The gutter's per-line cells (numbers, fold arrows, change bars, breakpoints, markers,
+/// the lightbulb) over the frame's window — the body of the gutter's scroll slice.
+pub(crate) fn numbers(f: &Frame) -> AnyWidget {
+    if !f.p.gutter {
+        return container().into_widget();
     }
     let (gutter_w, arrow_w, bp_w) = (width(f), ARROW_W, glyph_margin_w(f.p, f.line_px));
     let breakpoints = f.p.breakpoints.map(|s| (s, s.get()));
@@ -211,15 +228,7 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget) -> AnyWidget {
             .into_widget(),
         );
     }
-    let gutter_col = container()
-        .width(gutter_w)
-        .height(f.content_h)
-        .decoration(BoxDecoration::new().color(f.theme.gutter_bg))
-        .child(stack(nums).alignment(Alignment::TOP_LEFT))
-        .into_widget();
-    row(children![gutter_col, expanded(content)])
-        .cross_axis_alignment(CrossAxisAlignment::Start)
-        .into_widget()
+    stack(nums).alignment(Alignment::TOP_LEFT).into_widget()
 }
 
 /// The fold-arrow column at the gutter's right edge.

@@ -841,7 +841,11 @@ impl IntoWidget for CodeEditor {
             self.code.raw_id(),
             self.document_id.map_or_else(String::new, |d| d.to_string())
         );
-        keyed(key, component_props(render_editor, Props::from(self))).into_widget()
+        keyed(
+            key,
+            component_props(render_editor, std::rc::Rc::new(Props::from(self))),
+        )
+        .into_widget()
     }
 }
 
