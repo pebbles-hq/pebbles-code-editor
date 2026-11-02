@@ -262,13 +262,39 @@ pub(crate) fn word_range_at(src: &str, b: usize) -> Option<(usize, usize)> {
 pub(crate) struct VScroll {
     pub(crate) handle: ScrollHandle,
     pub(crate) smooth: Option<Signal<f64>>,
+    /// Where the last smooth scroll is heading (the base for the next wheel step while
+    /// it is still in flight, so rapid deltas accumulate instead of restarting).
+    pub(crate) goal: Rc<std::cell::Cell<f64>>,
 }
 
 impl VScroll {
+    /// The offset a relative scroll starts from: the in-flight smooth-scroll goal, else
+    /// the live offset.
+    pub(crate) fn base(&self) -> f64 {
+        match self.smooth {
+            Some(y) if (y.peek() - self.goal.get()).abs() > 0.5 => {
+                self.goal.get()
+            }
+            _ => self.handle.offset(),
+        }
+    }
+
+    /// Scroll to `t` immediately (cancelling any smooth scroll in flight) — touchpad
+    /// deltas, which the OS already smooths (and continues with kinetic momentum).
+    pub(crate) fn jump(&self, t: f64, scroll_top: Signal<f64>) {
+        self.goal.set(t);
+        if let Some(y) = self.smooth {
+            pebbles::core::animation::animate_to(y, t, 0.0);
+        }
+        self.handle.scroll_to(t);
+        scroll_top.set(t);
+    }
+
     /// Scroll to `t`; `scroll_top` (the virtualization window) follows the real offset.
     pub(crate) fn to(&self, t: f64, scroll_top: Signal<f64>) {
         match self.smooth {
             Some(y) => {
+                self.goal.set(t);
                 y.set(self.handle.offset());
                 pebbles::core::animation::animate_to(y, t, 0.125);
             }
@@ -382,6 +408,8 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
     let vscroll = VScroll {
         handle: scroll.clone(),
         smooth: p.smooth_scrolling.then_some(smooth_y),
+        // Held in a signal so it survives renders (like the handles above).
+        goal: create_signal(Rc::new(std::cell::Cell::new(0.0_f64))).peek(),
     };
     // Side-by-side diff: follow the other side's scroll offset.
     {
@@ -3045,12 +3073,20 @@ pub(crate) fn render_editor(p: &Props) -> AnyWidget {
                     if pebbles::core::keyboard::shift_held() || l.x != 0.0 || l.y == 0.0 {
                         return false;
                     }
-                    let base = wheel_v.handle.offset();
+                    // Rapid deltas accumulate onto the in-flight goal (restarting from the
+                    // lagging displayed offset each time dropped almost all of them).
+                    let base = wheel_v.base();
                     let t = (base + l.y * 3.0 * line_px).clamp(0.0, wheel_v.handle.max());
-                    if (t - base).abs() < 0.5 {
+                    if (t - base).abs() < 1e-3 {
                         return false; // at the edge: let an outer view scroll
                     }
-                    wheel_v.to(t, scroll_top);
+                    // A fractional line delta is a touchpad (X11 smooth scrolling): the
+                    // OS already smooths it, so follow it 1:1; whole notches animate.
+                    if l.y.fract().abs() > 1e-6 {
+                        wheel_v.jump(t, scroll_top);
+                    } else {
+                        wheel_v.to(t, scroll_top);
+                    }
                     true
                 })
                 .into_widget();
