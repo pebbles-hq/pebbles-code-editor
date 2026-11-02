@@ -3296,7 +3296,22 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         all.group = "9z_select".into();
         items.push(all);
         if let Some(host) = &p.context_menu_items {
-            items.extend(host(&ctx_now()));
+            // The state at build time, from the line index (no scan: this runs per render).
+            let pr = st.selection.primary();
+            let (a, b) = (pr.min().min(src.len()), pr.max().min(src.len()));
+            let head = pr.head.min(src.len());
+            let end = if b > a && src.as_bytes().get(b - 1) == Some(&b'\n') {
+                b - 1
+            } else {
+                b
+            };
+            let ctx = crate::annotations::MenuContext {
+                caret: (li.line_of(&src, head), li.col_of(&src, head)),
+                selected_lines: (a != b).then(|| (li.line_of(&src, a), li.line_of(&src, end))),
+                selected_text: src.get(a..b).unwrap_or_default().to_string(),
+                read_only: ro,
+            };
+            items.extend(host(&ctx));
         }
         let mut menu = context_menu(body).width(240.0);
         for row in crate::annotations::arrange(items) {
