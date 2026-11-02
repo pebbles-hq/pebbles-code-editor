@@ -272,9 +272,7 @@ impl VScroll {
     /// the live offset.
     pub(crate) fn base(&self) -> f64 {
         match self.smooth {
-            Some(y) if (y.peek() - self.goal.get()).abs() > 0.5 => {
-                self.goal.get()
-            }
+            Some(y) if (y.peek() - self.goal.get()).abs() > 0.5 => self.goal.get(),
             _ => self.handle.offset(),
         }
     }
