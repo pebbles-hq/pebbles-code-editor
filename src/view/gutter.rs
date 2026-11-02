@@ -11,7 +11,12 @@ use crate::view::Frame;
 
 /// Wrap `content` with the line-number gutter on its left (or return it unchanged when the
 /// gutter is disabled).
-pub(crate) fn wrap(f: &Frame, content: AnyWidget, numbers: AnyWidget) -> AnyWidget {
+pub(crate) fn wrap(
+    f: &Frame,
+    content: AnyWidget,
+    numbers: AnyWidget,
+    host: Option<(f64, AnyWidget)>,
+) -> AnyWidget {
     if !f.p.gutter {
         return content;
     }
@@ -21,7 +26,21 @@ pub(crate) fn wrap(f: &Frame, content: AnyWidget, numbers: AnyWidget) -> AnyWidg
         .decoration(BoxDecoration::new().color(f.theme.gutter_bg))
         .child(numbers)
         .into_widget();
-    row(children![gutter_col, expanded(content)])
+    let mut kids = Vec::new();
+    // The host column (blame annotations) sits left of the line numbers.
+    if let Some((w, cells)) = host {
+        kids.push(
+            container()
+                .width(w)
+                .height(f.content_h)
+                .decoration(BoxDecoration::new().color(f.theme.gutter_bg))
+                .child(cells)
+                .into_widget(),
+        );
+    }
+    kids.push(gutter_col);
+    kids.push(expanded(content).into_widget());
+    row(kids)
         .cross_axis_alignment(CrossAxisAlignment::Start)
         .into_widget()
 }
@@ -267,6 +286,14 @@ pub(crate) fn number_cell(f: &Frame, line: usize) -> AnyWidget {
             }),
         )
         .into_widget()
+}
+
+/// Width of the host gutter column (blame annotations; 0 when off). Untracked: the editor
+/// re-renders when the column toggles.
+pub(crate) fn host_w(f: &Frame) -> f64 {
+    f.p.gutter_annotations
+        .and_then(|s| s.peek().map(|c| c.width))
+        .unwrap_or(0.0)
 }
 
 /// Width of the breakpoint area (0 when breakpoints are not bound).

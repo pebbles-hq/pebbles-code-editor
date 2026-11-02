@@ -79,13 +79,13 @@ pub(crate) fn panel(
         if f.p.gutter {
             cells.push(
                 container()
-                    .width(gutter::width(f))
+                    .width(gutter::width(f) + gutter::host_w(f))
                     .height(f.line_px)
                     .decoration(BoxDecoration::new().color(f.theme.gutter_bg))
                     .child(
                         stack(children![
                             Positioned::new(gutter::number_cell(f, ln))
-                                .left(gutter::glyph_margin_w(f.p, f.line_px))
+                                .left(gutter::host_w(f) + gutter::glyph_margin_w(f.p, f.line_px))
                                 .top(0.0)
                                 .into_widget(),
                         ])

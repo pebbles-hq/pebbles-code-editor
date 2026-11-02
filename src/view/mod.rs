@@ -7,6 +7,7 @@
 //! shared chrome helpers live in [`chrome`]. This module keeps only the orchestration:
 //! reactive setup, the read-model, the mouse gestures, and the final assembly.
 
+mod annotations;
 mod chrome;
 mod commands;
 mod completion;
@@ -671,6 +672,8 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         crate::language::RequestGate::new(),
     ));
     let hover_pos = create_signal::<Option<Offset>>(None); // pointer pos for hover tooltip
+    // The line whose after-text annotation card is open (host `line_annotations`).
+    let ann_hover = create_signal::<Option<usize>>(None);
     let preedit = create_signal(String::new()); // IME composition (preedit) text, shown at caret
     // Fold state: use the caller-bound signal (persists across mounts / tabs) if given, else a
     // private one. `create_signal` runs unconditionally so the hook order never churns.
@@ -2068,11 +2071,16 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
     // Reading `folds` re-renders on fold/unfold. Soft wrap needs the measured content width; it
     // settles one frame after mount (use_bounds is a tracked signal), and is 0 until then.
     let bounds = use_bounds();
+    // The host gutter column (blame annotations): read here, so toggling it re-renders.
+    let host_col: Option<Rc<crate::annotations::GutterAnnotations>> =
+        p.gutter_annotations.and_then(|s| s.get()).map(Rc::new);
+    let host_col_w = host_col.as_ref().map_or(0.0, |c| c.width);
     let gutter_w_est = if p.gutter {
         line_count.to_string().len().max(2) as f64 * advance
             + 22.0
             + 14.0
             + gutter::glyph_margin_w(p, line_px)
+            + host_col_w
     } else {
         0.0
     };
@@ -2815,6 +2823,24 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             .into_widget(),
         );
     }
+    // Host end-of-line annotations (inline blame): their own slice, so a new annotation
+    // (the caret moved) re-renders only this layer.
+    let after_text = match p.line_annotations {
+        Some(sig) => {
+            let fd = fd.clone();
+            slice("after-text", move || {
+                let anns = sig.get();
+                if anns.is_empty() {
+                    return container().into_widget();
+                }
+                let _ = win_q.get();
+                let (first, last) = window_lines(&fd, scroll_top.peek());
+                let frame = fd.frame(first, last, &[], None, CaretView::default());
+                annotations::after_text_layer(&frame, &anns, ann_hover)
+            })
+        }
+        None => container().into_widget(),
+    };
     let popups = popup_layer(
         vec![
             picker_slot.pop(),
@@ -3193,10 +3219,14 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
     // The popup layer over the click area (a sibling, in the same content coordinates).
     let click_area = sized(
         box_h,
-        stack(vec![click_area.into_widget(), sized(box_h, popups)])
-            .fit(StackFit::Loose)
-            .alignment(Alignment::TOP_LEFT)
-            .into_widget(),
+        stack(vec![
+            click_area.into_widget(),
+            sized(box_h, after_text),
+            sized(box_h, popups),
+        ])
+        .fit(StackFit::Loose)
+        .alignment(Alignment::TOP_LEFT)
+        .into_widget(),
     );
     let content_area: AnyWidget = if content_w.is_some() {
         // Its own bar would sit under the document's last line (this view is the vertical
@@ -3225,50 +3255,66 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             gutter::numbers(&frame)
         })
     };
-    let body = gutter::wrap(&frame, content_area, numbers);
+    let host_cells = host_col.map(|col| {
+        let fd = fd.clone();
+        let w = col.width;
+        (
+            w,
+            slice("gutter-host", move || {
+                let _ = win_q.get();
+                let (first, last) = window_lines(&fd, scroll_top.peek());
+                let frame = fd.frame(first, last, &[], None, CaretView::default());
+                annotations::gutter_cells(&frame, &col)
+            }),
+        )
+    });
+    let body = gutter::wrap(&frame, content_area, numbers, host_cells);
 
     // Right-click menu driving the same edit commands as the keyboard.
     let body: AnyWidget = if p.context_menu {
-        let (c_cut, c_copy, c_paste, c_all) = (cfg.clone(), cfg.clone(), cfg.clone(), cfg.clone());
-        context_menu(body)
-            .item(menu_item("Cut").on_select(move || {
-                apply_key(KeyInput::Cut, state, history, code, goal, read_only, &c_cut)
-            }))
-            .item(menu_item("Copy").on_select(move || {
-                apply_key(
-                    KeyInput::Copy,
-                    state,
-                    history,
-                    code,
-                    goal,
-                    read_only,
-                    &c_copy,
-                )
-            }))
-            .item(menu_item("Paste").on_select(move || {
-                apply_key(
-                    KeyInput::Paste,
-                    state,
-                    history,
-                    code,
-                    goal,
-                    read_only,
-                    &c_paste,
-                )
-            }))
-            .separator()
-            .item(menu_item("Select All").on_select(move || {
-                apply_key(
-                    KeyInput::SelectAll,
-                    state,
-                    history,
-                    code,
-                    goal,
-                    read_only,
-                    &c_all,
-                )
-            }))
-            .into_widget()
+        // The editor's own items, merged with the host's (`context_menu_items`) by group.
+        let ro = read_only;
+        let ctx_now = move || {
+            let cur = state.peek();
+            let text = cur.text();
+            let pr = cur.selection.primary();
+            crate::annotations::menu_context(&text, pr.anchor, pr.head, ro)
+        };
+        let edit_item = |label: &str, order: i32, key: KeyInput| {
+            let c = cfg.clone();
+            crate::annotations::EditorMenuItem::new("9_cutcopypaste", label, move |_| {
+                apply_key(key.clone(), state, history, code, goal, read_only, &c)
+            })
+            .order(order)
+        };
+        let mut items = vec![
+            edit_item("Cut", 1, KeyInput::Cut),
+            edit_item("Copy", 2, KeyInput::Copy),
+            edit_item("Paste", 3, KeyInput::Paste),
+        ];
+        let mut all = edit_item("Select All", 1, KeyInput::SelectAll);
+        all.group = "9z_select".into();
+        items.push(all);
+        if let Some(host) = &p.context_menu_items {
+            items.extend(host(&ctx_now()));
+        }
+        let mut menu = context_menu(body).width(240.0);
+        for row in crate::annotations::arrange(items) {
+            match row {
+                None => menu = menu.separator(),
+                Some(it) => {
+                    let run = it.run.clone();
+                    let mut mi = menu_item(it.label.clone())
+                        .disabled(!it.enabled)
+                        .on_select(move || run(&ctx_now()));
+                    if let Some(k) = &it.shortcut {
+                        mi = mi.shortcut(k.clone());
+                    }
+                    menu = menu.item(mi);
+                }
+            }
+        }
+        menu.into_widget()
     } else {
         body
     };

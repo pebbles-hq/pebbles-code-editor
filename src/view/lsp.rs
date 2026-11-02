@@ -440,8 +440,9 @@ impl Lsp {
             return;
         }
         let me = self.clone();
+        // The timer can fire after the editor unmounted (its signals disposed).
         pebbles::core::animation::set_timeout(self.hover_timer(), self.hover_delay, move || {
-            if !me.h.hover_sticky.peek() {
+            if me.h.hover_sticky.try_peek() == Some(false) {
                 me.request_hover(byte, Some((pos.x, pos.y)));
             }
         });
@@ -451,7 +452,14 @@ impl Lsp {
     pub(crate) fn pointer_left(&self) {
         let me = self.clone();
         pebbles::core::animation::set_timeout(self.hover_timer(), 0.25, move || {
-            if !me.h.hover_sticky.peek() && me.h.hover.peek().is_some_and(|h| h.pointer.is_some()) {
+            if me.h.hover_sticky.try_peek() == Some(false)
+                && me
+                    .h
+                    .hover
+                    .try_peek()
+                    .flatten()
+                    .is_some_and(|h| h.pointer.is_some())
+            {
                 me.h.hover.set(None);
             }
         });

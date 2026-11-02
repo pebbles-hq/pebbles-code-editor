@@ -173,6 +173,9 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         cursor_style: CursorStyle::Line,
         on_stage_hunk: None,
         on_open_link: None,
+        line_annotations: None,
+        gutter_annotations: None,
+        context_menu_items: None,
         word_based_suggestions: true,
         overview_ruler: true,
         linked_editing: true,
@@ -252,6 +255,9 @@ pub struct CodeEditor {
     overview_ruler: bool,
     word_based_suggestions: bool,
     on_open_link: Option<LinkOpener>,
+    line_annotations: Option<Signal<Vec<crate::annotations::LineAnnotation>>>,
+    gutter_annotations: Option<Signal<Option<crate::annotations::GutterAnnotations>>>,
+    context_menu_items: Option<crate::annotations::MenuProvider>,
     on_stage_hunk: Option<StageHunk>,
     cursor_style: CursorStyle,
     cursor_blinking: CursorBlinking,
@@ -672,6 +678,36 @@ impl CodeEditor {
         self.on_open_link = Some(std::rc::Rc::new(f));
         self
     }
+    /// End-of-line "after text" annotations (GitLens inline blame): faded text after a line's
+    /// last character, with an optional hover card. The editor re-renders only the
+    /// annotation layer when `annotations` changes.
+    pub fn line_annotations(
+        mut self,
+        annotations: Signal<Vec<crate::annotations::LineAnnotation>>,
+    ) -> Self {
+        self.line_annotations = Some(annotations);
+        self
+    }
+    /// A host gutter column left of the line numbers (blame annotations); `None` hides it.
+    pub fn gutter_annotations(
+        mut self,
+        column: Signal<Option<crate::annotations::GutterAnnotations>>,
+    ) -> Self {
+        self.gutter_annotations = Some(column);
+        self
+    }
+    /// Contribute items to the right-click menu: `f` gets the editor's state when the menu
+    /// is built and returns items merged with the editor's own (Cut / Copy / Paste /
+    /// Select All) by group (see [`EditorMenuItem`](crate::EditorMenuItem)). Each item's
+    /// action receives the state at the moment it is chosen.
+    pub fn context_menu_items(
+        mut self,
+        f: impl Fn(&crate::annotations::MenuContext) -> Vec<crate::annotations::EditorMenuItem>
+        + 'static,
+    ) -> Self {
+        self.context_menu_items = Some(std::rc::Rc::new(f));
+        self
+    }
     /// Show **Stage** in the change peek: `f(hunk, current_text_of_the_hunk_lines)` stages that change (the host runs e.g. `git apply --cached`).
     pub fn on_stage_hunk(mut self, f: impl Fn(&crate::diff::ChangeHunk, &str) + 'static) -> Self {
         self.on_stage_hunk = Some(std::rc::Rc::new(f));
@@ -918,6 +954,9 @@ pub(crate) struct Props {
     pub(crate) overview_ruler: bool,
     pub(crate) word_based_suggestions: bool,
     pub(crate) on_open_link: Option<LinkOpener>,
+    pub(crate) line_annotations: Option<Signal<Vec<crate::annotations::LineAnnotation>>>,
+    pub(crate) gutter_annotations: Option<Signal<Option<crate::annotations::GutterAnnotations>>>,
+    pub(crate) context_menu_items: Option<crate::annotations::MenuProvider>,
     pub(crate) on_stage_hunk: Option<StageHunk>,
     pub(crate) cursor_style: CursorStyle,
     pub(crate) cursor_blinking: CursorBlinking,
@@ -1068,6 +1107,9 @@ impl From<CodeEditor> for Props {
             cursor_style: e.cursor_style,
             on_stage_hunk: e.on_stage_hunk,
             on_open_link: e.on_open_link,
+            line_annotations: e.line_annotations,
+            gutter_annotations: e.gutter_annotations,
+            context_menu_items: e.context_menu_items,
             word_based_suggestions: e.word_based_suggestions,
             overview_ruler: e.overview_ruler,
             linked_editing: e.linked_editing,

@@ -479,6 +479,9 @@ pub struct EditorTheme {
     pub ghost_text: Color,
     /// Background of the folded-region placeholder badge (`editor.foldPlaceholderForeground`).
     pub fold_badge: Color,
+    /// End-of-line "after text" annotations (inline blame): GitLens'
+    /// `gitlens.trailingLineForegroundColor` (#99999959), else `editorCodeLens.foreground`.
+    pub trailing_annotation: Color,
     /// Breakpoint dot in the glyph margin (`debugIcon.breakpointForeground`).
     pub breakpoint: Color,
     /// Outline of linked-editing ranges (`editor.linkedEditingBackground`).
@@ -617,6 +620,7 @@ impl EditorTheme {
             bracket_guide: xa(0xc8c8c859),
             ghost_text: xa(0xffffff56), // VS Code default
             fold_badge: xa(0x67769633),
+            trailing_annotation: xa(0x99999959),
             linked_editing: xa(0xd2e0ff1a),
             breakpoint: x(0xe51400), // VS Code default
             syntax: HighlightStyle::one_dark_pro_night_flat(),
@@ -677,6 +681,7 @@ impl EditorTheme {
             bracket_guide: a(0xA0, 0xA0, 0xA0, 0x80),
             ghost_text: a(0xFF, 0xFF, 0xFF, 0x56),
             fold_badge: a(0x76, 0xB2, 0xF0, 0x33),
+            trailing_annotation: a(0x99, 0x99, 0x99, 0x59),
             linked_editing: a(0xFF, 0x00, 0x00, 0x4D),
             breakpoint: c(0xE5, 0x14, 0x00),
             syntax: HighlightStyle::intellij_dark(),
@@ -731,6 +736,7 @@ impl EditorTheme {
             bracket_guide: a(0x60, 0x60, 0x60, 0x80),
             ghost_text: a(0x00, 0x00, 0x00, 0x77),
             fold_badge: a(0x24, 0x5F, 0xC2, 0x26),
+            trailing_annotation: a(0x99, 0x99, 0x99, 0x59),
             linked_editing: a(0xFF, 0x00, 0x00, 0x30),
             breakpoint: c(0xE5, 0x14, 0x00),
             syntax: HighlightStyle::intellij_light(),
@@ -785,6 +791,7 @@ impl EditorTheme {
             bracket_guide: c(0xFF, 0xFF, 0xFF),
             ghost_text: a(0xFF, 0xFF, 0xFF, 0x99),
             fold_badge: a(0x6F, 0xC3, 0xDF, 0x66),
+            trailing_annotation: a(0x99, 0x99, 0x99, 0x99),
             linked_editing: c(0xF3, 0x85, 0x18),
             breakpoint: c(0xE5, 0x14, 0x00),
             syntax: HighlightStyle::high_contrast_dark(),
@@ -839,6 +846,7 @@ impl EditorTheme {
             bracket_guide: c(0x29, 0x29, 0x29),
             ghost_text: a(0x00, 0x00, 0x00, 0x99),
             fold_badge: a(0x0F, 0x4A, 0x85, 0x40),
+            trailing_annotation: a(0x29, 0x29, 0x29, 0x99),
             linked_editing: c(0x00, 0x6B, 0xBD),
             breakpoint: c(0xE5, 0x14, 0x00),
             syntax: HighlightStyle::high_contrast_light(),

@@ -43,6 +43,7 @@
 #![forbid(unsafe_code)]
 
 pub mod actions;
+pub mod annotations;
 pub mod debug;
 pub mod edit;
 mod emmet;
@@ -75,6 +76,10 @@ mod theme;
 mod view;
 
 pub use actions::EditorCommand;
+pub use annotations::{
+    AnnotationAction, AnnotationHover, EditorMenuItem, GutterAnnotation, GutterAnnotations,
+    LineAnnotation, MenuContext, MenuProvider,
+};
 pub use collab::Edit;
 pub use config::{
     BreadcrumbPick, BreadcrumbSegment, CodeEditor, CursorBlinking, CursorStyle, LineNumbers,
