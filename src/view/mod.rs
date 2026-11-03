@@ -54,6 +54,9 @@ use chrome::status_bar;
 /// The per-frame read-model shared by the view builders: geometry, the resolved document
 /// snapshot, the selections, and the virtualized visible-line window. Pure values computed
 /// once per render — no signals, so the builders are pure functions of it.
+/// Runs a diff view's gutter hunk action `(hunk index, action index)`.
+pub(crate) type HunkRun = Rc<dyn Fn(usize, usize)>;
+
 pub(crate) struct Frame<'a> {
     pub(crate) p: &'a Props,
     pub(crate) theme: &'a EditorTheme,
@@ -99,6 +102,8 @@ pub(crate) struct Frame<'a> {
     pub(crate) focus: pebbles::core::focus::FocusNode,
     /// The open change-peek hunk (gutter change bars set it).
     pub(crate) change_peek: Signal<Option<usize>>,
+    /// Run diff hunk action `(hunk, action)` (the diff view's gutter buttons).
+    pub(crate) hunk_run: Option<HunkRun>,
     /// Whether the editor currently holds keyboard focus (drives active vs inactive selection).
     pub(crate) focused: bool,
     /// Highlight other occurrences of the selected word (off while the find bar is open).
@@ -235,6 +240,8 @@ pub(crate) struct FrameData {
     pub(crate) color_picker: Signal<Option<usize>>,
     pub(crate) focus: pebbles::core::focus::FocusNode,
     pub(crate) change_peek: Signal<Option<usize>>,
+    /// Run diff hunk action `(hunk, action)` (the diff view's gutter buttons).
+    pub(crate) hunk_run: Option<HunkRun>,
     pub(crate) highlight_word_matches: bool,
     pub(crate) doc_highlights: Option<Vec<(usize, usize, crate::language::DocumentHighlightKind)>>,
     pub(crate) ext_gutter_marks: Vec<GutterMark>,
@@ -290,6 +297,7 @@ impl FrameData {
             color_picker: self.color_picker,
             focus: self.focus,
             change_peek: self.change_peek,
+            hunk_run: self.hunk_run.clone(),
             highlight_word_matches: self.highlight_word_matches,
             doc_highlights: self.doc_highlights.clone(),
             diags: self.diags.clone(),
@@ -709,6 +717,10 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
     // the edited lines rather than the whole document. Shared with the autoscroll effect.
     // The current inlay widths, for the pointer mapping and autoscroll (outside the render).
     let inlay_hold = create_signal(Rc::new(RefCell::new(Rc::new(crate::fold::Inlays::new()))));
+    // The last render's gap rows (block widgets) and host-hidden ranges (a diff view's
+    // collapsed regions): pointer hit-testing and autoscroll map rows with them too.
+    let rows_hold: Signal<Rc<RefCell<(Rc<Vec<usize>>, Rc<Vec<(usize, usize)>>)>>> =
+        create_signal(Rc::new(RefCell::new(Default::default())));
     let line_cache = create_signal(Rc::new(RefCell::new(crate::lines::LineCache::default())));
     // Find/replace state.
     let find = search::State {
@@ -977,6 +989,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         line_px: eff_fs * p.lh,
         read_only,
         diff_base: p.diff_base,
+        diff_ignore_ws: p.diff_ignore_ws,
         ops: ops_cfg,
         line_cache,
         inline,
@@ -1850,12 +1863,28 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
                         let li = line_cache.peek().borrow_mut().sync(&text);
                         let line = line.min(li.line_count().saturating_sub(1));
                         let wc = wrap_hold.peek().get();
-                        let row = if wc == 0 && folds.peek().is_empty() {
+                        let (gaps, hid) = rows_hold.peek().borrow().clone();
+                        let row = if wc == 0
+                            && folds.peek().is_empty()
+                            && gaps.is_empty()
+                            && hid.is_empty()
+                        {
                             line
                         } else {
-                            crate::fold::DisplayMap::for_index(&li, &folds.peek(), wc, &[])
-                                .place(line, 0)
-                                .0
+                            crate::fold::DisplayMap::for_index_hidden(
+                                &li,
+                                &folds.peek(),
+                                wc,
+                                if gaps.len() == li.line_count() {
+                                    &gaps
+                                } else {
+                                    &[]
+                                },
+                                Default::default(),
+                                &hid,
+                            )
+                            .place(line, 0)
+                            .0
                         };
                         let t = (10.0 + row as f64 * line_px - line_px).max(0.0);
                         vscroll.to(t, scroll_top);
@@ -2062,9 +2091,13 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
     }
 
     // Inline diff against the base (added lines + removed markers), recomputed reactively.
-    let line_diff = p
-        .diff_base
-        .map(|base| Rc::new(crate::diff::diff_lines(&base.get(), &src)));
+    let line_diff = p.diff_base.map(|base| {
+        Rc::new(crate::diff::diff_lines_ws(
+            &base.get(),
+            &src,
+            p.diff_ignore_ws,
+        ))
+    });
 
     // ---- folding + soft wrap: buffer-line ↔ visual-row map ----
     // The whole view renders in VISUAL-ROW space (folded lines collapse, wrapped lines split).
@@ -2147,6 +2180,47 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             });
         }
     }
+    // The diff view's gutter hunk buttons (Stage / Revert / Unstage Change): resolved
+    // against the hunks at click time.
+    let hunk_run: Option<HunkRun> = match p.diff_base {
+        Some(base) if !p.diff_hunk_actions.is_empty() => {
+            let actions = Rc::new(p.diff_hunk_actions.clone());
+            let ws = p.diff_ignore_ws;
+            Some(Rc::new(move |hi: usize, ai: usize| {
+                let text = state.peek().text();
+                let base_text = base.peek();
+                let d = crate::diff::diff_lines_ws(&base_text, &text, ws);
+                let (Some(h), Some(a)) = (d.hunks.get(hi), actions.get(ai)) else {
+                    return;
+                };
+                match &a.run {
+                    crate::config::DiffHunkRun::Revert => {
+                        let (from, to, ins) = crate::diff::revert_hunk(&base_text, &text, h);
+                        dispatch(
+                            state,
+                            history,
+                            code,
+                            Transaction::change_and_select(
+                                ChangeSet::replace(from, to, ins),
+                                Selections::single(Selection::caret(from.min(text.len()))),
+                            ),
+                            Coalesce::Never,
+                        );
+                    }
+                    crate::config::DiffHunkRun::Host(f) => {
+                        let cur: String = text
+                            .split('\n')
+                            .skip(h.cur.start)
+                            .take(h.cur.len())
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        f(h, &cur);
+                    }
+                }
+            }) as HunkRun)
+        }
+        _ => None,
+    };
     // The change peek (gutter change-bar click) is an internal block widget.
     if let (Some(d), Some(base)) = (line_diff.as_ref(), p.diff_base) {
         let cx = peek::PeekCtx {
@@ -2197,6 +2271,13 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
     }
     // Diff editor (side-by-side / inline): word highlights, removed rows, filler rows.
     let diff_parts = diffview::parts(p, &src, eff_fs, line_px);
+    let diff_hidden: Vec<(usize, usize)> = diff_parts
+        .hidden
+        .iter()
+        .copied()
+        .filter(|&(a, _)| a < line_count)
+        .map(|(a, b)| (a, b.min(line_count - 1)))
+        .collect();
     block_widgets.extend(
         diff_parts
             .blocks
@@ -2221,13 +2302,17 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         inlay::slots(&src, &li, &props, &lsp_hints)
     });
     inlay_hold.peek().replace(inlay_slots.map.clone());
-    let disp = std::rc::Rc::new(crate::fold::DisplayMap::for_index_inlays(
+    let disp = std::rc::Rc::new(crate::fold::DisplayMap::for_index_hidden(
         &li,
         &folds.get(),
         wrap_cols,
         &block_gaps,
         inlay_slots.map.clone(),
+        &diff_hidden,
     ));
+    rows_hold
+        .peek()
+        .replace((Rc::new(block_gaps.clone()), Rc::new(diff_hidden.clone())));
     let display_rows = disp.rows();
     let content_h = display_rows as f64 * line_px + pad_t * 2.0;
     wrap_hold.peek().set(wrap_cols); // publish to the autoscroll effect
@@ -2249,11 +2334,18 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         let nlines = text.split('\n').count().max(1);
         let fset = folds.peek();
         let inl = inlay_hold.peek().borrow().clone();
-        if wrap_cols == 0 && fset.is_empty() && inl.is_empty() {
+        let (gaps, hid) = rows_hold.peek().borrow().clone();
+        if wrap_cols == 0 && fset.is_empty() && inl.is_empty() && gaps.is_empty() && hid.is_empty()
+        {
             return byte_at(text, row.min(nlines - 1), xcol);
         }
         let li = line_cache.peek().borrow_mut().sync(text);
-        let map = crate::fold::DisplayMap::for_index_inlays(&li, &fset, wrap_cols, &[], inl);
+        let gaps: &[usize] = if gaps.len() == li.line_count() {
+            &gaps
+        } else {
+            &[]
+        };
+        let map = crate::fold::DisplayMap::for_index_hidden(&li, &fset, wrap_cols, gaps, inl, &hid);
         let xf = ((pos.x - pad_l) / advance).max(0.0);
         let (line, col) = map.hit(row, xf, |l| li.char_lens().get(l).copied().unwrap_or(0));
         byte_at(text, line, col)
@@ -2289,10 +2381,21 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             // The caret's DISPLAY row (fold/wrap-aware), so autoscroll targets the right place.
             let wc = wrap_hold.peek().get();
             let inl = inlay_hold.peek().borrow().clone();
-            let (drow, xcol) = if wc == 0 && folds.peek().is_empty() && inl.is_empty() {
+            let (gaps, hid) = rows_hold.peek().borrow().clone();
+            let (drow, xcol) = if wc == 0
+                && folds.peek().is_empty()
+                && inl.is_empty()
+                && gaps.is_empty()
+                && hid.is_empty()
+            {
                 (line, col)
             } else {
-                crate::fold::DisplayMap::for_index_inlays(&li, &folds.peek(), wc, &[], inl)
+                let gaps: &[usize] = if gaps.len() == li.line_count() {
+                    &gaps
+                } else {
+                    &[]
+                };
+                crate::fold::DisplayMap::for_index_hidden(&li, &folds.peek(), wc, gaps, inl, &hid)
                     .place(line, col)
             };
             let top = pad_t + drow as f64 * line_px;
@@ -2618,6 +2721,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         color_picker,
         focus,
         change_peek,
+        hunk_run,
         highlight_word_matches: find.open.get() == 0,
         doc_highlights: lsp_ctl.h.highlights.get(),
         ext_gutter_marks: ext_gutter_marks.clone(),

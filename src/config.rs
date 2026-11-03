@@ -32,6 +32,49 @@ pub type BreadcrumbPick = std::rc::Rc<dyn Fn(usize, &str)>;
 
 /// The host's link opener (`CodeEditor::on_open_link`).
 pub(crate) type LinkOpener = std::rc::Rc<dyn Fn(&str)>;
+/// A per-hunk gutter button of a diff view ([`CodeEditor::diff_hunk_actions`]).
+#[derive(Clone)]
+pub struct DiffHunkAction {
+    /// The tooltip / accessibility label ("Stage Change", "Revert Change", …).
+    pub label: String,
+    /// The button icon.
+    pub icon: IconData,
+    /// What clicking does.
+    pub run: DiffHunkRun,
+}
+
+/// What a [`DiffHunkAction`] does.
+#[derive(Clone)]
+pub enum DiffHunkRun {
+    /// Revert the hunk in this editor's buffer to the base lines (undoable).
+    Revert,
+    /// Call the host with the hunk and the current text of its lines (e.g. stage it).
+    Host(std::rc::Rc<dyn Fn(&crate::diff::ChangeHunk, &str)>),
+}
+
+impl DiffHunkAction {
+    /// A built-in Revert Change button.
+    pub fn revert() -> Self {
+        DiffHunkAction {
+            label: "Revert Change".into(),
+            icon: tabler::ARROW_BACK_UP,
+            run: DiffHunkRun::Revert,
+        }
+    }
+    /// A host button.
+    pub fn host(
+        label: impl Into<String>,
+        icon: IconData,
+        f: impl Fn(&crate::diff::ChangeHunk, &str) + 'static,
+    ) -> Self {
+        DiffHunkAction {
+            label: label.into(),
+            icon,
+            run: DiffHunkRun::Host(std::rc::Rc::new(f)),
+        }
+    }
+}
+
 /// The host's stage-hunk callback (`CodeEditor::on_stage_hunk`).
 pub(crate) type StageHunk = std::rc::Rc<dyn Fn(&crate::diff::ChangeHunk, &str)>;
 use crate::extensions::Extension;
@@ -164,6 +207,9 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         diff_original_of: None,
         diff_align: false,
         scroll_link: None,
+        diff_ignore_ws: false,
+        diff_collapse: None,
+        diff_hunk_actions: Vec::new(),
         inline_suggestions: None,
         line_numbers: LineNumbers::On,
         smooth_caret: false,
@@ -283,6 +329,9 @@ pub struct CodeEditor {
     diff_original_of: Option<Signal<String>>,
     diff_align: bool,
     scroll_link: Option<Signal<f64>>,
+    diff_ignore_ws: bool,
+    diff_collapse: Option<Signal<std::collections::BTreeSet<usize>>>,
+    diff_hunk_actions: Vec<DiffHunkAction>,
 }
 
 /// Fired after each change with the minimal [`Edit`] delta; `remote` is true when the change
@@ -865,6 +914,28 @@ impl CodeEditor {
         self.scroll_link = Some(link);
         self
     }
+    /// Diff views: lines differing only in leading/trailing whitespace count as unchanged
+    /// (VS Code's `diffEditor.ignoreTrimWhitespace`).
+    pub fn diff_ignore_whitespace(mut self, v: bool) -> Self {
+        self.diff_ignore_ws = v;
+        self
+    }
+    /// Diff views: collapse unchanged regions into "N hidden lines" bars (VS Code's
+    /// `diffEditor.hideUnchangedRegions`). `expanded` holds the indices of regions the user
+    /// expanded (click a bar); share it between both sides of a side-by-side diff.
+    pub fn diff_collapse_unchanged(
+        mut self,
+        expanded: Signal<std::collections::BTreeSet<usize>>,
+    ) -> Self {
+        self.diff_collapse = Some(expanded);
+        self
+    }
+    /// Per-hunk buttons in the gutter at each change's first line (VS Code's diff editor
+    /// gutter: Stage / Revert / Unstage Change).
+    pub fn diff_hunk_actions(mut self, actions: Vec<DiffHunkAction>) -> Self {
+        self.diff_hunk_actions = actions;
+        self
+    }
 }
 
 impl IntoWidget for CodeEditor {
@@ -982,6 +1053,9 @@ pub(crate) struct Props {
     pub(crate) diff_original_of: Option<Signal<String>>,
     pub(crate) diff_align: bool,
     pub(crate) scroll_link: Option<Signal<f64>>,
+    pub(crate) diff_ignore_ws: bool,
+    pub(crate) diff_collapse: Option<Signal<std::collections::BTreeSet<usize>>>,
+    pub(crate) diff_hunk_actions: Vec<DiffHunkAction>,
 }
 
 impl From<CodeEditor> for Props {
@@ -1098,6 +1172,9 @@ impl From<CodeEditor> for Props {
             diff_original_of: e.diff_original_of,
             diff_align: e.diff_align,
             scroll_link: e.scroll_link,
+            diff_ignore_ws: e.diff_ignore_ws,
+            diff_collapse: e.diff_collapse,
+            diff_hunk_actions: e.diff_hunk_actions,
             inline_suggestions: e.inline_suggestions,
             line_numbers: e.line_numbers,
             smooth_caret: e.smooth_caret,

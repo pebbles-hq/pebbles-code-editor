@@ -9,7 +9,8 @@ use std::rc::Rc;
 use pebbles::core::create_root_signal;
 use pebbles::prelude::*;
 use pebbles_code_editor::{
-    ChangeHunk, CursorBlinking, CursorStyle, LineNumbers, code_editor, editor_controller, lang,
+    ChangeHunk, CursorBlinking, CursorStyle, DiffHunkAction, LineNumbers, code_editor,
+    editor_controller, lang,
 };
 use pebbles_testing::Harness;
 
@@ -357,6 +358,65 @@ fn side_by_side_diff_editor_scrolls_both_sides_together() {
     assert!(moved.windows(2).any(|w| (w[0] - w[1]).abs() < 0.5), "{o:?}");
     // Editing the modified side keeps the original untouched.
     assert!(original.get().contains("line 5\n"));
+}
+
+#[test]
+fn diff_editor_collapses_unchanged_regions_and_runs_hunk_buttons() {
+    for side_by_side in [true, false] {
+        pebbles::widgets::overlay::init();
+        pebbles::core::focus::init();
+        let base: String = (0..60).map(|i| format!("line {i}\n")).collect();
+        let cur = base
+            .replace("line 10\n", "line ten\n")
+            .replace("line 40\n", "  line 40  \n");
+        let original = create_root_signal(base.clone());
+        let modified = create_root_signal(cur);
+        let staged: Rc<RefCell<Vec<(ChangeHunk, String)>>> = Rc::default();
+        let st = staged.clone();
+        let mut h = Harness::new().window(900.0, 400.0);
+        h.mount_widget(View::new(
+            Color::from_rgba8(255, 255, 255, 255),
+            pebbles_code_editor::diff_editor(original, modified)
+                .side_by_side(side_by_side)
+                .height(380.0)
+                .ignore_whitespace(true)
+                .collapse_unchanged(true)
+                .hunk_actions(vec![
+                    DiffHunkAction::host("Stage Change", tabler::PLUS, move |hk, t| {
+                        st.borrow_mut().push((hk.clone(), t.to_string()))
+                    }),
+                    DiffHunkAction::revert(),
+                ]),
+        ));
+        h.frames(3);
+        // Whitespace-only line 40 is unchanged: one hunk, so two collapsed regions
+        // (lines 1..7 above, 14..61 below; line 0 stays visible).
+        let labels: Vec<String> = h
+            .semantics_tree()
+            .into_iter()
+            .map(|n| n.props.label)
+            .collect();
+        let bars = |l: &[String], s: &str| l.iter().filter(|x| x.as_str() == s).count();
+        let sides = if side_by_side { 2 } else { 1 };
+        assert_eq!(bars(&labels, "Expand 6 hidden lines"), sides, "{labels:?}");
+        assert_eq!(bars(&labels, "Expand 47 hidden lines"), sides, "{labels:?}");
+        assert_eq!(bars(&labels, "Stage Change"), 1, "{labels:?}");
+        assert!(!h.find_text("line 30"), "collapsed lines are not rendered");
+        tap_label(&mut h, "Expand 47 hidden lines");
+        h.frames(3);
+        assert!(h.find_text("line 30"), "expanded");
+        tap_label(&mut h, "Stage Change");
+        h.frames(2);
+        assert_eq!(staged.borrow().len(), 1);
+        assert_eq!(staged.borrow()[0].1, "line ten");
+        tap_label(&mut h, "Revert Change");
+        h.frames(2);
+        assert!(modified.get().contains("line 10\n"), "reverted");
+        assert!(
+            modified.get().contains("  line 40  \n"),
+            "whitespace change kept"
+        );
+    }
 }
 
 #[test]

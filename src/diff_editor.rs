@@ -1,8 +1,11 @@
 //! The diff editor (VS Code's diff editor): the base ("original") and current ("modified")
 //! texts side by side, line-aligned with filler rows and scrolled together, or a single
 //! inline view. Removed lines and words are red, inserted words green; the modified side
-//! keeps the change bars with next/previous change (Alt+F3) and per-hunk revert (click a
-//! bar → peek → Revert).
+//! keeps the change bars with next/previous change (Alt+F5 / Alt+F3) and per-hunk revert
+//! (click a bar → peek → Revert), plus optional per-hunk gutter buttons
+//! ([`DiffEditor::hunk_actions`]), whitespace-insensitive comparison and collapsed
+//! unchanged regions. The modified side is editable (unless
+//! [`DiffEditor::read_only`]) and re-diffs live while typing.
 
 use std::rc::Rc;
 
@@ -21,6 +24,10 @@ pub struct DiffEditor {
     side_by_side: bool,
     height: f64,
     configure: Option<DiffSideConfig>,
+    ignore_whitespace: bool,
+    collapse_unchanged: bool,
+    read_only: bool,
+    hunk_actions: Vec<crate::config::DiffHunkAction>,
 }
 
 /// A side-by-side diff editor of `modified` against `original`.
@@ -31,6 +38,10 @@ pub fn diff_editor(original: Signal<String>, modified: Signal<String>) -> DiffEd
         side_by_side: true,
         height: 400.0,
         configure: None,
+        ignore_whitespace: false,
+        collapse_unchanged: false,
+        read_only: false,
+        hunk_actions: Vec::new(),
     }
 }
 
@@ -38,6 +49,27 @@ impl DiffEditor {
     /// Side by side (default) or a single inline view (`false`).
     pub fn side_by_side(mut self, v: bool) -> Self {
         self.side_by_side = v;
+        self
+    }
+    /// Ignore leading/trailing whitespace changes (`diffEditor.ignoreTrimWhitespace`).
+    pub fn ignore_whitespace(mut self, v: bool) -> Self {
+        self.ignore_whitespace = v;
+        self
+    }
+    /// Collapse unchanged regions into expandable "N hidden lines" bars
+    /// (`diffEditor.hideUnchangedRegions.enabled`).
+    pub fn collapse_unchanged(mut self, v: bool) -> Self {
+        self.collapse_unchanged = v;
+        self
+    }
+    /// Make the modified side read-only (e.g. comparing two revisions).
+    pub fn read_only(mut self, v: bool) -> Self {
+        self.read_only = v;
+        self
+    }
+    /// Per-hunk gutter buttons on the modified side (Stage / Revert / Unstage Change).
+    pub fn hunk_actions(mut self, actions: Vec<crate::config::DiffHunkAction>) -> Self {
+        self.hunk_actions = actions;
         self
     }
     /// The viewport height of the editors.
@@ -58,14 +90,27 @@ fn render_diff(d: &DiffEditor) -> AnyWidget {
         Some(f) => f(e),
         None => e,
     };
-    let modified = cfg(code_editor(d.modified))
+    let open_regions = create_signal(std::collections::BTreeSet::<usize>::new());
+    let diff_opts = |e: CodeEditor| {
+        let e = e.diff_ignore_whitespace(d.ignore_whitespace);
+        if d.collapse_unchanged {
+            e.diff_collapse_unchanged(open_regions)
+        } else {
+            e
+        }
+    };
+    let mut modified = diff_opts(cfg(code_editor(d.modified)))
         .height(d.height)
         .soft_wrap(false)
-        .diff_base(d.original);
+        .diff_base(d.original)
+        .diff_hunk_actions(d.hunk_actions.clone());
+    if d.read_only {
+        modified = modified.read_only(true);
+    }
     if !d.side_by_side {
         return modified.inline_diff(true).into_widget();
     }
-    let original = cfg(code_editor(d.original))
+    let original = diff_opts(cfg(code_editor(d.original)))
         .height(d.height)
         .soft_wrap(false)
         .read_only(true)

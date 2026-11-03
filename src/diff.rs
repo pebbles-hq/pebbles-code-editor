@@ -72,9 +72,19 @@ impl LineDiff {
 const MAX_CELLS: usize = 4_000_000;
 
 /// Diff `cur` against `base` at line granularity.
+#[cfg(test)]
 pub(crate) fn diff_lines(base: &str, cur: &str) -> LineDiff {
-    let b: Vec<&str> = base.split('\n').collect();
-    let c: Vec<&str> = cur.split('\n').collect();
+    diff_lines_ws(base, cur, false)
+}
+
+/// [`diff_lines`], optionally ignoring leading/trailing whitespace (VS Code's
+/// `diffEditor.ignoreTrimWhitespace`): lines that differ only there count as unchanged.
+pub(crate) fn diff_lines_ws(base: &str, cur: &str, ignore_ws: bool) -> LineDiff {
+    fn norm(l: &str, ws: bool) -> &str {
+        if ws { l.trim() } else { l }
+    }
+    let b: Vec<&str> = base.split('\n').map(|l| norm(l, ignore_ws)).collect();
+    let c: Vec<&str> = cur.split('\n').map(|l| norm(l, ignore_ws)).collect();
     let (n, m) = (b.len(), c.len());
     let mut pre = 0;
     while pre < n && pre < m && b[pre] == c[pre] {
@@ -164,6 +174,55 @@ pub(crate) fn diff_lines(base: &str, cur: &str) -> LineDiff {
         removed_at_end,
         hunks,
     }
+}
+
+/// One collapsible run of unchanged lines (VS Code's `diffEditor.hideUnchangedRegions`):
+/// `base` / `cur` are the hidden (equal-length) line ranges on each side.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnchangedRegion {
+    /// The hidden base lines.
+    pub base: Range<usize>,
+    /// The hidden current lines.
+    pub cur: Range<usize>,
+}
+
+/// The unchanged runs between hunks that can be collapsed, keeping `context` lines next to
+/// every change visible and only hiding runs of at least `min_hidden` lines (VS Code's
+/// defaults: 3 and 3). A diff without changes collapses nothing.
+pub(crate) fn unchanged_regions(
+    d: &LineDiff,
+    base_lines: usize,
+    cur_lines: usize,
+    context: usize,
+    min_hidden: usize,
+) -> Vec<UnchangedRegion> {
+    if d.hunks.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let (mut b0, mut c0) = (0usize, 0usize);
+    let n = d.hunks.len();
+    for k in 0..=n {
+        let (b1, c1) = match d.hunks.get(k) {
+            Some(h) => (h.base.start, h.cur.start),
+            None => (base_lines, cur_lines),
+        };
+        let len = (c1.saturating_sub(c0)).min(b1.saturating_sub(b0));
+        let lead = if k == 0 { 0 } else { context };
+        let trail = if k == n { 0 } else { context };
+        if len >= lead + trail + min_hidden {
+            let (s, e) = (lead, len - trail);
+            out.push(UnchangedRegion {
+                base: b0 + s..b0 + e,
+                cur: c0 + s..c0 + e,
+            });
+        }
+        if let Some(h) = d.hunks.get(k) {
+            b0 = h.base.end;
+            c0 = h.cur.end;
+        }
+    }
+    out
 }
 
 /// The text that reverting `hunk` produces: the current lines `hunk.cur` replaced by the base
@@ -315,6 +374,32 @@ mod tests {
         assert_eq!(d.kind_at(1), Some(ChangeKind::Modified));
         assert!(d.removed_at_end);
         assert_eq!(d.hunks.len(), 2);
+    }
+
+    #[test]
+    fn ignore_whitespace_hides_indent_only_changes() {
+        assert_eq!(diff_lines("a\n  b\nc", "a\nb  \nc").hunks.len(), 1);
+        assert!(
+            diff_lines_ws("a\n  b\nc", "a\nb  \nc", true)
+                .hunks
+                .is_empty()
+        );
+        assert_eq!(diff_lines_ws("a\n  b\nc", "a\nB\nc", true).hunks.len(), 1);
+    }
+
+    #[test]
+    fn unchanged_regions_keep_context_around_changes() {
+        let base: String = (0..20).map(|i| format!("l{i}\n")).collect();
+        let cur = base.replace("l10\n", "X\n");
+        let d = diff_lines(&base, &cur);
+        let r = unchanged_regions(&d, 21, 21, 3, 3);
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0].cur, 0..7);
+        assert_eq!(r[1].cur, 14..21);
+        assert_eq!(r[1].base, 14..21);
+        // Too short to hide, and nothing hidden without changes.
+        assert!(unchanged_regions(&d, 21, 21, 3, 8).is_empty());
+        assert!(unchanged_regions(&diff_lines("a", "a"), 1, 1, 3, 3).is_empty());
     }
 
     #[test]

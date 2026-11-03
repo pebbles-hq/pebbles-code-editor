@@ -120,6 +120,7 @@ impl DisplayMap {
             gaps,
             wrap_indents,
             std::rc::Rc::new(Inlays::new()),
+            &[],
         )
     }
 
@@ -135,8 +136,15 @@ impl DisplayMap {
         gaps: &[usize],
         wrap_indents: &[usize],
         inlays: std::rc::Rc<Inlays>,
+        extra_hidden: &[(usize, usize)],
     ) -> Self {
         let mut hidden = vec![false; line_count];
+        // Host-hidden line ranges (inclusive; a diff view's collapsed unchanged regions).
+        for &(a, b) in extra_hidden {
+            for h in hidden.iter_mut().take(b + 1).skip(a) {
+                *h = true;
+            }
+        }
         for &(head, last) in regions {
             if folded.contains(&head) {
                 let end = last.min(line_count.saturating_sub(1));
@@ -227,26 +235,17 @@ impl DisplayMap {
         }
     }
 
-    /// Like [`DisplayMap::new`] over `index`'s lines and foldable regions, but O(1) when no
-    /// fold applies, wrapping is off and there are no gap rows (the common case): the map is
-    /// then the identity and is answered lazily from the index.
+    #[cfg(test)]
     pub(crate) fn for_index(
         index: &std::rc::Rc<crate::lines::LineIndex>,
         folded: &BTreeSet<usize>,
         wrap_cols: usize,
         gaps: &[usize],
     ) -> Self {
-        Self::for_index_inlays(
-            index,
-            folded,
-            wrap_cols,
-            gaps,
-            std::rc::Rc::new(Inlays::new()),
-        )
+        Self::for_index_hidden(index, folded, wrap_cols, gaps, Default::default(), &[])
     }
 
-    /// [`DisplayMap::for_index`] with inlay widths (the identity fast path still applies
-    /// when nothing folds, wraps or reserves gap rows).
+    #[cfg(test)]
     pub(crate) fn for_index_inlays(
         index: &std::rc::Rc<crate::lines::LineIndex>,
         folded: &BTreeSet<usize>,
@@ -254,9 +253,24 @@ impl DisplayMap {
         gaps: &[usize],
         inlays: std::rc::Rc<Inlays>,
     ) -> Self {
+        Self::for_index_hidden(index, folded, wrap_cols, gaps, inlays, &[])
+    }
+
+    /// Like [`DisplayMap::new`] over `index`'s lines and foldable regions, with inlay widths
+    /// and host-hidden line ranges (inclusive), but O(1) when no fold applies, wrapping is
+    /// off and there are no gap rows or hidden ranges (the common case): the map is then the
+    /// identity and is answered lazily from the index.
+    pub(crate) fn for_index_hidden(
+        index: &std::rc::Rc<crate::lines::LineIndex>,
+        folded: &BTreeSet<usize>,
+        wrap_cols: usize,
+        gaps: &[usize],
+        inlays: std::rc::Rc<Inlays>,
+        extra_hidden: &[(usize, usize)],
+    ) -> Self {
         let regions = index.regions();
         let any_fold = folded.iter().any(|h| index.is_fold_head(*h));
-        if !any_fold && wrap_cols == 0 && gaps.iter().all(|g| *g == 0) {
+        if !any_fold && wrap_cols == 0 && gaps.iter().all(|g| *g == 0) && extra_hidden.is_empty() {
             return DisplayMap {
                 inlays,
                 rows: Vec::new(),
@@ -279,6 +293,7 @@ impl DisplayMap {
             gaps,
             &wrap_indents,
             inlays,
+            extra_hidden,
         )
     }
 
@@ -610,6 +625,25 @@ mod tests {
     }
 
     #[test]
+    fn extra_hidden_ranges_hide_lines() {
+        let m = DisplayMap::new_with_inlays(
+            6,
+            &folds(&[]),
+            &[],
+            &[1; 6],
+            0,
+            &[0, 1, 0, 0, 0, 0],
+            &[],
+            std::rc::Rc::new(Inlays::new()),
+            &[(2, 4)],
+        );
+        // Lines 0, 1 (+ its gap row) and 5.
+        assert_eq!(m.rows(), 4);
+        assert!(m.is_hidden(3) && !m.is_hidden(5));
+        assert_eq!(m.place(5, 0).0, 3);
+    }
+
+    #[test]
     fn inlays_count_toward_soft_wrap() {
         // 12 chars, wrap at 10, a 4-col hint at col 2: visual width 16 -> wraps at col 6.
         let m = DisplayMap::new_with_inlays(
@@ -621,6 +655,7 @@ mod tests {
             &[],
             &[],
             inl(&[(0, 2, 4)]),
+            &[],
         );
         assert_eq!(m.rows(), 2);
         assert_eq!((m.row_at(0).start, m.row_at(0).end), (0, 6));

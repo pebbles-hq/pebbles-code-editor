@@ -218,6 +218,48 @@ pub(crate) fn numbers(f: &Frame) -> AnyWidget {
                 .into_widget(),
         );
     }
+    // Diff view: the per-hunk buttons (VS Code's diff editor gutter menu) at each change's
+    // first line.
+    if let (Some(d), Some(run)) = (f.diff, f.hunk_run.as_ref()) {
+        let acts = &f.p.diff_hunk_actions;
+        let sz = (f.line_px * 0.75).clamp(11.0, 16.0);
+        for (hi, h) in d.hunks.iter().enumerate() {
+            let n = h.cur.start.min(f.line_count.saturating_sub(1));
+            if n < f.first_line || n > f.last_line || !f.line_visible(n) {
+                continue;
+            }
+            let btns: Vec<AnyWidget> = acts
+                .iter()
+                .enumerate()
+                .map(|(ai, a)| {
+                    let run = run.clone();
+                    semantics(
+                        SemanticsRole::Button,
+                        a.label.clone(),
+                        tooltip(
+                            a.label.clone(),
+                            GestureDetector::new(
+                                container()
+                                    .width(HUNK_BTN_W)
+                                    .height(f.line_px)
+                                    .alignment(Alignment::CENTER)
+                                    .child(icon(a.icon).size(sz).color(f.theme.foreground)),
+                            )
+                            .cursor(pebbles::widgets::action_cursor())
+                            .on_tap(action(move || run(hi, ai))),
+                        ),
+                    )
+                    .into_widget()
+                })
+                .collect();
+            nums.push(
+                Positioned::new(row(btns))
+                    .left(4.0)
+                    .top(f.y_of(n))
+                    .into_widget(),
+            );
+        }
+    }
     // The code-action lightbulb on the caret line (click opens the menu); the quick-fix
     // variant (an action fixing a diagnostic here) uses the warning color.
     if let Some((line, actions)) = f.lsp.h.bulb.get()
@@ -296,11 +338,21 @@ pub(crate) fn host_w(f: &Frame) -> f64 {
         .unwrap_or(0.0)
 }
 
-/// Width of the breakpoint area (0 when breakpoints are not bound).
+/// Width of one diff hunk button in the gutter.
+const HUNK_BTN_W: f64 = 18.0;
+
+/// Width of the glyph margin: the breakpoint area (when bound) or a diff view's hunk
+/// buttons (0 when neither).
 pub(crate) fn glyph_margin_w(p: &crate::config::Props, line_px: f64) -> f64 {
-    if p.breakpoints.is_some() {
+    let bp = if p.breakpoints.is_some() {
         line_px.clamp(14.0, 20.0)
     } else {
         0.0
-    }
+    };
+    let hunk = if p.diff_base.is_some() && !p.diff_hunk_actions.is_empty() {
+        p.diff_hunk_actions.len() as f64 * HUNK_BTN_W + 4.0
+    } else {
+        0.0
+    };
+    bp.max(hunk)
 }

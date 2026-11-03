@@ -6,7 +6,7 @@
 use pebbles::prelude::*;
 
 use crate::config::Props;
-use crate::diff::{diff_lines, word_changes};
+use crate::diff::{LineDiff, diff_lines_ws, unchanged_regions, word_changes};
 use crate::extensions::{BlockWidget, Decoration};
 
 /// The decorations and block widgets a diff view contributes to this editor.
@@ -14,6 +14,77 @@ use crate::extensions::{BlockWidget, Decoration};
 pub(crate) struct DiffParts {
     pub(crate) decos: Vec<Decoration>,
     pub(crate) blocks: Vec<BlockWidget>,
+    /// Collapsed unchanged regions: inclusive line ranges this editor hides.
+    pub(crate) hidden: Vec<(usize, usize)>,
+}
+
+/// VS Code's `diffEditor.hideUnchangedRegions` defaults.
+const CONTEXT_LINES: usize = 3;
+const MIN_HIDDEN: usize = 3;
+
+/// Collapse this side's unchanged regions (`mine` picks the side's range of each region):
+/// hide the lines and show an "N hidden lines" bar (click to expand) on the row above.
+fn collapse(
+    p: &Props,
+    d: &LineDiff,
+    base_n: usize,
+    cur_n: usize,
+    mine: impl Fn(&crate::diff::UnchangedRegion) -> std::ops::Range<usize>,
+    line_px: f64,
+    out: &mut DiffParts,
+) {
+    let Some(expanded) = p.diff_collapse else {
+        return;
+    };
+    let open = expanded.get();
+    let t = &p.theme;
+    for (k, r) in unchanged_regions(d, base_n, cur_n, CONTEXT_LINES, MIN_HIDDEN)
+        .iter()
+        .enumerate()
+    {
+        if open.contains(&k) {
+            continue;
+        }
+        let mut range = mine(r);
+        // The bar sits below the row above the region: keep line 0 visible.
+        range.start = range.start.max(1);
+        if range.is_empty() {
+            continue;
+        }
+        let n = range.len();
+        out.hidden.push((range.start, range.end - 1));
+        let label = format!("{n} hidden line{}", if n == 1 { "" } else { "s" });
+        let bar = semantics(
+            SemanticsRole::Button,
+            format!("Expand {label}"),
+            GestureDetector::new(
+                container()
+                    .height(line_px)
+                    .padding(EdgeInsets::symmetric(8.0, 0.0))
+                    .alignment(Alignment::CENTER_LEFT)
+                    .decoration(BoxDecoration::new().color(t.current_line))
+                    .child(
+                        row(children![
+                            icon(tabler::FOLD).size(12.0).color(t.muted),
+                            gap_w(6.0),
+                            t.ui_text(label, -1.0).color(t.muted),
+                        ])
+                        .cross_axis_alignment(CrossAxisAlignment::Center),
+                    ),
+            )
+            .cursor(pebbles::widgets::action_cursor())
+            .on_tap(action(move || {
+                expanded.update(|s| {
+                    s.insert(k);
+                });
+            })),
+        );
+        out.blocks.push(BlockWidget {
+            line: range.start - 1,
+            height: line_px,
+            widget: bar.into_widget(),
+        });
+    }
 }
 
 fn line_spans(s: &str) -> Vec<(usize, &str)> {
@@ -48,7 +119,17 @@ pub(crate) fn parts(p: &Props, src: &str, fs: f64, line_px: f64) -> DiffParts {
     if let Some(m) = p.diff_original_of {
         let other = m.get();
         let theirs = line_spans(&other);
-        for h in diff_lines(src, &other).hunks {
+        let d = diff_lines_ws(src, &other, p.diff_ignore_ws);
+        collapse(
+            p,
+            &d,
+            mine.len(),
+            theirs.len(),
+            |r| r.base.clone(),
+            line_px,
+            &mut out,
+        );
+        for h in d.hunks {
             for l in h.base.clone() {
                 let (s, text) = mine[l];
                 out.decos
@@ -85,7 +166,17 @@ pub(crate) fn parts(p: &Props, src: &str, fs: f64, line_px: f64) -> DiffParts {
     }
     let base = base_sig.get();
     let theirs = line_spans(&base);
-    for h in diff_lines(&base, src).hunks {
+    let d = diff_lines_ws(&base, src, p.diff_ignore_ws);
+    collapse(
+        p,
+        &d,
+        theirs.len(),
+        mine.len(),
+        |r| r.cur.clone(),
+        line_px,
+        &mut out,
+    );
+    for h in d.hunks {
         for (bl, cl) in h.base.clone().zip(h.cur.clone()) {
             let (s, b) = mine[cl];
             let (rem, ins) = word_changes(theirs[bl].1, b);

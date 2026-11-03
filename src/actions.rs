@@ -222,6 +222,10 @@ commands! {
     NextChange => "editor.action.dirtydiff.next", "Go to Next Change", ["Alt+F3"];
     /// Go to the previous change.
     PreviousChange => "editor.action.dirtydiff.previous", "Go to Previous Change", ["Shift+Alt+F3"];
+    /// Diff editor: go to the next change (VS Code's compare editor).
+    CompareNextChange => "workbench.action.compareEditor.nextChange", "Go to Next Difference", ["Alt+F5"];
+    /// Diff editor: go to the previous change.
+    ComparePreviousChange => "workbench.action.compareEditor.previousChange", "Go to Previous Difference", ["Shift+Alt+F5"];
     /// Toggle whether Tab inserts a tab or moves focus out of the editor (accessibility).
     ToggleTabFocusMode => "editor.action.toggleTabFocusMode", "Toggle Tab Key Moves Focus", ["Ctrl+M"];
     /// Toggle overtype mode: typed characters replace the character after the caret.

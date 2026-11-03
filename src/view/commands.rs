@@ -74,6 +74,7 @@ pub(crate) struct Env {
     pub(crate) line_px: f64,
     pub(crate) read_only: bool,
     pub(crate) diff_base: Option<Signal<String>>,
+    pub(crate) diff_ignore_ws: bool,
     pub(crate) ops: Rc<OpCfg>,
     pub(crate) line_cache: Signal<Rc<RefCell<crate::lines::LineCache>>>,
     pub(crate) inline: Signal<Option<crate::view::InlineGhost>>,
@@ -453,13 +454,13 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
             }
             true
         }
-        C::NextChange | C::PreviousChange => {
+        C::NextChange | C::PreviousChange | C::CompareNextChange | C::ComparePreviousChange => {
             let Some(base) = env.diff_base else {
                 return false;
             };
-            let d = crate::diff::diff_lines(&base.peek(), &src);
+            let d = crate::diff::diff_lines_ws(&base.peek(), &src, env.diff_ignore_ws);
             let hunks = ops::change_hunks(&d);
-            let target = if cmd == C::NextChange {
+            let target = if matches!(cmd, C::NextChange | C::CompareNextChange) {
                 hunks
                     .iter()
                     .copied()

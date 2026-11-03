@@ -82,11 +82,11 @@ pub use annotations::{
 };
 pub use collab::Edit;
 pub use config::{
-    BreadcrumbPick, BreadcrumbSegment, CodeEditor, CursorBlinking, CursorStyle, LineNumbers,
-    code_editor,
+    BreadcrumbPick, BreadcrumbSegment, CodeEditor, CursorBlinking, CursorStyle, DiffHunkAction,
+    DiffHunkRun, LineNumbers, code_editor,
 };
 pub use controller::{EditorController, Refresh, editor_controller};
-pub use diff::{ChangeHunk, ChangeKind};
+pub use diff::{ChangeHunk, ChangeKind, UnchangedRegion};
 pub use diff_editor::{DiffEditor, DiffSideConfig, diff_editor};
 pub use edit::{
     ChangeSet, DocumentHistory, EditorState, History, Selection, Selections, Transaction,
