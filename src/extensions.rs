@@ -37,6 +37,9 @@ pub struct DecoStyle {
     pub underline: Option<Color>,
     /// A whole-line background for every line the range touches.
     pub line_background: Option<Color>,
+    /// A full-width mark in the overview ruler for every line the range touches (VS Code's
+    /// `overviewRuler` decoration option, lane `Full`).
+    pub overview_ruler: Option<Color>,
 }
 
 /// A styled byte range contributed by an extension (mark = background/underline, line =
@@ -81,6 +84,57 @@ impl Decoration {
             },
         }
     }
+    /// Also mark the lines the range touches in the overview ruler.
+    pub fn overview_ruler(mut self, color: Color) -> Self {
+        self.style.overview_ruler = Some(color);
+        self
+    }
+}
+
+/// One clickable item of a [`HostCodeLens`]: a title and the action run on click (with the
+/// editor's [`EditContext`], so an edit it makes is one undo step).
+#[derive(Clone)]
+pub struct LensItem {
+    /// The text shown (e.g. "Accept Current Change").
+    pub title: String,
+    /// Run on click.
+    pub run: Rc<dyn Fn(&EditContext)>,
+    /// A checkbox drawn before the title (`Some(checked)`), as the merge editor's
+    /// "Accept Incoming" / "Accept Current" toggles.
+    pub checked: Option<bool>,
+}
+
+impl LensItem {
+    /// An item titled `title` running `run`.
+    pub fn new(title: impl Into<String>, run: impl Fn(&EditContext) + 'static) -> Self {
+        LensItem {
+            title: title.into(),
+            run: Rc::new(run),
+            checked: None,
+        }
+    }
+    /// A checkbox item: a box (ticked when `checked`) and `title`; `run` toggles it.
+    pub fn checkbox(
+        title: impl Into<String>,
+        checked: bool,
+        run: impl Fn(&EditContext) + 'static,
+    ) -> Self {
+        LensItem {
+            checked: Some(checked),
+            ..LensItem::new(title, run)
+        }
+    }
+}
+
+/// A host code lens: a row of clickable items drawn above `line` (VS Code's CodeLens, as the
+/// merge-conflict "Accept Current Change | Accept Incoming Change | …" line), separated by
+/// ` | ` and shown with the language service's lenses (`editor.codeLens`).
+#[derive(Clone)]
+pub struct HostCodeLens {
+    /// The 0-based buffer line the lens sits above.
+    pub line: usize,
+    /// The items, left to right.
+    pub items: Vec<LensItem>,
 }
 
 /// A colored marker in the gutter for a line (breakpoints, VCS gutter, diagnostics, …).
@@ -214,6 +268,7 @@ impl Command {
 type DecoFn = Rc<dyn Fn(&Snapshot) -> Vec<Decoration>>;
 type GutterFn = Rc<dyn Fn(&Snapshot) -> Vec<GutterMark>>;
 type BlockFn = Rc<dyn Fn(&Snapshot) -> Vec<BlockWidget>>;
+type LensFn = Rc<dyn Fn(&Snapshot) -> Vec<HostCodeLens>>;
 type RangeFn = Rc<dyn Fn(&Snapshot) -> Vec<(usize, usize)>>;
 type HookFn = Rc<dyn Fn(&Snapshot)>;
 type FocusFn = Rc<dyn Fn(bool)>;
@@ -241,6 +296,7 @@ pub struct Extension {
     pub(crate) decorations: Option<DecoFn>,
     pub(crate) gutter: Option<GutterFn>,
     pub(crate) block: Option<BlockFn>,
+    pub(crate) lenses: Option<LensFn>,
     pub(crate) read_only: Option<RangeFn>,
     pub(crate) commands: Vec<Command>,
     pub(crate) keys: Vec<KeyBinding>,
@@ -290,6 +346,12 @@ impl Extension {
     /// (inline panels, images, blame). Recomputed from the current [`Snapshot`] each render.
     pub fn block_widgets(mut self, f: impl Fn(&Snapshot) -> Vec<BlockWidget> + 'static) -> Self {
         self.block = Some(Rc::new(f));
+        self
+    }
+    /// Contribute [`HostCodeLens`]es — rows of clickable items above lines (merge-conflict
+    /// actions, references counts). Recomputed from the current [`Snapshot`] each render.
+    pub fn code_lenses(mut self, f: impl Fn(&Snapshot) -> Vec<HostCodeLens> + 'static) -> Self {
+        self.lenses = Some(Rc::new(f));
         self
     }
     /// Declare read-only byte ranges — edits overlapping them are vetoed.

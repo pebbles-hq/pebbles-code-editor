@@ -9,7 +9,7 @@ use crate::view::Frame;
 use crate::view::scrollbar::TrackPainter;
 
 /// A mark: document line, colour, lane (0 left = changes, 1 centre = selections / matches,
-/// 2 right = diagnostics, 3 = full width cursor).
+/// 2 right = diagnostics, 3 = full width cursor, 4 = full width decoration).
 pub(crate) type Mark = (usize, Color, u8);
 
 /// The ruler's marks as a painter for the vertical scrollbar's track (VS Code draws the
@@ -32,6 +32,7 @@ pub(crate) fn track(f: &Frame, marks: Vec<Mark>, extent: f64) -> Option<TrackPai
                 0 => (0.0, lane_w, 3.0),
                 1 => (lane_w, 2.0 * lane_w, 3.0),
                 2 => (2.0 * lane_w, w, 3.0),
+                4 => (0.0, w, 3.0),
                 _ => (0.0, w, 2.0),
             };
             cv.fill_rect(Rect::new(x0, y, x1, (y + th).min(hh)), color);
@@ -40,8 +41,8 @@ pub(crate) fn track(f: &Frame, marks: Vec<Mark>, extent: f64) -> Option<TrackPai
 }
 
 /// Collect the ruler marks for the frame.
-pub(crate) fn marks(f: &Frame, search: &[(usize, usize)]) -> Vec<Mark> {
-    let mut out: Vec<Mark> = Vec::new();
+pub(crate) fn marks(f: &Frame, search: &[(usize, usize)], decorations: &[Mark]) -> Vec<Mark> {
+    let mut out: Vec<Mark> = decorations.to_vec();
     if let Some(d) = f.diff {
         for h in &d.hunks {
             let c = match h.kind() {

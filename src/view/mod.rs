@@ -1966,7 +1966,29 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
     let pad_l = 14.0;
     let theme = &p.theme;
     // Code lenses: a row above their line (line 0's lens widens the top padding).
-    let mut lens_rows = lsp_ctl.lens_rows(theme, fs, &src);
+    let host_lenses: Vec<crate::extensions::HostCodeLens> =
+        if p.extensions.iter().any(|e| e.lenses.is_some()) {
+            let pr = st.primary();
+            let snap = Snapshot {
+                text: &src,
+                caret: pr.head,
+                selection: (pr.min(), pr.max()),
+            };
+            p.extensions
+                .iter()
+                .filter_map(|e| e.lenses.as_ref())
+                .flat_map(|f| f(&snap))
+                .collect()
+        } else {
+            Vec::new()
+        };
+    let lens_ctx = crate::extensions::EditContext {
+        state,
+        history,
+        code,
+        goal,
+    };
+    let mut lens_rows = lsp_ctl.lens_rows(theme, fs, &src, host_lenses, lens_ctx);
     let top_lens = match lens_rows.first() {
         Some((0, _)) => Some(lens_rows.remove(0).1),
         _ => None,
@@ -2666,6 +2688,19 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             (decos, marks)
         };
     ext_decos.extend(diff_parts.decos);
+    // Overview-ruler marks of decorations that ask for one (merge conflicts), one per line
+    // touched (capped so a huge range stays cheap).
+    let ext_ruler: Vec<ruler::Mark> = ext_decos
+        .iter()
+        .filter_map(|d| d.style.overview_ruler.map(|c| (d.range, c)))
+        .flat_map(|((a, b), c)| {
+            let (l0, l1) = (
+                li.line_of(&src, a.min(src.len())),
+                li.line_of(&src, b.min(src.len())),
+            );
+            (l0..=l1.max(l0)).take(4000).map(move |l| (l, c, 4u8))
+        })
+        .collect();
     // Ctrl/Cmd+hover: underline the link or the symbol with a definition under the pointer
     // (the Ctrl+click target), as VS Code does.
     // (`hover_pos` is read only while Ctrl/Cmd is held: a plain pointer move must not
@@ -3547,9 +3582,12 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
                         .unwrap_or_else(|| container().into_widget())
                 }));
             }
-            let track: Option<Rc<dyn Fn(&mut Canvas<'_>)>> =
-                ruler::track(&frame, ruler::marks(&frame, &ruler_matches), extent)
-                    .map(|t| Rc::from(t) as Rc<dyn Fn(&mut Canvas<'_>)>);
+            let track: Option<Rc<dyn Fn(&mut Canvas<'_>)>> = ruler::track(
+                &frame,
+                ruler::marks(&frame, &ruler_matches, &ext_ruler),
+                extent,
+            )
+            .map(|t| Rc::from(t) as Rc<dyn Fn(&mut Canvas<'_>)>);
             {
                 let (fd, scroll) = (fd.clone(), scroll.clone());
                 parts.push(slice("vbar", move || {

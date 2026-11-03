@@ -20,15 +20,21 @@ pub(crate) fn decoration_layers(f: &Frame, decos: &[Decoration]) -> Vec<AnyWidge
                 f.li.line_of(f.src, d.range.1),
             );
             for line in la.max(f.first_line)..=lb.min(f.last_line) {
+                if !f.line_visible(line) {
+                    continue;
+                }
+                // Every visual row of the line (soft wrap), placed through the display
+                // map (folds and block-widget rows above shift it).
+                let rows = f.segments(line).len().max(1);
                 layers.push(
                     Positioned::new(
                         container()
-                            .height(f.line_px)
+                            .height(f.line_px * rows as f64)
                             .decoration(BoxDecoration::new().color(bg)),
                     )
                     .left(0.0)
                     .right(0.0)
-                    .top(f.pad_t + line as f64 * f.line_px)
+                    .top(f.y_of(line))
                     .into_widget(),
                 );
             }
@@ -53,9 +59,11 @@ pub(crate) fn decoration_layers(f: &Frame, decos: &[Decoration]) -> Vec<AnyWidge
             } else {
                 f.li.line_char_len(line)
             };
-            let x = f.pad_l + start_col as f64 * f.advance;
+            if !f.line_visible(line) {
+                continue;
+            }
+            let (x, y) = f.xy(line, start_col);
             let w = (end_col.saturating_sub(start_col).max(1) as f64 * f.advance).max(2.0);
-            let y = f.pad_t + line as f64 * f.line_px;
             if let Some(bg) = d.style.background {
                 layers.push(
                     Positioned::new(

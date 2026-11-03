@@ -180,3 +180,99 @@ fn host_context_menu_items_merge_with_the_editors() {
     h.frames(2);
     assert!(got.borrow().is_some(), "the host item ran");
 }
+
+#[test]
+fn host_code_lenses_run_one_undo_step_edits() {
+    use pebbles_code_editor::{Decoration, HostCodeLens, LensItem, extension};
+    let code = create_root_signal(String::from("<<<<<<< a\nx\n=======\ny\n>>>>>>> b\ntail\n"));
+    let ext = extension("lenses")
+        .code_lenses(|s| {
+            if !s.text.starts_with("<<<<<<<") {
+                return Vec::new();
+            }
+            vec![
+                HostCodeLens {
+                    line: 0,
+                    items: vec![
+                        LensItem::new("Accept Current Change", |ctx| {
+                            let t = ctx.text();
+                            let end = t.find("tail").unwrap();
+                            ctx.replace(0, end, "x\n");
+                        }),
+                        LensItem::new("Other", |_| {}),
+                    ],
+                },
+                HostCodeLens {
+                    line: 3,
+                    items: vec![LensItem::new("Mid", |ctx| {
+                        let n = ctx.text().len();
+                        ctx.replace(n, n, "mid\n");
+                    })],
+                },
+            ]
+        })
+        .decorations(|s| {
+            vec![
+                Decoration::line((0, 9), Color::from_rgb8(64, 200, 174))
+                    .overview_ruler(Color::from_rgb8(64, 200, 174)),
+            ]
+            .into_iter()
+            .filter(|_| s.text.starts_with("<<<<<<<"))
+            .collect()
+        });
+    let mut h = Harness::new().window(800.0, 300.0);
+    h.mount_widget(code_editor(code).height(300.0).extension(ext));
+    h.frames(3);
+    let ls = labels(&h);
+    assert!(
+        ls.iter().any(|l| l == "Code lens Accept Current Change"),
+        "{ls:?}"
+    );
+    assert!(ls.iter().any(|l| l == "Code lens Other"));
+    // The lens sits above line 0 (the first line is pushed down a row).
+    // A lens below the first line runs too.
+    let mid = center(&h, |l| l == "Code lens Mid");
+    h.click(mid);
+    h.frames(3);
+    assert_eq!(
+        code.get(),
+        "<<<<<<< a\nx\n=======\ny\n>>>>>>> b\ntail\nmid\n"
+    );
+    h.press("Ctrl+Z");
+    h.frames(2);
+    let lens = center(&h, |l| l == "Code lens Accept Current Change");
+    let first = h.find_all_text("<<<<<<< a");
+    assert!(!first.is_empty());
+    h.click(lens);
+    h.frames(3);
+    assert_eq!(code.get(), "x\ntail\n");
+    assert!(!labels(&h).iter().any(|l| l.starts_with("Code lens")));
+    // One undo step restores the whole block.
+    h.click(Offset::new(400.0, 60.0));
+    h.frames(2);
+    h.press("Ctrl+Z");
+    h.frames(2);
+    assert_eq!(code.get(), "<<<<<<< a\nx\n=======\ny\n>>>>>>> b\ntail\n");
+}
+
+#[test]
+fn host_apply_edits_undo_in_one_step() {
+    use pebbles_code_editor::editor_controller;
+    use pebbles_code_editor::language::{Position, Range, TextEdit};
+    let code = create_root_signal(String::from("a\nb\nc\nd\n"));
+    let mut h = Harness::new().window(800.0, 300.0);
+    let c = editor_controller();
+    h.mount_widget(code_editor(code).height(300.0).controller(c));
+    h.frames(3);
+    c.apply_edits(vec![
+        TextEdit::new(Range::new(Position::new(0, 0), Position::new(1, 0)), "A\n"),
+        TextEdit::new(Range::new(Position::new(2, 0), Position::new(3, 0)), "C\n"),
+    ]);
+    h.frames(3);
+    assert_eq!(code.get(), "A\nb\nC\nd\n");
+    h.click(Offset::new(400.0, 60.0));
+    h.frames(2);
+    h.press("Ctrl+Z");
+    h.frames(2);
+    assert_eq!(code.get(), "a\nb\nc\nd\n");
+}

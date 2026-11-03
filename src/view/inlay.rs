@@ -286,27 +286,44 @@ impl Lsp {
         }
     }
 
-    /// The code lenses grouped by line, as (line, widget) rows.
+    /// The code lenses grouped by line, as (line, widget) rows: the language service's and
+    /// the host's ([`crate::extensions::HostCodeLens`], whose items run with `ctx`).
     pub(crate) fn lens_rows(
         &self,
         t: &crate::theme::EditorTheme,
         fs: f64,
         src: &str,
+        host: Vec<crate::extensions::HostCodeLens>,
+        ctx: crate::extensions::EditContext,
     ) -> Vec<(usize, AnyWidget)> {
         if !self.lenses_on() {
             return Vec::new();
         }
+        enum Item {
+            Lsp(lsp::LspCommand),
+            Host(crate::extensions::LensItem),
+        }
         let lenses = self.h.lenses.get();
-        let mut by_line: std::collections::BTreeMap<usize, Vec<lsp::CodeLens>> = Default::default();
+        let mut by_line: std::collections::BTreeMap<usize, Vec<Item>> = Default::default();
         for l in lenses.iter() {
+            let Some(c) = l.command.clone() else { continue };
             let at = lsp::position_to_byte(src, l.range.start);
             by_line
                 .entry(crate::geometry::line_of(src, at))
                 .or_default()
-                .push(l.clone());
+                .push(Item::Lsp(c));
+        }
+        for h in host {
+            by_line
+                .entry(h.line)
+                .or_default()
+                .extend(h.items.into_iter().map(Item::Host));
         }
         let mut out = Vec::new();
         for (line, ls) in by_line {
+            if ls.is_empty() {
+                continue;
+            }
             // Indent the lens to its line's indentation, as VS Code does.
             let ls_start = crate::geometry::line_start_of(src, line);
             let indent = src[ls_start..]
@@ -314,11 +331,7 @@ impl Lsp {
                 .take_while(|c| *c == ' ' || *c == '\t')
                 .count();
             let mut items: Vec<AnyWidget> = vec![gap_w(indent as f64 * fs * 0.6).into_widget()];
-            let resolved: Vec<_> = ls.into_iter().filter_map(|l| l.command).collect();
-            if resolved.is_empty() {
-                continue;
-            }
-            for (i, c) in resolved.into_iter().enumerate() {
+            for (i, it) in ls.into_iter().enumerate() {
                 if i > 0 {
                     items.push(
                         text(" | ")
@@ -327,21 +340,64 @@ impl Lsp {
                             .into_widget(),
                     );
                 }
-                let me = self.clone();
-                let title = c.title.clone();
+                let (title, run, checked): (String, Rc<dyn Fn()>, Option<bool>) = match it {
+                    Item::Lsp(c) => {
+                        let me = self.clone();
+                        (
+                            c.title.clone(),
+                            Rc::new(move || {
+                                if let Some(s) = &me.svc {
+                                    s.execute_command(&c);
+                                }
+                            }),
+                            None,
+                        )
+                    }
+                    Item::Host(h) => {
+                        let run = h.run.clone();
+                        (h.title, Rc::new(move || run(&ctx)), h.checked)
+                    }
+                };
+                let label = text(title.clone()).size((fs * 0.85) as f32).color(t.muted);
+                let (body, a11y): (AnyWidget, String) = match checked {
+                    None => (label.into_widget(), format!("Code lens {title}")),
+                    Some(on) => {
+                        let side = (fs * 0.85).round();
+                        let mut b = container()
+                            .width(side)
+                            .height(side)
+                            .alignment(Alignment::CENTER)
+                            .decoration(
+                                BoxDecoration::new()
+                                    .color(if on { t.accent } else { Color::TRANSPARENT })
+                                    .border(Border::all(BorderSide::new(
+                                        if on { t.accent } else { t.muted },
+                                        1.0,
+                                    )))
+                                    .radius(BorderRadius::all(2.0)),
+                            );
+                        if on {
+                            b = b.child(icon(tabler::CHECK).size(side * 0.8).color(t.background));
+                        }
+                        (
+                            row(children![b, gap_w(fs * 0.4), label])
+                                .cross_axis_alignment(CrossAxisAlignment::Center)
+                                .into_widget(),
+                            if on {
+                                format!("Code lens {title} (checked)")
+                            } else {
+                                format!("Code lens {title}")
+                            },
+                        )
+                    }
+                };
                 items.push(
                     semantics(
                         SemanticsRole::Button,
-                        format!("Code lens {title}"),
-                        GestureDetector::new(
-                            text(title.clone()).size((fs * 0.85) as f32).color(t.muted),
-                        )
-                        .cursor(pebbles::widgets::action_cursor())
-                        .on_tap(action(move || {
-                            if let Some(s) = &me.svc {
-                                s.execute_command(&c);
-                            }
-                        })),
+                        a11y,
+                        GestureDetector::new(body)
+                            .cursor(pebbles::widgets::action_cursor())
+                            .on_tap(action(move || run())),
                     )
                     .into_widget(),
                 );
