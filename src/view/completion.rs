@@ -478,7 +478,12 @@ pub(crate) fn accept(
             pebbles::core::animation::set_timeout(
                 session.raw_id() ^ 0x5245_534f_4c56_4500,
                 0.15,
-                move || apply(fallback.clone()),
+                move || {
+                    // The editor may have unmounted before the resolve fallback fired.
+                    if session.alive() {
+                        apply(fallback.clone());
+                    }
+                },
             );
             return;
         }

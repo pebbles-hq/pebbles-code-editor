@@ -3812,7 +3812,10 @@ fn schedule_highlight_continuation(sess: &dyn crate::lang::SyntaxSession, tick: 
             tick.raw_id() ^ 0x484c_5f43_4f4e_5400,
             0.0,
             move || {
-                tick.set(tick.peek().wrapping_add(1));
+                // The editor may have unmounted before the timer fired.
+                if let Some(t) = tick.try_peek() {
+                    tick.set(t.wrapping_add(1));
+                }
             },
         );
     }

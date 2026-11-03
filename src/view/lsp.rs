@@ -442,7 +442,7 @@ impl Lsp {
         let me = self.clone();
         // The timer can fire after the editor unmounted (its signals disposed).
         pebbles::core::animation::set_timeout(self.hover_timer(), self.hover_delay, move || {
-            if me.h.hover_sticky.try_peek() == Some(false) {
+            if me.h.hover_sticky.try_peek() == Some(false) && me.state.alive() {
                 me.request_hover(byte, Some((pos.x, pos.y)));
             }
         });

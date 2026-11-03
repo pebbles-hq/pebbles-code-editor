@@ -1881,6 +1881,42 @@ fn late_replies_after_the_editor_unmounts_are_dropped() {
     assert!(!h.find_text("late"));
 }
 
+/// Regression (Gravel crash-1793638125294): the hover dwell timer armed by a pointer move
+/// fired on the animation tick after the editor unmounted and read its disposed signals
+/// ("signal read after dispose" in `Lsp::pointer_moved`). Same for the pointer-left timer.
+#[test]
+fn hover_timers_firing_after_unmount_do_not_panic() {
+    let src = "fn main() {\n    let value = 1;\n}\n";
+    let fake = Rc::new(Fake::default());
+    // Control: a dwell over the text does request a hover.
+    let (mut h, _code) = mount(src, fake.clone(), |e| e);
+    h.hover(Offset::new(150.0, 40.0));
+    h.advance(0.4);
+    assert_eq!(fake.hovers.borrow().len(), 1, "the dwell requests a hover");
+    fake.hovers.borrow_mut().clear();
+    // Arm the dwell timer (a new spot), then unmount the editor before it fires.
+    h.hover(Offset::new(60.0, 22.0));
+    h.ui.dispose();
+    fire_timers();
+    assert!(
+        fake.hovers.borrow().is_empty(),
+        "no request from a dead editor"
+    );
+    // The pointer-left close timer too.
+    let (mut h, _code) = mount(src, fake.clone(), |e| e);
+    h.hover(Offset::new(150.0, 40.0));
+    h.hover(Offset::new(880.0, 480.0));
+    h.ui.dispose();
+    fire_timers();
+}
+
+/// Run the animation clock well past every pending timer (no frame: the tree is gone).
+fn fire_timers() {
+    for t in [1.0e6, 1.0e6 + 5.0] {
+        pebbles::core::animation::tick(t);
+    }
+}
+
 #[test]
 fn controller_refresh_re_requests_inlay_hints_and_code_lenses() {
     use pebbles_code_editor::Refresh;
