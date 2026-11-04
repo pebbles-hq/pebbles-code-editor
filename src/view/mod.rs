@@ -2097,6 +2097,24 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
                     bp.set(nb);
                 }
             }
+            if let Some(bm) = p.breakpoint_marks {
+                let b = bm.peek();
+                if !b.is_empty() {
+                    // Shift each mark; marks collapsing onto one line keep the first.
+                    let mut nb = std::collections::BTreeMap::new();
+                    for (&x, m) in &b {
+                        if let Some(l) = shifts
+                            .iter()
+                            .try_fold(x, |x, &sh| crate::lines::shift_line(x, sh, true))
+                        {
+                            nb.entry(l).or_insert_with(|| m.clone());
+                        }
+                    }
+                    if nb != b {
+                        bm.set(nb);
+                    }
+                }
+            }
         }
         li
     };
@@ -2688,6 +2706,22 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             (decos, marks)
         };
     ext_decos.extend(diff_parts.decos);
+    // The call-stack lines (VS Code's stack frame highlights).
+    if let Some(sf) = p.stack_frame_lines {
+        for l in sf.get() {
+            if l.line < line_count {
+                let at = li.line_start_of(l.line);
+                ext_decos.push(Decoration::line(
+                    (at, at),
+                    if l.top {
+                        gutter::FRAME_TOP_BG
+                    } else {
+                        gutter::FRAME_OTHER_BG
+                    },
+                ));
+            }
+        }
+    }
     // Overview-ruler marks of decorations that ask for one (merge conflicts), one per line
     // touched (capped so a huge range stays cheap).
     let ext_ruler: Vec<ruler::Mark> = ext_decos

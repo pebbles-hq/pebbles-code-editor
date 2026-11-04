@@ -77,8 +77,8 @@ mod view;
 
 pub use actions::EditorCommand;
 pub use annotations::{
-    AnnotationAction, AnnotationHover, EditorMenuItem, GutterAnnotation, GutterAnnotations,
-    LineAnnotation, MenuContext, MenuProvider,
+    AnnotationAction, AnnotationHover, BreakpointMark, BreakpointMenu, EditorMenuItem,
+    GutterAnnotation, GutterAnnotations, LineAnnotation, MenuContext, MenuProvider, StackFrameLine,
 };
 pub use collab::Edit;
 pub use config::{

@@ -53,6 +53,8 @@ pub(crate) fn numbers(f: &Frame) -> AnyWidget {
     }
     let (gutter_w, arrow_w, bp_w) = (width(f), ARROW_W, glyph_margin_w(f.p, f.line_px));
     let breakpoints = f.p.breakpoints.map(|s| (s, s.get()));
+    let bp_marks = f.p.breakpoint_marks.map(|s| s.get());
+    let frame_lines = f.p.stack_frame_lines.map(|s| s.get()).unwrap_or_default();
 
     // The most-severe diagnostic / extension marker per line (drives the gutter dot).
     let mut marks: HashMap<usize, Color> = HashMap::new();
@@ -126,7 +128,9 @@ pub(crate) fn numbers(f: &Frame) -> AnyWidget {
                 .into_widget(),
             );
         }
-        if let Some((sig, set)) = &breakpoints {
+        if let Some(marks) = &bp_marks {
+            nums.push(mark_cell(f, n, bp_w, y, marks.get(&n)));
+        } else if let Some((sig, set)) = &breakpoints {
             let sig = *sig;
             let on = set.contains(&n);
             let d = (f.line_px * 0.6).min(14.0);
@@ -162,6 +166,9 @@ pub(crate) fn numbers(f: &Frame) -> AnyWidget {
                 .top(y)
                 .into_widget(),
             );
+        }
+        if let Some(top) = frame_lines.iter().find(|s| s.line == n).map(|s| s.top) {
+            nums.push(frame_arrow(f, n, bp_w, y, top));
         }
         if let Some(&color) = marks.get(&n) {
             nums.push(
@@ -344,7 +351,7 @@ const HUNK_BTN_W: f64 = 18.0;
 /// Width of the glyph margin: the breakpoint area (when bound) or a diff view's hunk
 /// buttons (0 when neither).
 pub(crate) fn glyph_margin_w(p: &crate::config::Props, line_px: f64) -> f64 {
-    let bp = if p.breakpoints.is_some() {
+    let bp = if p.breakpoints.is_some() || p.breakpoint_marks.is_some() {
         line_px.clamp(14.0, 20.0)
     } else {
         0.0
@@ -355,4 +362,166 @@ pub(crate) fn glyph_margin_w(p: &crate::config::Props, line_px: f64) -> f64 {
         0.0
     };
     bp.max(hunk)
+}
+
+/// VS Code's breakpoint colours: `debugIcon.breakpointForeground`, the disabled and
+/// unverified glyphs, the current stack frame arrow and the frame highlights.
+const BP_DISABLED: Color = Color::from_rgb8(0x84, 0x84, 0x84);
+const FRAME_TOP: Color = Color::from_rgb8(0xff, 0xcc, 0x00);
+const FRAME_OTHER: Color = Color::from_rgb8(0x89, 0xd1, 0x85);
+/// `editor.stackFrameHighlightBackground` (#ffff0033).
+pub(crate) const FRAME_TOP_BG: Color = Color::from_rgba8(0xff, 0xff, 0x00, 0x33);
+/// `editor.focusedStackFrameHighlightBackground` (#7abd7a4d).
+pub(crate) const FRAME_OTHER_BG: Color = Color::from_rgba8(0x7a, 0xbd, 0x7a, 0x4d);
+
+/// One glyph-margin cell with rich breakpoints: the glyph (if any), a click (the host's
+/// handler, else a toggle) and the host's right-click menu.
+fn mark_cell(
+    f: &Frame,
+    n: usize,
+    bp_w: f64,
+    y: f64,
+    mark: Option<&crate::annotations::BreakpointMark>,
+) -> AnyWidget {
+    let d = (f.line_px * 0.6).min(14.0);
+    let (glyph, label): (AnyWidget, String) = match mark {
+        None => (
+            container().width(d).height(d).into_widget(),
+            format!("Glyph margin line {}", n + 1),
+        ),
+        Some(m) => {
+            let color = if m.enabled {
+                f.theme.breakpoint
+            } else {
+                BP_DISABLED
+            };
+            let kind = if !m.enabled {
+                if m.is_log() {
+                    "Disabled logpoint"
+                } else {
+                    "Disabled breakpoint"
+                }
+            } else if !m.verified {
+                if m.is_log() {
+                    "Unverified logpoint"
+                } else {
+                    "Unverified breakpoint"
+                }
+            } else if m.is_log() {
+                "Logpoint"
+            } else if m.is_conditional() {
+                "Conditional breakpoint"
+            } else {
+                "Breakpoint"
+            };
+            let hollow = !m.verified && m.enabled;
+            let mut deco = BoxDecoration::new().radius(BorderRadius::all(if m.is_log() {
+                2.0
+            } else {
+                d / 2.0
+            }));
+            deco = if hollow {
+                deco.border(Border::all(BorderSide::new(BP_DISABLED, 1.5)))
+            } else {
+                deco.color(color)
+            };
+            let size = if m.is_log() { d * 0.8 } else { d };
+            let mut c = container()
+                .width(size)
+                .height(size)
+                .alignment(Alignment::CENTER)
+                .decoration(deco);
+            if m.is_conditional() && !m.is_log() {
+                // The "=" bar of VS Code's conditional breakpoint.
+                c =
+                    c.child(container().width(size * 0.5).height(2.0).decoration(
+                        BoxDecoration::new().color(Color::from_rgb8(0xff, 0xff, 0xff)),
+                    ));
+            }
+            (c.into_widget(), format!("{kind} line {}", n + 1))
+        }
+    };
+    let click = f.p.on_breakpoint_click.clone();
+    let marks = f.p.breakpoint_marks;
+    let cell = semantics(
+        SemanticsRole::Button,
+        label,
+        GestureDetector::new(
+            container()
+                .width(bp_w)
+                .height(f.line_px)
+                .alignment(Alignment::CENTER)
+                .child(glyph),
+        )
+        .cursor(pebbles::widgets::action_cursor())
+        .on_tap(action(move || match &click {
+            Some(cb) => cb(n),
+            None => {
+                if let Some(m) = marks {
+                    m.update(|m| {
+                        if m.remove(&n).is_none() {
+                            m.insert(n, crate::annotations::BreakpointMark::default());
+                        }
+                    });
+                }
+            }
+        })),
+    );
+    let cell: AnyWidget = match &f.p.breakpoint_menu {
+        Some(menu) => {
+            let mut m = context_menu(cell).width(240.0);
+            let ctx = crate::annotations::MenuContext {
+                caret: (n, 0),
+                ..Default::default()
+            };
+            for row in crate::annotations::arrange(menu(n)) {
+                match row {
+                    None => m = m.separator(),
+                    Some(it) => {
+                        let run = it.run.clone();
+                        let ctx = ctx.clone();
+                        m = m.item(
+                            menu_item(it.label.clone())
+                                .disabled(!it.enabled)
+                                .on_select(move || run(&ctx)),
+                        );
+                    }
+                }
+            }
+            m.into_widget()
+        }
+        None => cell.into_widget(),
+    };
+    Positioned::new(cell).left(4.0).top(y).into_widget()
+}
+
+/// The current-statement arrow (top frame: yellow; a selected outer frame: green).
+fn frame_arrow(f: &Frame, n: usize, bp_w: f64, y: f64, top: bool) -> AnyWidget {
+    let s = (f.line_px * 0.7).min(16.0);
+    Positioned::new(semantics(
+        SemanticsRole::Label,
+        format!(
+            "{} line {}",
+            if top {
+                "Current statement"
+            } else {
+                "Stack frame"
+            },
+            n + 1
+        ),
+        ignore_pointer(
+            container()
+                .width(bp_w)
+                .height(f.line_px)
+                .alignment(Alignment::CENTER)
+                .child(icon(IconKind::ArrowRight).size(s).color(if top {
+                    FRAME_TOP
+                } else {
+                    FRAME_OTHER
+                })),
+        ),
+    ))
+    .left(4.0)
+    .top(y)
+    .into_widget()
 }

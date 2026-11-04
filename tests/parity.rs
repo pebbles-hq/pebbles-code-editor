@@ -326,6 +326,93 @@ fn breakpoint_margin_toggles_and_breakpoints_follow_edits() {
 }
 
 #[test]
+fn breakpoint_marks_render_kinds_follow_edits_and_route_clicks_and_menus() {
+    use pebbles_code_editor::{BreakpointMark, EditorMenuItem, StackFrameLine};
+    use std::collections::BTreeMap;
+    pebbles::widgets::overlay::init();
+    pebbles::core::focus::init();
+    let code = create_root_signal(String::from("a\nb\nc\nd\n"));
+    let cond = BreakpointMark {
+        condition: Some("x > 1".into()),
+        ..BreakpointMark::default()
+    };
+    let log = BreakpointMark {
+        log_message: Some("hi".into()),
+        verified: false,
+        ..BreakpointMark::default()
+    };
+    let off = BreakpointMark {
+        enabled: false,
+        ..BreakpointMark::default()
+    };
+    let marks = create_root_signal(BTreeMap::from([(0usize, cond), (1, log), (2, off)]));
+    let frames = create_root_signal(vec![StackFrameLine { line: 3, top: true }]);
+    let clicked = Rc::new(RefCell::new(Vec::<usize>::new()));
+    let c2 = clicked.clone();
+    let menu_line = Rc::new(RefCell::new(None::<usize>));
+    let m2 = menu_line.clone();
+    let mut h = Harness::new().window(500.0, 300.0);
+    h.mount_widget(View::new(
+        Color::from_rgba8(255, 255, 255, 255),
+        pebbles::widgets::overlay::OverlayHost::wrap(
+            code_editor(code)
+                .height(280.0)
+                .breakpoint_marks(marks)
+                .stack_frame_lines(frames)
+                .on_breakpoint_click(move |l| c2.borrow_mut().push(l))
+                .breakpoint_menu(move |l| {
+                    let m = m2.clone();
+                    vec![EditorMenuItem::new("bp", "Remove Breakpoint", move |_| {
+                        *m.borrow_mut() = Some(l)
+                    })]
+                }),
+        ),
+    ));
+    h.frames(3);
+    let labels: Vec<String> = h
+        .semantics_tree()
+        .into_iter()
+        .map(|n| n.props.label)
+        .collect();
+    for l in [
+        "Conditional breakpoint line 1",
+        "Unverified logpoint line 2",
+        "Disabled breakpoint line 3",
+        "Glyph margin line 4",
+        "Current statement line 4",
+    ] {
+        assert!(labels.iter().any(|x| x == l), "{l}: {labels:?}");
+    }
+    let at = |h: &Harness, l: &str| {
+        let b = h
+            .semantics_tree()
+            .into_iter()
+            .find(|n| n.props.label == l)
+            .unwrap()
+            .bounds;
+        Offset::new((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0)
+    };
+    // A click goes to the host (no toggle of its own).
+    let p = at(&h, "Glyph margin line 4");
+    h.click(p);
+    assert_eq!(*clicked.borrow(), vec![3]);
+    assert_eq!(marks.get().len(), 3);
+    // The right-click menu is the host's.
+    let p = at(&h, "Disabled breakpoint line 3");
+    h.ui.dispatch_secondary_tap_down(p);
+    h.ui.dispatch_secondary_tap_up(p);
+    h.frames(2);
+    assert!(h.find_text("Remove Breakpoint"));
+    // Marks follow edits above them.
+    code.set(String::from("aX\nY\nb\nc\nd\n"));
+    h.frames(2);
+    assert_eq!(
+        marks.get().keys().copied().collect::<Vec<_>>(),
+        vec![0, 2, 3]
+    );
+}
+
+#[test]
 fn side_by_side_diff_editor_scrolls_both_sides_together() {
     pebbles::widgets::overlay::init();
     pebbles::core::focus::init();

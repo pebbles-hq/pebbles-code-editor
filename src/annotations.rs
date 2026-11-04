@@ -91,6 +91,68 @@ pub struct GutterAnnotations {
     pub items: Vec<GutterAnnotation>,
 }
 
+/// A breakpoint in the glyph margin ([`CodeEditor::breakpoint_marks`]): VS Code's
+/// breakpoint decorations. The glyph follows the kind — a dot (plain), a dot with a bar
+/// (conditional / hit count), a diamond (logpoint) — drawn grey when disabled and hollow
+/// when the debugger could not verify it.
+///
+/// [`CodeEditor::breakpoint_marks`]: crate::CodeEditor::breakpoint_marks
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BreakpointMark {
+    /// Stop only when this expression is true.
+    pub condition: Option<String>,
+    /// Stop only when the hit count satisfies this (`5`, `>3`, `%2`).
+    pub hit_condition: Option<String>,
+    /// A logpoint: print this message instead of stopping.
+    pub log_message: Option<String>,
+    /// Off: kept but not sent to the debugger (drawn grey).
+    pub enabled: bool,
+    /// The debugger confirmed it (`true` while no session runs).
+    pub verified: bool,
+    /// Why it is unverified / what the debugger said (hover text).
+    pub message: Option<String>,
+}
+
+impl Default for BreakpointMark {
+    fn default() -> Self {
+        BreakpointMark {
+            condition: None,
+            hit_condition: None,
+            log_message: None,
+            enabled: true,
+            verified: true,
+            message: None,
+        }
+    }
+}
+
+impl BreakpointMark {
+    /// A logpoint.
+    pub fn is_log(&self) -> bool {
+        self.log_message.is_some()
+    }
+    /// A conditional (or hit-count) breakpoint.
+    pub fn is_conditional(&self) -> bool {
+        self.condition.is_some() || self.hit_condition.is_some()
+    }
+}
+
+/// A line of the call stack shown in the editor ([`CodeEditor::stack_frame_lines`]): the
+/// top frame (where execution is paused) is highlighted yellow with an arrow, an outer
+/// frame selected in the call stack green.
+///
+/// [`CodeEditor::stack_frame_lines`]: crate::CodeEditor::stack_frame_lines
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StackFrameLine {
+    /// The 0-based line.
+    pub line: usize,
+    /// The top frame (the current execution point).
+    pub top: bool,
+}
+
+/// Items for the glyph margin's right-click menu on a line (`CodeEditor::breakpoint_menu`).
+pub type BreakpointMenu = Rc<dyn Fn(usize) -> Vec<EditorMenuItem>>;
+
 /// What the editor knows when its context menu is built or an item runs.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MenuContext {

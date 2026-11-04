@@ -184,6 +184,10 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         language_configuration: None,
         builtin_snippets: true,
         breakpoints: None,
+        breakpoint_marks: None,
+        on_breakpoint_click: None,
+        breakpoint_menu: None,
+        stack_frame_lines: None,
         soft_wrap: false,
         diff_base: None,
         keymap: crate::keymap::Keymap::default(),
@@ -282,6 +286,11 @@ pub struct CodeEditor {
     selection_handles: bool,
     folds: Option<Signal<std::collections::BTreeSet<usize>>>,
     breakpoints: Option<Signal<std::collections::BTreeSet<usize>>>,
+    breakpoint_marks:
+        Option<Signal<std::collections::BTreeMap<usize, crate::annotations::BreakpointMark>>>,
+    on_breakpoint_click: Option<std::rc::Rc<dyn Fn(usize)>>,
+    breakpoint_menu: Option<crate::annotations::BreakpointMenu>,
+    stack_frame_lines: Option<Signal<Vec<crate::annotations::StackFrameLine>>>,
     snippets: Vec<crate::snippets::Snippet>,
     language_configuration: Option<crate::langconfig::LanguageConfiguration>,
     builtin_snippets: bool,
@@ -616,6 +625,44 @@ impl CodeEditor {
     /// breakpoint, set lines draw a breakpoint dot. Lines move with edits above them.
     pub fn breakpoints(mut self, lines: Signal<std::collections::BTreeSet<usize>>) -> Self {
         self.breakpoints = Some(lines);
+        self
+    }
+    /// Rich breakpoints in the glyph margin (VS Code's breakpoint decorations), bound to a
+    /// caller-owned map of 0-based line → [`BreakpointMark`]: plain, conditional and
+    /// logpoint glyphs, disabled (grey) and unverified (hollow). Lines move with edits
+    /// above them, like [`breakpoints`](Self::breakpoints). A click toggles a plain
+    /// breakpoint unless [`on_breakpoint_click`](Self::on_breakpoint_click) is set.
+    ///
+    /// [`BreakpointMark`]: crate::BreakpointMark
+    pub fn breakpoint_marks(
+        mut self,
+        marks: Signal<std::collections::BTreeMap<usize, crate::annotations::BreakpointMark>>,
+    ) -> Self {
+        self.breakpoint_marks = Some(marks);
+        self
+    }
+    /// Handle a click in the glyph margin on a 0-based line (instead of the default
+    /// toggle) — the host's breakpoint model (persistence, debugger sync).
+    pub fn on_breakpoint_click(mut self, f: impl Fn(usize) + 'static) -> Self {
+        self.on_breakpoint_click = Some(std::rc::Rc::new(f));
+        self
+    }
+    /// The glyph margin's right-click menu for a line (VS Code: Add Breakpoint / Add
+    /// Conditional Breakpoint… / Add Logpoint… / Edit / Disable / Remove).
+    pub fn breakpoint_menu(
+        mut self,
+        f: impl Fn(usize) -> Vec<crate::annotations::EditorMenuItem> + 'static,
+    ) -> Self {
+        self.breakpoint_menu = Some(std::rc::Rc::new(f));
+        self
+    }
+    /// The call-stack lines to highlight (VS Code's `editor.stackFrameHighlightBackground`
+    /// / `focusedStackFrameHighlightBackground` and the current-statement arrow).
+    pub fn stack_frame_lines(
+        mut self,
+        lines: Signal<Vec<crate::annotations::StackFrameLine>>,
+    ) -> Self {
+        self.stack_frame_lines = Some(lines);
         self
     }
     /// User-defined snippets, offered in the completion list next to the built-in ones
@@ -1012,6 +1059,11 @@ pub(crate) struct Props {
     pub(crate) selection_handles: bool,
     pub(crate) folds: Option<Signal<std::collections::BTreeSet<usize>>>,
     pub(crate) breakpoints: Option<Signal<std::collections::BTreeSet<usize>>>,
+    pub(crate) breakpoint_marks:
+        Option<Signal<std::collections::BTreeMap<usize, crate::annotations::BreakpointMark>>>,
+    pub(crate) on_breakpoint_click: Option<std::rc::Rc<dyn Fn(usize)>>,
+    pub(crate) breakpoint_menu: Option<crate::annotations::BreakpointMenu>,
+    pub(crate) stack_frame_lines: Option<Signal<Vec<crate::annotations::StackFrameLine>>>,
     pub(crate) snippets: Vec<crate::snippets::Snippet>,
     pub(crate) lang_cfg: Option<std::rc::Rc<crate::langconfig::Compiled>>,
     pub(crate) builtin_snippets: bool,
@@ -1150,6 +1202,10 @@ impl From<CodeEditor> for Props {
             selection_handles: e.selection_handles,
             folds: e.folds,
             breakpoints: e.breakpoints,
+            breakpoint_marks: e.breakpoint_marks,
+            on_breakpoint_click: e.on_breakpoint_click,
+            breakpoint_menu: e.breakpoint_menu,
+            stack_frame_lines: e.stack_frame_lines,
             snippets: e.snippets,
             lang_cfg: e
                 .language_configuration
