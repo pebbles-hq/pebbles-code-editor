@@ -119,9 +119,12 @@ fn render_diff(d: &DiffEditor) -> AnyWidget {
         .diff_align(true)
         .scroll_link(link);
     let modified = modified.diff_align(true).scroll_link(link);
+    // A 1px divider between the panes in the theme's border colour (VS Code's
+    // `diffEditor.border`), so the two sides read as separate panes.
+    let divider = original.effective_theme().border;
     row(children![
         expanded(original),
-        container().width(1.0).height(d.height),
+        container().width(1.0).height(d.height).color(divider),
         expanded(modified),
     ])
     .cross_axis_alignment(CrossAxisAlignment::Start)

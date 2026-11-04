@@ -341,6 +341,10 @@ pub type EditHook = std::rc::Rc<dyn Fn(&crate::collab::Edit, bool)>;
 pub type ScrollHook = std::rc::Rc<dyn Fn(f64)>;
 
 impl CodeEditor {
+    /// The theme this editor will paint with (the pinned one, else the app default).
+    pub(crate) fn effective_theme(&self) -> EditorTheme {
+        self.theme.clone().unwrap_or_else(EditorTheme::from_theme)
+    }
     /// The syntax highlighter (default: none — plain text).
     pub fn language(mut self, lang: Box<dyn Language>) -> Self {
         self.language = Some(lang);
