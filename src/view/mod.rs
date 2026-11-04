@@ -3426,10 +3426,11 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             })
             .order(order)
         };
+        // A read-only editor can't cut or paste (VS Code greys them).
         let mut items = vec![
-            edit_item("Cut", 1, KeyInput::Cut),
+            edit_item("Cut", 1, KeyInput::Cut).enabled(!read_only),
             edit_item("Copy", 2, KeyInput::Copy),
-            edit_item("Paste", 3, KeyInput::Paste),
+            edit_item("Paste", 3, KeyInput::Paste).enabled(!read_only),
         ];
         let mut all = edit_item("Select All", 1, KeyInput::SelectAll);
         all.group = "9z_select".into();

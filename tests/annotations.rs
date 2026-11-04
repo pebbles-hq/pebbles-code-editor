@@ -182,6 +182,34 @@ fn host_context_menu_items_merge_with_the_editors() {
 }
 
 #[test]
+fn read_only_editor_greys_cut_and_paste_in_its_menu() {
+    let code = create_root_signal(String::from("one\ntwo\n"));
+    let mut h = Harness::new().window(800.0, 400.0);
+    let editor = code_editor(code).height(400.0).read_only(true);
+    h.mount_widget(View::new(
+        Color::from_rgb8(255, 255, 255),
+        pebbles::widgets::OverlayHost::wrap(editor.into_widget()),
+    ));
+    h.frames(3);
+    let at = Offset::new(300.0, 30.0);
+    h.click(at);
+    h.ui.dispatch_secondary_tap_down(at);
+    h.ui.dispatch_secondary_tap_up(at);
+    h.ui.dispatch_secondary_tap(at);
+    h.frames(3);
+    for (item, off) in [
+        ("Cut", true),
+        ("Copy", false),
+        ("Paste", true),
+        ("Select All", false),
+    ] {
+        let p = center(&h, |l| l == item);
+        let not_allowed = h.ui.cursor_at(p) == Some(pebbles::render::Cursor::NotAllowed);
+        assert_eq!(not_allowed, off, "{item} disabled={off}");
+    }
+}
+
+#[test]
 fn host_code_lenses_run_one_undo_step_edits() {
     use pebbles_code_editor::{Decoration, HostCodeLens, LensItem, extension};
     let code = create_root_signal(String::from("<<<<<<< a\nx\n=======\ny\n>>>>>>> b\ntail\n"));
