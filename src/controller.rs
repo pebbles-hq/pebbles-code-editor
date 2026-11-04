@@ -44,6 +44,9 @@ pub enum Refresh {
     CodeLens,
     /// `textDocument/semanticTokens` (a full request, not a delta).
     SemanticTokens,
+    /// Forget cached hovers (their content changed without an edit — a debugger's
+    /// hover values after a step) and close the open one.
+    Hover,
 }
 
 /// A handle for driving an editor programmatically. `Copy`; create it with

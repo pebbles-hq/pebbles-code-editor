@@ -113,6 +113,12 @@ impl Lsp {
                 self.store.sem_key.set(None);
                 *self.store.sem_prev.borrow_mut() = None;
             }
+            Refresh::Hover => {
+                self.store.hover_cache.borrow_mut().clear();
+                if self.h.hover.peek().is_some() {
+                    self.h.hover.set(None);
+                }
+            }
         }
     }
     /// Toggle code lenses.
