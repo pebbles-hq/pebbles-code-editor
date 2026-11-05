@@ -17,12 +17,45 @@ pub(crate) fn to_spans(
     font_family: &str,
     weight: f32,
 ) -> Vec<TextSpan> {
+    to_spans_tabbed(src, tokens, theme, fs, font_family, weight, 0)
+}
+
+/// [`to_spans`] for a whole line drawn as one run: each tab becomes the spaces reaching its
+/// tab stop (`ts` visual columns; `0` leaves tabs as they are).
+pub(crate) fn to_spans_tabbed(
+    src: &str,
+    tokens: &[Token],
+    theme: &EditorTheme,
+    fs: f64,
+    font_family: &str,
+    weight: f32,
+    ts: usize,
+) -> Vec<TextSpan> {
     let mut spans = Vec::new();
     let mut cursor = 0usize;
+    let vcol = std::cell::Cell::new(0usize);
     let push = |text: &str, kind: TokenKind, scope: u16, spans: &mut Vec<TextSpan>| {
         if !text.is_empty() {
             let st = theme.style_token(kind, scope);
-            let mut sp = span(text.to_string())
+            let shown = if ts > 0 {
+                let mut out = String::with_capacity(text.len());
+                let mut v = vcol.get();
+                for c in text.chars() {
+                    if c == '\t' {
+                        let w = ts - v % ts;
+                        out.extend(std::iter::repeat_n(' ', w));
+                        v += w;
+                    } else {
+                        out.push(c);
+                        v += 1;
+                    }
+                }
+                vcol.set(v);
+                out
+            } else {
+                text.to_string()
+            };
+            let mut sp = span(shown)
                 .color(st.color)
                 .size(fs as f32)
                 .font_family(font_family);

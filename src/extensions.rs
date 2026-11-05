@@ -16,7 +16,6 @@ use pebbles::prelude::{AnyWidget, Color, Signal};
 
 use crate::commands::dispatch;
 use crate::edit::{ChangeSet, Coalesce, EditorState, History, Selection, Selections, Transaction};
-use crate::geometry::col_of;
 
 /// A read-only view of the editor handed to extension callbacks.
 pub struct Snapshot<'a> {
@@ -214,10 +213,8 @@ impl EditContext {
             ),
             Coalesce::Never,
         );
-        self.goal.set(col_of(
-            &self.state.peek().text(),
-            self.state.peek().primary().head,
-        ));
+        // Re-derived as a visual column (tab stops) by the next Up/Down.
+        self.goal.set(usize::MAX);
     }
     /// Insert `text` at the caret (replacing any selection).
     pub fn insert(&self, text: impl Into<String>) {

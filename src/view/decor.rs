@@ -62,7 +62,7 @@ pub(crate) fn occurrences(f: &Frame, layers: &mut Vec<AnyWidget>) {
                 K::Text => with_alpha(f.theme.gutter_active_fg, 0.12),
             };
             let (x, y) = f.xy(line, f.li.col_of(f.src, a));
-            let w = f.src[a..b].chars().take_while(|&c| c != '\n').count() as f64 * f.advance;
+            let w = f.bytes_w(a, b);
             layers.push(rect(x, y, w, f.line_px, color));
         }
         return;
@@ -91,13 +91,7 @@ pub(crate) fn occurrences(f: &Frame, layers: &mut Vec<AnyWidget>) {
             continue;
         }
         let (x, y) = f.xy(line, f.li.col_of(f.src, at));
-        layers.push(rect(
-            x,
-            y,
-            word.chars().count() as f64 * f.advance,
-            f.line_px,
-            color,
-        ));
+        layers.push(rect(x, y, f.bytes_w(at, at + word.len()), f.line_px, color));
     }
 }
 
@@ -114,7 +108,7 @@ pub(crate) fn snippet_placeholders(f: &Frame, layers: &mut Vec<AnyWidget>) {
             continue;
         }
         let (x, y) = f.xy(line, f.li.col_of(f.src, a));
-        let w = f.src[a..b].chars().take_while(|&c| c != '\n').count() as f64 * f.advance;
+        let w = f.bytes_w(a, b);
         layers.push(rect(x, y, w.max(2.0), f.line_px, color));
     }
 }
@@ -134,12 +128,13 @@ pub(crate) fn active_indent_guide(f: &Frame, layers: &mut Vec<AnyWidget>) {
         .chars()
         .take_while(|c| *c == ' ' || *c == '\t')
         .count();
+    let col = f.li.vcol(head, col); // visual: tabs reach their tab stop
     for line in (head + 1).max(f.first_line)..=last.min(f.last_line) {
         if f.disp.is_hidden(line) {
             continue;
         }
         layers.push(rect(
-            f.pad_l + col as f64 * f.advance,
+            f.vcol_x(col),
             f.y_of(line),
             1.0,
             f.line_px,
@@ -175,8 +170,8 @@ pub(crate) fn bracket_pair_guide(f: &Frame, layers: &mut Vec<AnyWidget>) {
     if hi_line <= lo_line + 1 && hi_line == lo_line {
         return;
     }
-    let ccol = f.li.col_of(f.src, c);
-    let ocol = f.li.col_of(f.src, o);
+    let ccol = f.li.vcol(hi_line, f.li.col_of(f.src, c));
+    let ocol = f.li.vcol(lo_line, f.li.col_of(f.src, o));
     let x = f.pad_l + ccol as f64 * f.advance + f.advance / 2.0;
     for line in (lo_line + 1).max(f.first_line)..hi_line.min(f.last_line + 1) {
         if f.disp.is_hidden(line) {
@@ -261,7 +256,7 @@ pub(crate) fn links(f: &Frame, layers: &mut Vec<AnyWidget>) {
             layers.push(rect(
                 x,
                 y + f.line_px - 3.0,
-                n as f64 * f.advance,
+                f.cols_w(line, ca, ca + n),
                 1.0,
                 f.theme.syntax.link.color,
             ));
@@ -365,7 +360,7 @@ pub(crate) fn fold_badges(f: &Frame, layers: &mut Vec<AnyWidget>) {
             .map(|l| {
                 let a = f.li.line_start_of(l);
                 let b = line_end(f.src, a);
-                text(f.src[a..b].replace('\t', "    "))
+                text(crate::geometry::expand_tabs(&f.src[a..b], f.li.tab_size()))
                     .size((f.fs * 0.9) as f32)
                     .font_family(f.font_family)
                     .color(f.theme.foreground)
@@ -420,7 +415,7 @@ pub(crate) fn linked_editing(f: &Frame, layers: &mut Vec<AnyWidget>) {
             continue;
         }
         let (x, y) = f.xy(line, f.li.col_of(f.src, s));
-        let w = f.src[s..e].chars().count().max(1) as f64 * f.advance;
+        let w = f.bytes_w(s, e).max(f.advance);
         layers.push(outline(x, y, w, f.line_px, f.theme.linked_editing));
     }
 }

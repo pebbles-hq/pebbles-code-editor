@@ -764,7 +764,12 @@ pub(crate) fn convert_line_endings(src: &str, to: LineEnding) -> Option<Transact
 
 /// Add a caret one line above/below every cursor (Ctrl+Alt+Up / Ctrl+Alt+Down), at the same
 /// column (clamped to the line).
-pub(crate) fn add_cursor_vertical(src: &str, sels: &Selections, down: bool) -> Option<Transaction> {
+pub(crate) fn add_cursor_vertical(
+    src: &str,
+    sels: &Selections,
+    down: bool,
+    ts: usize,
+) -> Option<Transaction> {
     let sels = &sels.clamped_str(src);
     let n = line_count(src);
     let mut ranges = sels.ranges().to_vec();
@@ -783,7 +788,9 @@ pub(crate) fn add_cursor_vertical(src: &str, sels: &Selections, down: bool) -> O
             }
             l - 1
         };
-        let c = Selection::caret(byte_at(src, target, col_of(src, r.head)));
+        // Same VISUAL column (tab stops at `ts`), like VS Code.
+        let v = crate::geometry::vcol_of(src, r.head, ts);
+        let c = Selection::caret(crate::geometry::byte_at_vcol(src, target, v, ts));
         if *r == pr {
             primary_new = Some(c);
         }
@@ -889,6 +896,7 @@ pub(crate) fn column_select(
     sels: &Selections,
     dl: isize,
     dc: isize,
+    ts: usize,
 ) -> Option<Transaction> {
     let rs = sels.ranges();
     let pi = sels.primary_index();
@@ -901,15 +909,32 @@ pub(crate) fn column_select(
         first.anchor
     };
     let moving = sels.primary().head;
-    let (al, ac) = (line_of(src, fixed), col_of(src, fixed));
+    // The box is in VISUAL columns (tabs expanded to their tab stop), like VS Code.
+    use crate::geometry::{byte_at_vcol, vcol_of};
+    let (al, ac) = (line_of(src, fixed), vcol_of(src, fixed, ts));
     let (ml, mc) = (line_of(src, moving), col_of(src, moving));
     let n = line_count(src) as isize;
     let nl = (ml as isize + dl).clamp(0, n - 1) as usize;
-    let nc = (mc as isize + dc).max(0) as usize;
+    let nc = if dc == 0 {
+        vcol_of(src, moving, ts)
+    } else {
+        // Step one char along the moving corner's line, then use its visual column.
+        let tc = (mc as isize + dc).max(0) as usize;
+        let le = line_end(src, moving);
+        let len = col_of(src, le);
+        if tc <= len {
+            vcol_of(src, byte_at(src, ml, tc), ts)
+        } else {
+            vcol_of(src, le, ts) + (tc - len)
+        }
+    };
     let mut out = Vec::new();
     let (lo, hi) = (al.min(nl), al.max(nl));
     for l in lo..=hi {
-        out.push(Selection::range(byte_at(src, l, ac), byte_at(src, l, nc)));
+        out.push(Selection::range(
+            byte_at_vcol(src, l, ac, ts),
+            byte_at_vcol(src, l, nc, ts),
+        ));
     }
     let primary = if nl >= al { out.len() - 1 } else { 0 };
     Some(Transaction::select(Selections::new(out, primary)))
@@ -1610,16 +1635,16 @@ mod tests {
     #[test]
     fn add_cursor_above_below() {
         let (_, s) = run("abc\ndef\nghi", caret(5), |s, x| {
-            add_cursor_vertical(s, x, false)
+            add_cursor_vertical(s, x, false, 4)
         });
         assert_eq!(s, vec![(1, 1), (5, 5)]);
         let (_, s) = run("abc\ndef\nghi", caret(5), |s, x| {
-            add_cursor_vertical(s, x, true)
+            add_cursor_vertical(s, x, true, 4)
         });
         assert_eq!(s, vec![(5, 5), (9, 9)]);
         // Shorter line clamps the column.
         let (_, s) = run("abcdef\nx", caret(5), |s, x| {
-            add_cursor_vertical(s, x, true)
+            add_cursor_vertical(s, x, true, 4)
         });
         assert_eq!(s, vec![(5, 5), (8, 8)]);
     }
@@ -1651,11 +1676,31 @@ mod tests {
     #[test]
     fn column_select_grows_a_box() {
         let src = "abcd\nefgh\nijkl";
-        let (_, s) = run(src, caret(1), |s, x| column_select(s, x, 1, 0));
+        let (_, s) = run(src, caret(1), |s, x| column_select(s, x, 1, 0, 4));
         assert_eq!(s, vec![(1, 1), (6, 6)]);
         let sel = Selections::new(vec![Selection::caret(1), Selection::caret(6)], 1);
-        let (_, s) = run(src, sel, |s, x| column_select(s, x, 0, 2));
+        let (_, s) = run(src, sel, |s, x| column_select(s, x, 0, 2, 4));
         assert_eq!(s, vec![(1, 3), (6, 8)]);
+    }
+
+    #[test]
+    fn column_select_and_add_cursor_use_visual_columns() {
+        for ts in [2usize, 4, 8] {
+            let sp = " ".repeat(ts);
+            // Line 0: a tab then `xy`; line 1: `ts` spaces then `xy` — `x` is at visual
+            // column `ts` on both.
+            let src = format!("\txy\n{sp}xy");
+            let x0 = 1; // byte of `x` on line 0
+            let x1 = 4 + ts; // byte of `x` on line 1
+            let (_, s) = run(&src, caret(x0), |s, x| add_cursor_vertical(s, x, true, ts));
+            assert!(s.contains(&(x1, x1)), "ts={ts}: {s:?}");
+            let (_, s) = run(&src, caret(x0), |s, x| column_select(s, x, 1, 0, ts));
+            assert_eq!(s, vec![(x0, x0), (x1, x1)], "ts={ts}");
+            // Growing right by one char from after the tab: one visual column on both lines.
+            let sel = Selections::new(vec![Selection::caret(x0), Selection::caret(x1)], 1);
+            let (_, s) = run(&src, sel, |s, x| column_select(s, x, 0, 1, ts));
+            assert_eq!(s, vec![(x0, x0 + 1), (x1, x1 + 1)], "ts={ts}");
+        }
     }
 
     #[test]

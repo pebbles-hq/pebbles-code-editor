@@ -332,10 +332,12 @@ impl Lsp {
             }
             // Indent the lens to its line's indentation, as VS Code does.
             let ls_start = crate::geometry::line_start_of(src, line);
-            let indent = src[ls_start..]
-                .chars()
-                .take_while(|c| *c == ' ' || *c == '\t')
+            let indent_bytes = src[ls_start..]
+                .bytes()
+                .take_while(|c| *c == b' ' || *c == b'\t')
                 .count();
+            // Visual indentation: a tab reaches its tab stop.
+            let indent = crate::geometry::vcol_of(src, ls_start + indent_bytes, self.tab_size());
             let mut items: Vec<AnyWidget> = vec![gap_w(indent as f64 * fs * 0.6).into_widget()];
             for (i, it) in ls.into_iter().enumerate() {
                 if i > 0 {

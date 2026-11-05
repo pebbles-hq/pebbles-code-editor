@@ -66,6 +66,7 @@ pub enum Refresh {
 pub struct EditorController {
     pub(crate) requests: Signal<Vec<Request>>,
     pub(crate) cursor: Signal<(usize, usize)>,
+    pub(crate) visual_col: Signal<usize>,
     pub(crate) save_ready: Signal<u64>,
     pub(crate) ticket: Signal<u64>,
 }
@@ -76,6 +77,7 @@ pub fn editor_controller() -> EditorController {
     EditorController {
         requests: create_signal(Vec::new()),
         cursor: create_signal((0, 0)),
+        visual_col: create_signal(0),
         save_ready: create_signal(0),
         ticket: create_signal(0),
     }
@@ -168,5 +170,11 @@ impl EditorController {
     /// `.get()` inside a component re-renders on caret moves (e.g. a "Ln 3, Col 7" status).
     pub fn cursor(&self) -> Signal<(usize, usize)> {
         self.cursor
+    }
+
+    /// The primary caret's 0-based VISUAL column: tabs count up to their tab stop
+    /// (`editor.tabSize`) — what VS Code's status bar shows as "Col" (plus one). Reactive.
+    pub fn visual_col(&self) -> Signal<usize> {
+        self.visual_col
     }
 }

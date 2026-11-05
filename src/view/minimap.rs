@@ -124,7 +124,8 @@ pub(crate) fn panel(
             if col >= max_cols {
                 break;
             }
-            let width = if chr == '\t' { 4 - col % 4 } else { 1 };
+            let ts = f.li.tab_size().max(1);
+            let width = if chr == '\t' { ts - col % ts } else { 1 };
             if chr.is_whitespace() {
                 flush(&mut run, col, &mut blocks);
             } else {

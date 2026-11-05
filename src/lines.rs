@@ -166,6 +166,48 @@ pub(crate) struct LineIndex {
     folding_off: Option<Rc<Vec<(usize, usize)>>>,
     max_cols: usize,
     len: usize,
+    /// Char columns of the tab characters on each line (empty for most lines).
+    tabs: Vec<Box<[u32]>>,
+    /// Number of lines holding at least one tab (0 = every query takes the no-tab fast path).
+    tab_lines: usize,
+    /// Tab stop width in visual columns (`editor.tabSize`).
+    tab_size: usize,
+    /// The widest line in visual columns (tabs expanded to their tab stop).
+    max_vcols: usize,
+}
+
+/// Char columns of the tabs in `l` (no allocation when it has none).
+fn tabs_of(l: &str) -> Box<[u32]> {
+    if !l.as_bytes().contains(&b'\t') {
+        return Box::default();
+    }
+    l.chars()
+        .enumerate()
+        .filter(|(_, c)| *c == '\t')
+        .map(|(i, _)| i as u32)
+        .collect()
+}
+
+/// Extra visual columns (beyond 1 each) the tabs at `tabs` add before char column `hi`,
+/// counting only tabs at columns `>= lo`. Tab stops are every `ts` visual columns from the
+/// line start (VS Code `editor.tabSize`).
+pub(crate) fn tab_extra_in(tabs: &[u32], ts: usize, lo: usize, hi: usize) -> usize {
+    let ts = ts.max(1);
+    let mut acc = 0usize; // extra columns before the current tab
+    let mut sum = 0usize;
+    for &t in tabs {
+        let t = t as usize;
+        if t >= hi {
+            break;
+        }
+        let v = t + acc;
+        let extra = ts - 1 - v % ts;
+        acc += extra;
+        if t >= lo {
+            sum += extra;
+        }
+    }
+    sum
 }
 
 impl LineIndex {
@@ -175,11 +217,14 @@ impl LineIndex {
         let mut char_lens = Vec::new();
         let mut indents = Vec::new();
         let mut markers = Vec::new();
+        let mut tabs = Vec::new();
         for l in src.split('\n') {
             char_lens.push(l.chars().count());
             indents.push(indent_of(l));
             markers.push(marker_of(l));
+            tabs.push(tabs_of(l));
         }
+        let tab_lines = tabs.iter().filter(|t| !t.is_empty()).count();
         starts.extend(src.match_indices('\n').map(|(i, _)| i + 1));
         let regions = Rc::new(regions_with_markers(&indents, &markers));
         let max_cols = char_lens.iter().copied().max().unwrap_or(0);
@@ -195,7 +240,89 @@ impl LineIndex {
             folding_off: None,
             max_cols,
             len: src.len(),
+            tabs,
+            tab_lines,
+            tab_size: 4,
+            max_vcols: 0,
         }
+        .with_vcols()
+    }
+
+    /// Recompute the widest visual line.
+    fn with_vcols(mut self) -> Self {
+        self.refresh_vcols();
+        self
+    }
+    fn refresh_vcols(&mut self) {
+        self.max_vcols = if self.tab_lines == 0 {
+            self.max_cols
+        } else {
+            (0..self.char_lens.len())
+                .map(|l| self.vlen(l))
+                .max()
+                .unwrap_or(0)
+        };
+    }
+    /// The tab stop width.
+    pub(crate) fn tab_size(&self) -> usize {
+        self.tab_size
+    }
+    /// Whether any line holds a tab.
+    pub(crate) fn has_tabs(&self) -> bool {
+        self.tab_lines > 0
+    }
+    /// The tab columns of `line`.
+    pub(crate) fn tabs_of(&self, line: usize) -> &[u32] {
+        self.tabs.get(line).map(|t| &t[..]).unwrap_or(&[])
+    }
+    /// Extra visual columns added by the tabs of `line` at char columns in `[lo, hi)`.
+    pub(crate) fn tab_extra(&self, line: usize, lo: usize, hi: usize) -> usize {
+        let t = self.tabs_of(line);
+        if t.is_empty() {
+            return 0;
+        }
+        tab_extra_in(t, self.tab_size, lo, hi)
+    }
+    /// The visual column (tabs expanded) of char column `col` on `line` — VS Code's "Col".
+    pub(crate) fn vcol(&self, line: usize, col: usize) -> usize {
+        col + self.tab_extra(line, 0, col)
+    }
+    /// The visual width of `line`.
+    pub(crate) fn vlen(&self, line: usize) -> usize {
+        self.vcol(line, self.line_char_len(line))
+    }
+    /// The char column whose visual column is nearest `v` on `line` (a visual column
+    /// inside a tab lands on its nearer side); clamped to the line end.
+    #[cfg(test)]
+    pub(crate) fn col_at_vcol(&self, line: usize, v: usize) -> usize {
+        let len = self.line_char_len(line);
+        let t = self.tabs_of(line);
+        if t.is_empty() {
+            return v.min(len);
+        }
+        let mut col = 0;
+        let mut vc = 0;
+        while col < len {
+            let w = if t.binary_search(&(col as u32)).is_ok() {
+                self.tab_size.max(1) - vc % self.tab_size.max(1)
+            } else {
+                1
+            };
+            if vc + w > v {
+                return if (v - vc) * 2 >= w && w > 1 {
+                    col + 1
+                } else {
+                    col
+                };
+            }
+            vc += w;
+            col += 1;
+        }
+        len
+    }
+    /// The widest line in visual columns.
+    pub(crate) fn max_vcols(&self) -> usize {
+        self.max_vcols
     }
 
     /// Number of lines (`src.split('\n').count()`, so at least 1).
@@ -238,7 +365,14 @@ impl LineIndex {
     /// Leading-whitespace width of every line in columns (0 for blank lines) — the soft-wrap
     /// indent of continuation rows.
     pub(crate) fn indent_cols(&self) -> Vec<usize> {
-        self.indents.iter().map(|i| i.unwrap_or(0)).collect()
+        if self.tab_lines == 0 {
+            return self.indents.iter().map(|i| i.unwrap_or(0)).collect();
+        }
+        self.indents
+            .iter()
+            .enumerate()
+            .map(|(l, i)| self.vcol(l, i.unwrap_or(0)))
+            .collect()
     }
     /// The widest line, in chars.
     pub(crate) fn max_cols(&self) -> usize {
@@ -334,6 +468,17 @@ impl LineCache {
         idx.refresh_manual();
     }
 
+    /// Set the tab stop width (`editor.tabSize`, possibly detected per file).
+    pub(crate) fn set_tab_size(&mut self, n: usize) {
+        let n = n.max(1);
+        if self.index.tab_size == n {
+            return;
+        }
+        let idx = Rc::make_mut(&mut self.index);
+        idx.tab_size = n;
+        idx.refresh_vcols();
+    }
+
     /// Drain the recorded line shifts (for line-anchored state: folds, breakpoints).
     pub(crate) fn take_shifts(&mut self) -> Vec<(usize, usize, usize)> {
         std::mem::take(&mut self.shifts)
@@ -395,10 +540,12 @@ impl LineCache {
         let mut lens = Vec::new();
         let mut inds = Vec::new();
         let mut marks = Vec::new();
+        let mut tabs = Vec::new();
         for l in seg.split('\n') {
             lens.push(l.chars().count());
             inds.push(indent_of(l));
             marks.push(marker_of(l));
+            tabs.push(tabs_of(l));
         }
         let seg_n = lens.len();
         if !old.is_empty() && seg_n != b + 1 - a {
@@ -407,6 +554,7 @@ impl LineCache {
         starts.push(start);
         starts.extend(seg.match_indices('\n').map(|(i, _)| start + i + 1));
         let removed_max = idx.char_lens[a..=b].iter().copied().max().unwrap_or(0);
+        let removed_vmax = (a..=b).map(|l| idx.vlen(l)).max().unwrap_or(0);
         let added_max = lens.iter().copied().max().unwrap_or(0);
         let folds_changed = inds.len() != b + 1 - a
             || idx.indents[a..=b] != inds[..]
@@ -418,11 +566,26 @@ impl LineCache {
         idx.char_lens.splice(a..=b, lens);
         idx.indents.splice(a..=b, inds);
         idx.markers.splice(a..=b, marks);
+        let removed_tabs = idx.tabs[a..=b].iter().filter(|t| !t.is_empty()).count();
+        let added_tabs = tabs.iter().filter(|t| !t.is_empty()).count();
+        let n_new = tabs.len();
+        idx.tabs.splice(a..=b, tabs);
+        idx.tab_lines = idx.tab_lines + added_tabs - removed_tabs;
         idx.len = nb.len();
         if added_max >= idx.max_cols {
             idx.max_cols = added_max;
         } else if removed_max == idx.max_cols {
             idx.max_cols = idx.char_lens.iter().copied().max().unwrap_or(0);
+        }
+        if idx.tab_lines == 0 {
+            idx.max_vcols = idx.max_cols;
+        } else {
+            let added_v = (a..a + n_new).map(|l| idx.vlen(l)).max().unwrap_or(0);
+            if added_v >= idx.max_vcols {
+                idx.max_vcols = added_v;
+            } else if removed_vmax == idx.max_vcols {
+                idx.refresh_vcols();
+            }
         }
         if folds_changed {
             idx.regions = Rc::new(regions_with_markers(&idx.indents, &idx.markers));

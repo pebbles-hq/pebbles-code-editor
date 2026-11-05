@@ -114,6 +114,8 @@ fn indent_guides(f: &Frame, layers: &mut Vec<AnyWidget>) {
             .chars()
             .take_while(|c| *c == ' ' || *c == '\t')
             .count();
+        // Guides sit at tab stops in VISUAL columns (a leading tab is `tab_size` wide).
+        let lead = f.li.vcol(line, lead);
         // VS Code draws a guide at every indent level the line is indented past, from column 0.
         let mut gcol = 0;
         while gcol < lead {
@@ -164,7 +166,7 @@ fn word_occurrences(f: &Frame, layers: &mut Vec<AnyWidget>) {
             continue;
         }
         let (x, y) = f.xy(line, f.li.col_of(f.src, start));
-        let w = word.chars().count() as f64 * f.advance;
+        let w = f.bytes_w(start, start + word.len());
         layers.push(
             Positioned::new(
                 container().width(w).height(f.line_px).decoration(
@@ -284,8 +286,9 @@ fn code_text(f: &Frame, layers: &mut Vec<AnyWidget>) {
                 Some((c0, c1)) => (seg.start.max(c0).min(seg.end), seg.end.min(c1)),
                 None => (seg.start, seg.end),
             };
-            // One run per piece between inlay hints (a single run when the line has none).
-            for (a, b) in f.inlay_pieces(line, cs, ce) {
+            // One run per piece between inlay hints and tabs (tabs are blank space up to
+            // their tab stop; the next piece starts there).
+            for (a, b) in f.text_pieces(line, cs, ce) {
                 // Byte range of this piece's char span [a, b).
                 let bs = f.li.byte_at(f.src, line, a);
                 let be = f.li.byte_at(f.src, line, b);
@@ -331,14 +334,48 @@ fn whitespace(f: &Frame, layers: &mut Vec<AnyWidget>) {
                 Some((c0, c1)) => (seg.start.max(c0).min(seg.end), seg.end.min(c1)),
                 None => (seg.start, seg.end),
             };
-            for (a, b) in f.inlay_pieces(line, cs, ce) {
+            // A tab: an arrow spanning the tab up to its tab stop (VS Code draws `→` over
+            // the tab's whole width).
+            for &t in f.li.tabs_of(line) {
+                let t = t as usize;
+                if t < cs || t >= ce {
+                    continue;
+                }
+                let x0 = f.seg_char_x(&seg, t);
+                let x1 = f.seg_x(&seg, t + 1);
+                let y = f.row_y(row);
+                let shaft = (x1 - x0 - f.advance * 0.9).max(0.0);
+                if shaft > 0.0 {
+                    layers.push(rect_at(
+                        x0 + f.advance * 0.2,
+                        y + f.line_px / 2.0,
+                        shaft,
+                        1.0,
+                        f.theme.whitespace,
+                    ));
+                }
+                layers.push(
+                    Positioned::new(
+                        text_rich(vec![
+                            span("→".to_string())
+                                .size(f.fs as f32)
+                                .font_family(f.font_family)
+                                .color(f.theme.whitespace),
+                        ])
+                        .line_height(f.lh as f32),
+                    )
+                    .left(x1 - f.advance)
+                    .top(y)
+                    .into_widget(),
+                );
+            }
+            for (a, b) in f.text_pieces(line, cs, ce) {
                 let bs = f.li.byte_at(f.src, line, a);
                 let be = f.li.byte_at(f.src, line, b);
                 let marks: String = f.src[bs..be]
                     .chars()
                     .map(|c| match c {
                         ' ' => '·',
-                        '\t' => '→',
                         _ => ' ',
                     })
                     .collect();
@@ -516,6 +553,15 @@ pub(crate) fn carets(f: &Frame, layers: &mut Vec<AnyWidget>) {
             y += f.caret_offset.1;
         }
         let h = f.fs * 1.15;
+        // A block / underline caret spans the char under it — a tab's full width.
+        let cw = {
+            let n = crate::geometry::next_char(f.src, r.head);
+            if n > r.head && f.src.as_bytes()[r.head] == b'\t' {
+                f.bytes_w(r.head, n)
+            } else {
+                f.advance
+            }
+        };
         let style = if f.overtype {
             S::Block
         } else {
@@ -535,25 +581,25 @@ pub(crate) fn carets(f: &Frame, layers: &mut Vec<AnyWidget>) {
                 BoxDecoration::new().color(color),
             ),
             S::Block => (
-                f.advance,
+                cw,
                 f.line_px * scale,
                 y + f.line_px * (1.0 - scale) / 2.0,
                 BoxDecoration::new().color(with_alpha(f.theme.caret, (alpha * 0.55) as f32)),
             ),
             S::BlockOutline => (
-                f.advance,
+                cw,
                 f.line_px * scale,
                 y + f.line_px * (1.0 - scale) / 2.0,
                 BoxDecoration::new().border(Border::new(color, 1.0)),
             ),
             S::Underline => (
-                f.advance,
+                cw,
                 2.0,
                 y + f.line_px - 2.0,
                 BoxDecoration::new().color(color),
             ),
             S::UnderlineThin => (
-                f.advance,
+                cw,
                 1.0,
                 y + f.line_px - 1.0,
                 BoxDecoration::new().color(color),

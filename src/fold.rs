@@ -96,6 +96,8 @@ pub(crate) struct DisplayMap {
     /// Identity fast path (nothing folded, no wrap, no gaps): one row per line, answered from
     /// the line index without materializing a row per line.
     ident: Option<std::rc::Rc<crate::lines::LineIndex>>,
+    /// The line index whose tab stops widen tab characters (`None` / no tabs: 1 column each).
+    tabs: Option<std::rc::Rc<crate::lines::LineIndex>>,
 }
 
 impl DisplayMap {
@@ -121,6 +123,7 @@ impl DisplayMap {
             wrap_indents,
             std::rc::Rc::new(Inlays::new()),
             &[],
+            None,
         )
     }
 
@@ -137,7 +140,9 @@ impl DisplayMap {
         wrap_indents: &[usize],
         inlays: std::rc::Rc<Inlays>,
         extra_hidden: &[(usize, usize)],
+        tabs: Option<std::rc::Rc<crate::lines::LineIndex>>,
     ) -> Self {
+        let tabs = tabs.filter(|ix| ix.has_tabs());
         let mut hidden = vec![false; line_count];
         // Host-hidden line ranges (inclusive; a diff view's collapsed unchanged regions).
         for &(a, b) in extra_hidden {
@@ -164,7 +169,12 @@ impl DisplayMap {
             let len = char_lens.get(line).copied().unwrap_or(0);
             let ins = inlays.get(&line).map(|v| v.as_slice()).unwrap_or(&[]);
             let ins_w: usize = ins.iter().filter(|(c, _)| *c < len).map(|(_, w)| w).sum();
-            if wrap_cols == 0 || len + ins_w <= wrap_cols {
+            let ltabs: &[u32] = tabs.as_ref().map(|ix| ix.tabs_of(line)).unwrap_or(&[]);
+            let tab_w = tabs
+                .as_ref()
+                .map(|ix| ix.tab_extra(line, 0, len))
+                .unwrap_or(0);
+            if wrap_cols == 0 || len + ins_w + tab_w <= wrap_cols {
                 rows.push(Row {
                     line,
                     start: 0,
@@ -182,18 +192,23 @@ impl DisplayMap {
                 let ind = if ind * 2 < wrap_cols { ind } else { 0 };
                 while s < len {
                     let width = if first { wrap_cols } else { wrap_cols - ind };
-                    let e = if ins.is_empty() {
+                    let e = if ins.is_empty() && ltabs.is_empty() {
                         (s + width.max(1)).min(len)
                     } else {
                         // Visual widths: each char is 1 column plus the hints drawn before it.
                         let mut e = s;
                         let mut acc = 0;
                         while e < len {
-                            let w = 1 + ins
-                                .iter()
-                                .filter(|(c, _)| *c == e)
-                                .map(|(_, w)| w)
-                                .sum::<usize>();
+                            let w = 1
+                                + ins
+                                    .iter()
+                                    .filter(|(c, _)| *c == e)
+                                    .map(|(_, w)| w)
+                                    .sum::<usize>()
+                                + tabs
+                                    .as_ref()
+                                    .map(|ix| ix.tab_extra(line, e, e + 1))
+                                    .unwrap_or(0);
                             if e > s && acc + w > width.max(1) {
                                 break;
                             }
@@ -232,6 +247,7 @@ impl DisplayMap {
             row0,
             hidden,
             ident: None,
+            tabs,
         }
     }
 
@@ -270,6 +286,7 @@ impl DisplayMap {
     ) -> Self {
         let regions = index.regions();
         let any_fold = folded.iter().any(|h| index.is_fold_head(*h));
+        let tabs = index.has_tabs().then(|| index.clone());
         if !any_fold && wrap_cols == 0 && gaps.iter().all(|g| *g == 0) && extra_hidden.is_empty() {
             return DisplayMap {
                 inlays,
@@ -277,6 +294,7 @@ impl DisplayMap {
                 row0: Vec::new(),
                 hidden: Vec::new(),
                 ident: Some(index.clone()),
+                tabs,
             };
         }
         let wrap_indents = if wrap_cols > 0 {
@@ -294,6 +312,7 @@ impl DisplayMap {
             &wrap_indents,
             inlays,
             extra_hidden,
+            tabs,
         )
     }
 
@@ -311,14 +330,35 @@ impl DisplayMap {
             .sum()
     }
 
+    /// Extra columns the tabs of `line` at char columns `[lo, hi)` add (tab stops).
+    pub(crate) fn tab_sum(&self, line: usize, lo: usize, hi: usize) -> usize {
+        match &self.tabs {
+            Some(ix) => ix.tab_extra(line, lo, hi),
+            None => 0,
+        }
+    }
+
+    /// Whether `line` has a tab (its columns are not uniform).
+    pub(crate) fn line_has_tabs(&self, line: usize) -> bool {
+        self.tabs
+            .as_ref()
+            .is_some_and(|ix| !ix.tabs_of(line).is_empty())
+    }
+
     /// The x column (within `row`) of the caret position at `col`: before any hint at `col`.
     pub(crate) fn caret_xcol(&self, row: &Row, col: usize) -> usize {
-        col.saturating_sub(row.start) + self.inlay_sum(row.line, row.start, col) + row.indent
+        col.saturating_sub(row.start)
+            + self.inlay_sum(row.line, row.start, col)
+            + self.tab_sum(row.line, row.start, col)
+            + row.indent
     }
 
     /// The x column (within `row`) where the char at `col` is drawn: after the hints at `col`.
     pub(crate) fn char_xcol(&self, row: &Row, col: usize) -> usize {
-        col.saturating_sub(row.start) + self.inlay_sum(row.line, row.start, col + 1) + row.indent
+        col.saturating_sub(row.start)
+            + self.inlay_sum(row.line, row.start, col + 1)
+            + self.tab_sum(row.line, row.start, col)
+            + row.indent
     }
 
     /// Hit-test: the buffer `(line, col)` whose caret x is nearest `xcol` (fractional
@@ -332,7 +372,7 @@ impl DisplayMap {
         let r = self.row_at(row);
         let len = line_len(r.line);
         let end = r.end.min(len);
-        if self.inlays_of(r.line).is_empty() {
+        if self.inlays_of(r.line).is_empty() && !self.line_has_tabs(r.line) {
             let c = (r.start as f64 + (xcol - r.indent as f64).max(0.0)).round() as usize;
             return (r.line, c.min(end));
         }
@@ -418,7 +458,10 @@ impl DisplayMap {
     pub(crate) fn place(&self, line: usize, col: usize) -> (usize, usize) {
         if let Some(ix) = &self.ident {
             let line = if line < ix.line_count() { line } else { 0 };
-            return (line, col + self.inlay_sum(line, 0, col));
+            return (
+                line,
+                col + self.inlay_sum(line, 0, col) + self.tab_sum(line, 0, col),
+            );
         }
         let mut i = self.row0.get(line).copied().unwrap_or(0);
         while i + 1 < self.rows.len()
@@ -636,6 +679,7 @@ mod tests {
             &[],
             std::rc::Rc::new(Inlays::new()),
             &[(2, 4)],
+            None,
         );
         // Lines 0, 1 (+ its gap row) and 5.
         assert_eq!(m.rows(), 4);
@@ -656,6 +700,7 @@ mod tests {
             &[],
             inl(&[(0, 2, 4)]),
             &[],
+            None,
         );
         assert_eq!(m.rows(), 2);
         assert_eq!((m.row_at(0).start, m.row_at(0).end), (0, 6));
@@ -664,5 +709,46 @@ mod tests {
         // Without the hint the same line wraps at col 10.
         let plain = DisplayMap::new(1, &folds(&[]), &[], &[12], 10, &[], &[]);
         assert_eq!(plain.row_at(0).end, 10);
+    }
+
+    fn tab_index(src: &str, ts: usize) -> std::rc::Rc<crate::lines::LineIndex> {
+        let mut c = crate::lines::LineCache::default();
+        c.set_tab_size(ts);
+        c.sync(src)
+    }
+
+    #[test]
+    fn tabs_advance_to_the_next_tab_stop() {
+        for ts in [2usize, 4, 8] {
+            let ix = tab_index("\tx\n a\tb", ts);
+            let m = DisplayMap::for_index(&ix, &folds(&[]), 0, &[]);
+            assert_eq!(m.place(0, 1), (0, ts), "after a leading tab, ts={ts}");
+            // " a" then a tab: the tab fills to the next stop.
+            assert_eq!(m.place(1, 3), (1, if ts == 2 { 4 } else { ts }));
+            assert_eq!(ix.vcol(1, 3), if ts == 2 { 4 } else { ts });
+        }
+    }
+
+    #[test]
+    fn a_click_inside_a_tab_lands_on_the_nearer_side() {
+        let ix = tab_index("\tx", 8);
+        let m = DisplayMap::for_index(&ix, &folds(&[]), 0, &[]);
+        let len = |l: usize| ix.line_char_len(l);
+        assert_eq!(m.hit(0, 2.0, len), (0, 0));
+        assert_eq!(m.hit(0, 5.0, len), (0, 1));
+        assert_eq!(m.hit(0, 8.4, len), (0, 1));
+        assert_eq!(m.hit(0, 9.0, len), (0, 2));
+        assert_eq!(ix.col_at_vcol(0, 3), 0);
+        assert_eq!(ix.col_at_vcol(0, 4), 1);
+        assert_eq!(ix.col_at_vcol(0, 9), 2);
+    }
+
+    #[test]
+    fn tabs_count_toward_soft_wrap() {
+        // Two tabs (8 cols each) + 4 chars = 20 visual cols; wrap at 12.
+        let ix = tab_index("\t\tabcd", 8);
+        let m = DisplayMap::for_index(&ix, &folds(&[]), 12, &[]);
+        assert_eq!(m.rows(), 2);
+        assert_eq!((m.row_at(0).start, m.row_at(0).end), (0, 1));
     }
 }

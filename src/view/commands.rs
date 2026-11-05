@@ -150,7 +150,11 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
             env.history.peek().borrow_mut().break_group();
         }
         let now = env.state.peek();
-        env.goal.set(col_of(&now.text(), now.primary().head));
+        env.goal.set(crate::geometry::vcol_of(
+            &now.text(),
+            now.primary().head,
+            cfg.tab_size,
+        ));
         true
     };
     let select = |sel: Selections| edit(Some(Transaction::select(sel)));
@@ -197,8 +201,8 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
                 .request_signature(crate::language::SignatureHelpTriggerKind::Invoked, None);
             true
         }
-        C::AddCursorAbove => edit(ops::add_cursor_vertical(&src, &sels, false)),
-        C::AddCursorBelow => edit(ops::add_cursor_vertical(&src, &sels, true)),
+        C::AddCursorAbove => edit(ops::add_cursor_vertical(&src, &sels, false, cfg.tab_size)),
+        C::AddCursorBelow => edit(ops::add_cursor_vertical(&src, &sels, true, cfg.tab_size)),
         C::SelectAllOccurrences => edit(ops::select_all_occurrences(&src, &sels)),
         C::MoveSelectionToNextFindMatch => {
             let p = sels.primary();
@@ -246,10 +250,10 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
             });
             true
         }
-        C::ColumnSelectUp => edit(ops::column_select(&src, &sels, -1, 0)),
-        C::ColumnSelectDown => edit(ops::column_select(&src, &sels, 1, 0)),
-        C::ColumnSelectLeft => edit(ops::column_select(&src, &sels, 0, -1)),
-        C::ColumnSelectRight => edit(ops::column_select(&src, &sels, 0, 1)),
+        C::ColumnSelectUp => edit(ops::column_select(&src, &sels, -1, 0, cfg.tab_size)),
+        C::ColumnSelectDown => edit(ops::column_select(&src, &sels, 1, 0, cfg.tab_size)),
+        C::ColumnSelectLeft => edit(ops::column_select(&src, &sels, 0, -1, cfg.tab_size)),
+        C::ColumnSelectRight => edit(ops::column_select(&src, &sels, 0, 1, cfg.tab_size)),
         C::ExpandLineSelection => edit(ops::expand_line_selection(&src, &sels)),
         C::JumpToBracket => edit(ops::jump_to_bracket(&src, &sels, cfg)),
         C::SelectToBracket => edit(ops::select_to_bracket(&src, &sels, cfg)),
@@ -347,7 +351,10 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
             });
             let down = matches!(cmd, C::CursorPageDown | C::CursorPageDownSelect);
             let extend = matches!(cmd, C::CursorPageUpSelect | C::CursorPageDownSelect);
-            let col = env.goal.peek();
+            let col = match env.goal.peek() {
+                usize::MAX => crate::geometry::vcol_of(&src, sels.primary().head, cfg.tab_size),
+                g => g,
+            };
             let n = src.split('\n').count();
             let r: Vec<Selection> = sels
                 .ranges()
@@ -359,7 +366,7 @@ pub(crate) fn run(cmd: C, env: &Env) -> bool {
                     } else {
                         l.saturating_sub(rows)
                     };
-                    let b = byte_at(&src, t, col);
+                    let b = crate::geometry::byte_at_vcol(&src, t, col, cfg.tab_size);
                     Selection::range(if extend { r.anchor } else { b }, b)
                 })
                 .collect();

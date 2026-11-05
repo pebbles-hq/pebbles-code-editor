@@ -161,6 +161,53 @@ impl Frame<'_> {
         out.push((a, ce));
         out
     }
+    /// `[cs, ce)` split at inlay hints and around tabs (tab chars are left out: they draw as
+    /// blank space reaching their tab stop), so each piece draws contiguously from
+    /// `seg_char_x(piece.start)`.
+    pub(crate) fn text_pieces(&self, line: usize, cs: usize, ce: usize) -> Vec<(usize, usize)> {
+        let pieces = self.inlay_pieces(line, cs, ce);
+        let tabs = self.li.tabs_of(line);
+        if tabs.is_empty() {
+            return pieces;
+        }
+        let mut out = Vec::new();
+        for (a, b) in pieces {
+            let mut s = a;
+            for &t in tabs {
+                let t = t as usize;
+                if t < s || t >= b {
+                    continue;
+                }
+                if t > s {
+                    out.push((s, t));
+                }
+                s = t + 1;
+            }
+            if s < b {
+                out.push((s, b));
+            }
+        }
+        out
+    }
+    /// The width (px) of chars `[c0, c1)` of `line`: tabs span to their tab stop.
+    pub(crate) fn cols_w(&self, line: usize, c0: usize, c1: usize) -> f64 {
+        let (c0, c1) = (c0.min(c1), c1.max(c0));
+        (self.li.vcol(line, c1) - self.li.vcol(line, c0)) as f64 * self.advance
+    }
+    /// The width (px) of the bytes `[a, b)` (cut at the first line end), tabs expanded.
+    pub(crate) fn bytes_w(&self, a: usize, b: usize) -> f64 {
+        let line = self.li.line_of(self.src, a);
+        let b = b.min(crate::geometry::line_end(self.src, a));
+        let (ca, cb) = (
+            self.li.col_of(self.src, a),
+            self.li.col_of(self.src, b.max(a)),
+        );
+        self.cols_w(line, ca, cb)
+    }
+    /// The x (px) of visual column `v` (tabs expanded) on `line`'s first row — for guides.
+    pub(crate) fn vcol_x(&self, v: usize) -> f64 {
+        self.pad_l + v as f64 * self.advance
+    }
     /// The y (px) of a display row index.
     pub(crate) fn row_y(&self, row: usize) -> f64 {
         self.pad_t + row as f64 * self.line_px
@@ -919,6 +966,8 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             .unwrap_or((p.insert_spaces, p.tab_size)),
         false => (p.insert_spaces, p.tab_size),
     };
+    // Tab stops (`editor.tabSize`, or the detected indentation unit) for every geometry query.
+    line_cache.peek().borrow_mut().set_tab_size(tab_size.max(1));
     lsp_ctl
         .store
         .fmt
@@ -934,6 +983,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
     // Language-derived editing config (owned, so it can travel into the 'static handler).
     let cfg = Rc::new(EditCfg {
         tab: indent_unit.clone(),
+        tab_size: tab_size.max(1),
         line_comment: match p.lang_cfg.as_ref().filter(|c| c.cfg.line_comment.is_some()) {
             Some(c) => c.cfg.line_comment.clone(),
             None => p
@@ -1313,7 +1363,11 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
                     Transaction::change_and_select(cs, Selections::new(carets, pi)),
                     Coalesce::Typing,
                 );
-                goal.set(col_of(&state.peek().text(), state.peek().primary().head));
+                goal.set(crate::geometry::vcol_of(
+                    &state.peek().text(),
+                    state.peek().primary().head,
+                    tab_size,
+                ));
                 return true;
             }
             // Inline (ghost-text) suggestion: Tab accepts, Escape dismisses, Alt+] / Alt+[
@@ -1402,7 +1456,11 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
                         if let Some(stop) = crate::snippet::jump(state, snippet, fwd) {
                             completion::open_choices(completion, &stop);
                         }
-                        goal.set(col_of(&state.peek().text(), state.peek().primary().head));
+                        goal.set(crate::geometry::vcol_of(
+                            &state.peek().text(),
+                            state.peek().primary().head,
+                            tab_size,
+                        ));
                         return true;
                     }
                     KeyInput::Escape => {
@@ -1591,7 +1649,11 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
                             ),
                             Coalesce::Never,
                         );
-                        goal.set(col_of(&state.peek().text(), state.peek().primary().head));
+                        goal.set(crate::geometry::vcol_of(
+                            &state.peek().text(),
+                            state.peek().primary().head,
+                            tab_size,
+                        ));
                         return true;
                     }
                 }
@@ -1852,6 +1914,10 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         if c.cursor.peek() != pos {
             c.cursor.set(pos);
         }
+        let v = crate::geometry::vcol_of(&text, head, tab_size);
+        if c.visual_col.peek() != v {
+            c.visual_col.set(v);
+        }
     });
     if let Some(c) = ctrl {
         let reqs = c.requests.get();
@@ -1970,7 +2036,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
                         selection: Selections::single(sel),
                     });
                     history.peek().borrow_mut().break_group();
-                    goal.set(col_of(&text, sel.head));
+                    goal.set(crate::geometry::vcol_of(&text, sel.head, tab_size));
                 }
             }
         }
@@ -2397,11 +2463,16 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         let fset = folds.peek();
         let inl = inlay_hold.peek().borrow().clone();
         let (gaps, hid) = rows_hold.peek().borrow().clone();
-        if wrap_cols == 0 && fset.is_empty() && inl.is_empty() && gaps.is_empty() && hid.is_empty()
+        let li = line_cache.peek().borrow_mut().sync(text);
+        if wrap_cols == 0
+            && fset.is_empty()
+            && inl.is_empty()
+            && gaps.is_empty()
+            && hid.is_empty()
+            && !li.has_tabs()
         {
             return byte_at(text, row.min(nlines - 1), xcol);
         }
-        let li = line_cache.peek().borrow_mut().sync(text);
         let gaps: &[usize] = if gaps.len() == li.line_count() {
             &gaps
         } else {
@@ -2449,6 +2520,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
                 && inl.is_empty()
                 && gaps.is_empty()
                 && hid.is_empty()
+                && !li.has_tabs()
             {
                 (line, col)
             } else {
@@ -2939,8 +3011,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
     // IME composition: the in-progress preedit text, tinted + underlined at the caret.
     let pre = preedit.get();
     if !pre.is_empty() {
-        let x = pad_l + cc as f64 * advance;
-        let y = frame.y_of(cl);
+        let (x, y) = frame.xy(cl, cc);
         let w = (pre.chars().count() as f64 * advance).max(2.0);
         layers.push(
             Positioned::new(
@@ -2976,7 +3047,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             if !frame.line_visible(ln) {
                 continue;
             }
-            let hx = pad_l + li.col_of(&src, byte) as f64 * advance - 7.0;
+            let hx = frame.xy(ln, li.col_of(&src, byte)).0 - 7.0;
             let hy = frame.y_of(ln) + line_px - 3.0;
             // The OTHER endpoint stays fixed while this handle drags.
             let fixed = if is_end { lo } else { hi };
@@ -2996,7 +3067,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
                     doc: cur.doc.clone(),
                     selection: Selections::single(Selection::range(fixed, b)),
                 });
-                goal.set(col_of(&text, b));
+                goal.set(crate::geometry::vcol_of(&text, b, tab_size));
             }));
             layers.push(Positioned::new(handle).left(hx).top(hy).into_widget());
         }
@@ -3004,8 +3075,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
     // Text drag-and-drop: a drop caret at the target byte while dragging a selection.
     if let Some(d) = drop_byte.get() {
         let d = d.min(src.len());
-        let x = pad_l + li.col_of(&src, d) as f64 * advance;
-        let y = frame.y_of(li.line_of(&src, d));
+        let (x, y) = frame.xy(li.line_of(&src, d), li.col_of(&src, d));
         layers.push(
             Positioned::new(
                 container()
@@ -3119,7 +3189,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             doc: cur.doc.clone(),
             selection: next,
         });
-        goal.set(col_of(&text, b));
+        goal.set(crate::geometry::vcol_of(&text, b, tab_size));
         // A click/drag ends any typing run, so the next keystroke starts a new undo step.
         history.peek().borrow_mut().break_group();
     };
@@ -3173,7 +3243,11 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             ),
             Coalesce::Never,
         );
-        goal.set(col_of(&state.peek().text(), state.peek().primary().head));
+        goal.set(crate::geometry::vcol_of(
+            &state.peek().text(),
+            state.peek().primary().head,
+            tab_size,
+        ));
     };
     // Double-click selects the word under the pointer (new single selection).
     let word_select = move |pos: Offset| {
@@ -3185,7 +3259,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             doc: cur.doc.clone(),
             selection: Selections::single(Selection::range(s, e)),
         });
-        goal.set(col_of(&text, e));
+        goal.set(crate::geometry::vcol_of(&text, e, tab_size));
         history.peek().borrow_mut().break_group();
     };
     // Triple-click selects the whole line under the pointer (including its newline).
@@ -3204,7 +3278,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             doc: cur.doc.clone(),
             selection: Selections::single(Selection::range(s, e)),
         });
-        goal.set(col_of(&text, e));
+        goal.set(crate::geometry::vcol_of(&text, e, tab_size));
         history.peek().borrow_mut().break_group();
     };
     // Column (rectangular) selection: Shift+Alt+drag makes one caret/range per row.
@@ -3215,7 +3289,12 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         let (lb, cb) = pos_to_grid(&text, to, pad_l, pad_t, advance, line_px);
         let (l0, l1) = (la.min(lb), la.max(lb));
         let rows: Vec<Selection> = (l0..=l1)
-            .map(|line| Selection::range(byte_at(&text, line, ca), byte_at(&text, line, cb)))
+            .map(|line| {
+                Selection::range(
+                    crate::geometry::byte_at_vcol(&text, line, ca, tab_size),
+                    crate::geometry::byte_at_vcol(&text, line, cb, tab_size),
+                )
+            })
             .collect();
         let pi = if lb >= la { rows.len() - 1 } else { 0 };
         state.set(EditorState {
@@ -3241,7 +3320,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         None
     } else {
         p.height.map(|_| {
-            let max_cols = li.max_cols();
+            let max_cols = li.max_vcols();
             // At least the viewport width, so clicks (and block widgets such as the change
             // peek) right of short lines still land on the content.
             (pad_l * 2.0 + max_cols as f64 * advance).max(h_view)
@@ -3834,7 +3913,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         .unwrap_or_else(|| "Plain Text".into());
     let mut col: Vec<AnyWidget> = Vec::new();
     if let Some(t) = &p.title {
-        col.push(status_bar(t, &lang_name, cl + 1, cc + 1, theme).into_widget());
+        col.push(status_bar(t, &lang_name, cl + 1, li.vcol(cl, cc) + 1, theme).into_widget());
         col.push(
             container()
                 .height(1.0)

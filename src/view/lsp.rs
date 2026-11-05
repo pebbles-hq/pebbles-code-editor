@@ -1342,7 +1342,8 @@ impl Lsp {
             doc: cur.doc.clone(),
             selection: crate::edit::Selections::single(crate::edit::Selection::caret(d.from)),
         });
-        self.goal.set(crate::geometry::col_of(&src, d.from));
+        self.goal
+            .set(crate::geometry::vcol_of(&src, d.from, self.tab_size()));
         self.history.peek().borrow_mut().break_group();
         self.h.problem.set(Some((d.from, d.d.message.clone())));
         true
@@ -1562,6 +1563,11 @@ impl Lsp {
 
     // ---- formatting --------------------------------------------------------------------
 
+    /// The tab stop width (from the editor's formatting options).
+    pub(crate) fn tab_size(&self) -> usize {
+        self.fmt_options().tab_size.max(1) as usize
+    }
+
     fn fmt_options(&self) -> lsp::FormattingOptions {
         self.store.fmt.get().unwrap_or(lsp::FormattingOptions {
             tab_size: 4,
@@ -1719,8 +1725,11 @@ impl Lsp {
         );
         self.history.peek().borrow_mut().break_group();
         let now = self.state.peek();
-        self.goal
-            .set(crate::geometry::col_of(&now.text(), now.primary().head));
+        self.goal.set(crate::geometry::vcol_of(
+            &now.text(),
+            now.primary().head,
+            self.tab_size(),
+        ));
         true
     }
 
@@ -2054,7 +2063,8 @@ impl Lsp {
             doc: cur.doc.clone(),
             selection: crate::edit::Selections::single(crate::edit::Selection::caret(at)),
         });
-        self.goal.set(crate::geometry::col_of(&text, at));
+        self.goal
+            .set(crate::geometry::vcol_of(&text, at, self.tab_size()));
         true
     }
 
@@ -2069,7 +2079,8 @@ impl Lsp {
                 doc: cur.doc.clone(),
                 selection: crate::edit::Selections::single(crate::edit::Selection::caret(at)),
             });
-            self.goal.set(crate::geometry::col_of(&text, at));
+            self.goal
+                .set(crate::geometry::vcol_of(&text, at, self.tab_size()));
             self.history.peek().borrow_mut().break_group();
         } else if let Some(svc) = &self.svc {
             svc.open_location(loc);

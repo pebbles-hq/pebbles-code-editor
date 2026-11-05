@@ -73,6 +73,8 @@ pub(crate) fn dispatch(
 /// handler): the indent unit, the line-comment prefix, the bracket pairs, and auto-close.
 pub(crate) struct EditCfg {
     pub(crate) tab: String,
+    /// Tab stop width (visual columns): the goal column of Up/Down is a visual column.
+    pub(crate) tab_size: usize,
     pub(crate) line_comment: Option<String>,
     pub(crate) brackets: Vec<(char, char)>,
     pub(crate) auto_close: bool,
@@ -562,8 +564,9 @@ pub(crate) fn apply_key(
             let moved: Vec<Selection> = ranges
                 .iter()
                 .map(|&r| {
-                    let col = if is_multi {
-                        col_of(&src, r.head)
+                    let ts = cfg.tab_size;
+                    let col = if is_multi || goal.peek() == usize::MAX {
+                        crate::geometry::vcol_of(&src, r.head, ts)
                     } else {
                         goal.peek()
                     };
@@ -579,9 +582,15 @@ pub(crate) fn apply_key(
                         Motion::DocEnd => len,
                         Motion::Up => {
                             let l = line_of(&src, r.head);
-                            if l == 0 { 0 } else { byte_at(&src, l - 1, col) }
+                            if l == 0 {
+                                0
+                            } else {
+                                crate::geometry::byte_at_vcol(&src, l - 1, col, ts)
+                            }
                         }
-                        Motion::Down => byte_at(&src, line_of(&src, r.head) + 1, col),
+                        Motion::Down => {
+                            crate::geometry::byte_at_vcol(&src, line_of(&src, r.head) + 1, col, ts)
+                        }
                     };
                     let anchor = if extend { r.anchor } else { target };
                     Selection::range(anchor, target)
@@ -589,7 +598,11 @@ pub(crate) fn apply_key(
                 .collect();
             select_many(Selections::new(moved, primary_idx.min(last)));
             if !is_multi && !matches!(motion, Motion::Up | Motion::Down) {
-                goal.set(col_of(&src, state.peek().primary().head));
+                goal.set(crate::geometry::vcol_of(
+                    &src,
+                    state.peek().primary().head,
+                    cfg.tab_size,
+                ));
             }
         }
         KeyInput::SelectAll => select_many(Selections::single(Selection::range(0, len))),

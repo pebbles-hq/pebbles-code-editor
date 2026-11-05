@@ -181,7 +181,8 @@ impl Lsp {
             doc: cur.doc.clone(),
             selection: Selections::single(Selection::range(from, head)),
         });
-        self.goal.set(crate::geometry::col_of(&text, head));
+        self.goal
+            .set(crate::geometry::vcol_of(&text, head, self.tab_size()));
         self.history.peek().borrow_mut().break_group();
     }
 

@@ -9,7 +9,7 @@ use std::rc::Rc;
 use pebbles::prelude::*;
 
 use crate::geometry::line_end;
-use crate::highlight::{slice_tokens, to_spans};
+use crate::highlight::{slice_tokens, to_spans_tabbed};
 use crate::view::{Frame, gutter};
 
 /// Overlay the pinned scope headers on top of `scroller` (or return it unchanged when sticky
@@ -48,13 +48,14 @@ pub(crate) fn panel(
     for (i, &ln) in lines.iter().enumerate() {
         let ls = f.li.line_start_of(ln);
         let le = line_end(f.src, ls);
-        let spans = to_spans(
+        let spans = to_spans_tabbed(
             &f.src[ls..le],
             &slice_tokens(f.tokens, ls, le),
             f.theme,
             f.fs,
             f.font_family,
             f.font_weight,
+            f.li.tab_size(),
         );
         let text_cell = container()
             .height(f.line_px)
@@ -162,7 +163,11 @@ fn scoped_lines(f: &Frame, scroll_top: Signal<f64>) -> Vec<usize> {
         if s.trim().is_empty() {
             None // blank lines don't open scopes
         } else {
-            Some(s.chars().take_while(|c| *c == ' ' || *c == '\t').count())
+            // Visual indentation (a tab reaches its tab stop), so mixed tabs / spaces nest.
+            Some(f.li.vcol(
+                ln,
+                s.chars().take_while(|c| *c == ' ' || *c == '\t').count(),
+            ))
         }
     };
     let top = scroll_top.peek();

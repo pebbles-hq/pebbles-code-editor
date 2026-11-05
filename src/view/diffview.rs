@@ -210,7 +210,7 @@ pub(crate) fn parts(p: &Props, src: &str, fs: f64, line_px: f64) -> DiffParts {
                         .alignment(Alignment::CENTER_LEFT)
                         .decoration(BoxDecoration::new().color(t.diff_removed_line))
                         .child(
-                            text(theirs[l].1.replace('\t', "    "))
+                            text(crate::geometry::expand_tabs(theirs[l].1, p.tab_size))
                                 .size(fs as f32)
                                 .line_height(p.lh as f32)
                                 .font_family(p.font_family.clone())

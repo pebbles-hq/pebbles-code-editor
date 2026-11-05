@@ -246,8 +246,8 @@ fn every_scanner_survives_hostile_text_at_every_offset() {
             }
             let _ = ops::trim_trailing_whitespace(src, &s);
             let _ = ops::insert_final_newline(src, &s);
-            let _ = ops::add_cursor_vertical(src, &s, true);
-            let _ = ops::add_cursor_vertical(src, &s, false);
+            let _ = ops::add_cursor_vertical(src, &s, true, 4);
+            let _ = ops::add_cursor_vertical(src, &s, false, 4);
             let _ = ops::select_all_occurrences(src, &s);
             let _ = ops::cursors_at_line_ends(src, &s);
             let _ = ops::expand_line_selection(src, &s);

@@ -12,7 +12,7 @@ use crate::commands::dispatch;
 use crate::edit::{
     Change, ChangeSet, Coalesce, EditorState, History, Selection, Selections, Transaction,
 };
-use crate::geometry::{col_of, is_word, prev_char};
+use crate::geometry::{is_word, prev_char};
 use crate::language::{self as lsp, LanguageService, ProviderService, RequestGate};
 use crate::providers::{CompletionContext, CompletionItem, CompletionKind, CompletionProvider};
 
@@ -577,7 +577,7 @@ fn apply_item(
             Coalesce::Never,
         );
     }
-    goal.set(col_of(&state.peek().text(), state.peek().primary().head));
+    goal.set(usize::MAX); // re-derived (as a visual column) by the next Up/Down
     if let (Some(cmd), Some(h)) = (&item.command, &completer.host) {
         h.execute_command(cmd);
     }
@@ -651,7 +651,7 @@ pub(crate) fn popup(s: &Session, f: &crate::view::Frame) -> AnyWidget {
     let (theme, fs, line_px) = (f.theme, f.fs, f.line_px);
     let line = f.li.line_of(f.src, s.anchor);
     let col = f.li.col_of(f.src, s.anchor);
-    let x = f.pad_l + col as f64 * f.advance;
+    let x = f.xy(line, col).0;
     let y = f.pad_t + (line + 1) as f64 * line_px + 2.0;
     let first = s.selected.saturating_sub(ROWS - 1);
     let mut rows: Vec<AnyWidget> = Vec::new();

@@ -13,7 +13,6 @@ use crate::commands::dispatch;
 use crate::edit::{
     Change, ChangeSet, Coalesce, EditorState, History, Selection, Selections, Transaction,
 };
-use crate::geometry::col_of;
 use crate::search::Options;
 use crate::view::Frame;
 
@@ -69,8 +68,17 @@ pub(crate) fn match_layers(
         for line in la.max(f.first_line)..=lb.min(f.last_line) {
             let start_col = if line == la { ca } else { 0 };
             let end_col = if line == lb { cb } else { start_col + 1 };
-            let x = f.pad_l + start_col as f64 * f.advance;
-            let w = (end_col.saturating_sub(start_col).max(1) as f64 * f.advance).max(2.0);
+            if f.disp.is_hidden(line) {
+                continue;
+            }
+            // Tab-aware: a match on a tabbed line sits at its visual columns.
+            let (x, y) = f.xy(line, start_col);
+            let w = if end_col > start_col {
+                f.cols_w(line, start_col, end_col)
+            } else {
+                f.advance
+            }
+            .max(2.0);
             layers.push(
                 Positioned::new(
                     container().width(w).height(f.line_px).decoration(
@@ -80,7 +88,7 @@ pub(crate) fn match_layers(
                     ),
                 )
                 .left(x)
-                .top(f.pad_t + line as f64 * f.line_px)
+                .top(y)
                 .into_widget(),
             );
         }
@@ -193,7 +201,7 @@ pub(crate) fn bar(
                     ),
                     Coalesce::Never,
                 );
-                goal.set(col_of(&state.peek().text(), state.peek().primary().head));
+                goal.set(usize::MAX); // re-derived (as a visual column) by the next Up/Down
             }
         })
     };

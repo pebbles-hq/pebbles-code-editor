@@ -63,7 +63,12 @@ pub(crate) fn decoration_layers(f: &Frame, decos: &[Decoration]) -> Vec<AnyWidge
                 continue;
             }
             let (x, y) = f.xy(line, start_col);
-            let w = (end_col.saturating_sub(start_col).max(1) as f64 * f.advance).max(2.0);
+            let w = if end_col > start_col {
+                f.cols_w(line, start_col, end_col)
+            } else {
+                f.advance
+            }
+            .max(2.0);
             if let Some(bg) = d.style.background {
                 layers.push(
                     Positioned::new(
