@@ -17,6 +17,8 @@ pub(crate) enum Request {
     Select((usize, usize), (usize, usize)),
     /// Scroll so `line` is at the top of the viewport (with a one-line margin).
     ScrollTo(usize),
+    /// Bring `line` into view centred, unless it is already visible (no scroll then).
+    Reveal(usize),
     /// Give the editor keyboard focus.
     Focus,
     /// Run a built-in editor command.
@@ -95,6 +97,13 @@ impl EditorController {
     /// Scroll a fixed-height editor so `line` (0-based) is at the top of the viewport.
     pub fn scroll_to(&self, line: usize) {
         self.requests.update(|r| r.push(Request::ScrollTo(line)));
+    }
+
+    /// Reveal `line` (0-based) the way VS Code reveals a navigation target
+    /// (`revealRangeInCenterIfOutsideViewport`): no scroll when it is already in view,
+    /// else centred in the viewport.
+    pub fn reveal_line(&self, line: usize) {
+        self.requests.update(|r| r.push(Request::Reveal(line)));
     }
 
     /// Give the editor keyboard focus.

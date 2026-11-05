@@ -101,3 +101,30 @@ fn a_plain_editor_with_a_diff_base_paints_no_added_line_band() {
     );
     assert!(strip(&plain, 0, 120) != strip(&inline, 0, 120));
 }
+
+#[test]
+fn reveal_line_keeps_a_visible_line_still_and_centres_an_offscreen_one() {
+    // Gravel sweep S19: clicking an Outline entry already on screen scrolled it to the
+    // top (minus five lines), hiding the top of a short file.
+    let mut src = String::new();
+    for i in 0..200 {
+        src.push_str(&format!("row_{i}\n"));
+    }
+    let code = create_root_signal(src);
+    let mut h = Harness::new().window(800.0, 300.0);
+    let c = pebbles_code_editor::editor_controller();
+    h.mount_widget(code_editor(code).height(300.0).controller(c));
+    h.frames(3);
+    c.set_cursor(6, 0);
+    c.reveal_line(6);
+    h.frames(4);
+    assert!(h.find_text("row_0"), "a visible line scrolled the editor");
+    c.set_cursor(150, 0);
+    c.reveal_line(150);
+    h.frames(4);
+    assert!(h.find_text("row_150"));
+    assert!(
+        h.find_text("row_145") && h.find_text("row_155"),
+        "an off-screen target lands mid-viewport"
+    );
+}

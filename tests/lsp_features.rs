@@ -543,6 +543,29 @@ fn hover_dwells_caches_renders_markdown_sections_and_shows_by_keyboard() {
     assert!(code.get().starts_with("fxn"));
 }
 
+#[test]
+fn a_command_key_closes_the_pointer_hover() {
+    // Gravel sweep S15: F2 opened the rename box under a hover still showing over it;
+    // VS Code closes the hover on any key, commands included.
+    let fake = Rc::new(Fake::default());
+    let (mut h, _code) = mount("fn main() {\n    let value = 1;\n}\n", fake.clone(), |e| e);
+    h.hover(Offset::new(150.0, 40.0));
+    h.advance(0.4);
+    let (_, r) = take(&fake.hovers);
+    r(Some(Hover {
+        contents: MarkupContent::plain("the value hover"),
+        range: None,
+    }));
+    h.frames(2);
+    assert!(h.find_text("the value hover"));
+    h.press("Ctrl+L");
+    h.frames(2);
+    assert!(
+        !h.find_text("the value hover"),
+        "a command left the hover up"
+    );
+}
+
 fn overloads(active_signature: Option<u32>, active_parameter: u32) -> SignatureHelp {
     let p = |l: &str, d: Option<&str>| ParameterInformation {
         label: ParameterLabel::Simple(l.into()),

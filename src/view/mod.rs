@@ -1028,6 +1028,14 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             let Some(stroke) = crate::actions::stroke_of(ev) else {
                 return KeyEventResult::Ignored;
             };
+            // Any key closes a pointer hover (VS Code), commands included: F2 opened the
+            // rename box under a hover still showing over it. Escape only closes it.
+            if env.lsp.h.hover.peek().is_some() && !env.lsp.h.hover_sticky.peek() {
+                env.lsp.hide_hover();
+                if crate::actions::parse_chord("Escape").is_some_and(|c| c[0] == stroke) {
+                    return KeyEventResult::Handled;
+                }
+            }
             // A focused breadcrumbs bar takes the arrows / Enter / Escape.
             if env.lsp.h.crumb_focus.peek().is_some() {
                 let name = ["Left", "Right", "Enter", "Down", "Space", "Escape"]
@@ -1859,7 +1867,9 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
                     crate::controller::Request::Select(a, h) => {
                         Some(Selection::range(at(a), at(h)))
                     }
-                    crate::controller::Request::ScrollTo(line) => {
+                    crate::controller::Request::ScrollTo(line)
+                    | crate::controller::Request::Reveal(line) => {
+                        let center = matches!(r, crate::controller::Request::Reveal(_));
                         let li = line_cache.peek().borrow_mut().sync(&text);
                         let line = line.min(li.line_count().saturating_sub(1));
                         let wc = wrap_hold.peek().get();
@@ -1886,8 +1896,18 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
                             .place(line, 0)
                             .0
                         };
-                        let t = (10.0 + row as f64 * line_px - line_px).max(0.0);
-                        vscroll.to(t, scroll_top);
+                        let y = 10.0 + row as f64 * line_px;
+                        if center {
+                            // VS Code's revealRangeInCenterIfOutsideViewport: a line already
+                            // in view stays put; otherwise it lands mid-viewport.
+                            let top = scroll_top.peek();
+                            let vh = p.height.unwrap_or(0.0);
+                            if vh > 0.0 && (y < top || y + line_px > top + vh) {
+                                vscroll.to((y + line_px / 2.0 - vh / 2.0).max(0.0), scroll_top);
+                            }
+                        } else {
+                            vscroll.to((y - line_px).max(0.0), scroll_top);
+                        }
                         None
                     }
                     crate::controller::Request::Focus => {
