@@ -68,7 +68,10 @@ pub(crate) fn occurrences(f: &Frame, layers: &mut Vec<AnyWidget>) {
         return;
     }
     let (a, b) = crate::geometry::word_at(f.src, p.head);
-    if b <= a {
+    // `word_at` off a word is the single character there (double-click selects a lone
+    // `;`): VS Code highlights word occurrences only — a caret on an empty line or by
+    // punctuation highlights nothing.
+    if b <= a || !f.src[a..b].chars().any(crate::geometry::is_word) {
         return;
     }
     let word = &f.src[a..b];

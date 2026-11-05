@@ -43,6 +43,11 @@ pub(crate) fn build(f: &Frame) -> Vec<AnyWidget> {
 /// Inline-diff bands: a green full-width band on each added line's rows, and a red 2px marker
 /// at the top of a line where base lines were deleted.
 fn diff_bands(f: &Frame, layers: &mut Vec<AnyWidget>) {
+    // Only a diff view paints the bands: a plain editor's `diff_base` feeds the gutter's
+    // change bars (VS Code's dirty diff), which leave the text background alone.
+    if !(f.p.inline_diff || f.p.diff_align) {
+        return;
+    }
     let Some(d) = f.diff else { return };
     for line in f.first_line..=f.last_line {
         if f.disp.is_hidden(line) {
