@@ -251,18 +251,34 @@ fn spans(
     ui: Option<&str>,
 ) -> Vec<TextSpan> {
     inl.iter()
-        .map(|x| match x {
-            Inline::Text(t) => ui_span(t, ui, fs, theme.foreground),
-            Inline::Code(t) => span(t.clone())
-                .font_family(mono)
-                .size(fs * 0.95)
-                .color(theme.foreground)
-                .chip(theme.current_line),
-            Inline::Emph(t) => ui_span(t, ui, fs, theme.foreground).italic(),
-            Inline::Strong(t) => ui_span(t, ui, fs, theme.foreground).bold(),
-            Inline::Link { text, url } => ui_span(text, ui, fs, theme.accent)
-                .underline()
-                .link(url.clone()),
+        .flat_map(|x| match x {
+            Inline::Text(t) => vec![ui_span(t, ui, fs, theme.foreground)],
+            Inline::Code(t) => vec![
+                span(t.clone())
+                    .font_family(mono)
+                    .size(fs * 0.95)
+                    .color(theme.foreground)
+                    .chip(theme.current_line),
+            ],
+            Inline::Emph(t) => vec![ui_span(t, ui, fs, theme.foreground).italic()],
+            Inline::Strong(t) => vec![ui_span(t, ui, fs, theme.foreground).bold()],
+            // The link text is inline Markdown too (gopls: [`main.Add` on pkg.go.dev]):
+            // a code span inside it renders as code, not with its backticks.
+            Inline::Link { text, url } => inlines(text)
+                .iter()
+                .map(|part| {
+                    match part {
+                        Inline::Code(t) => span(t.clone()).font_family(mono).size(fs * 0.95),
+                        Inline::Text(t)
+                        | Inline::Emph(t)
+                        | Inline::Strong(t)
+                        | Inline::Link { text: t, .. } => ui_span(t, ui, fs, theme.accent),
+                    }
+                    .color(theme.accent)
+                    .underline()
+                    .link(url.clone())
+                })
+                .collect(),
         })
         .collect()
 }
@@ -386,6 +402,17 @@ pub(crate) fn render(md: &str, theme: &EditorTheme, fs: f64, mono: &str) -> AnyW
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn code_inside_link_text_renders_as_code_without_backticks() {
+        // gopls hover footer (Gravel sweep S13).
+        let inl = inlines("[`main.Add` on pkg.go.dev](https://pkg.go.dev/x#Add)");
+        let theme = EditorTheme::dark();
+        let sp = spans(&inl, &theme, 13.0, "JetBrains Mono", None);
+        let all: String = sp.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(all, "main.Add on pkg.go.dev");
+        assert_eq!(sp[0].text, "main.Add");
+    }
 
     #[test]
     fn markdown_blocks_and_inlines_parse() {

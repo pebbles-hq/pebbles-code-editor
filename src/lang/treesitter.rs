@@ -437,6 +437,35 @@ impl Language for TreeSitter {
 /// Maximum injection nesting (Markdown → HTML → JavaScript is 2).
 const MAX_INJECTION_DEPTH: usize = 3;
 
+/// Whether a multi-line node starting at byte `at` opens a fold region the way VS Code's
+/// folding sees one: the next non-blank line is indented deeper than the head line (a
+/// block, an argument list, a struct body). A node that merely groups same-level lines
+/// (Go's `statement_list`, the body's statements without their braces) is not a region —
+/// it put a second chevron on a function's first statement. Comments and strings fold
+/// regardless (a block comment's lines often share the head's indent).
+fn opens_a_region(text: &str, at: usize, kind: &str) -> bool {
+    if kind.contains("comment") || kind.contains("string") {
+        return true;
+    }
+    let at = at.min(text.len());
+    let head_start = text[..at].rfind('\n').map_or(0, |i| i + 1);
+    let indent = |line: &str| {
+        line.chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .map(|c| if c == '\t' { 4 } else { 1 })
+            .sum::<usize>()
+    };
+    let head_end = text[head_start..]
+        .find('\n')
+        .map_or(text.len(), |i| head_start + i);
+    let head = indent(&text[head_start..head_end]);
+    text.get(head_end + 1..)
+        .unwrap_or("")
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .is_some_and(|l| indent(l) > head)
+}
+
 /// The incremental parse state for one document.
 pub struct Session {
     grammar: Rc<GrammarDef>,
@@ -565,7 +594,11 @@ impl SyntaxSession for Session {
             } else {
                 e
             };
-            if node.is_named() && depth > 0 && last > s {
+            if node.is_named()
+                && depth > 0
+                && last > s
+                && opens_a_region(&self.text, node.start_byte(), node.kind())
+            {
                 out.push((s, last));
             }
             // A node on one line has only one-line descendants (never a region): skip its
@@ -981,6 +1014,29 @@ mod tests {
         s.update(src);
         let f = s.fold_ranges();
         assert!(f.iter().any(|&(h, l)| h == 0 && l >= 2), "{f:?}");
+    }
+
+    #[test]
+    fn go_statement_lists_are_not_fold_regions() {
+        // Gravel sweep S14: Go's `statement_list` (a body's statements without their
+        // braces) put a second chevron on a function's first statement.
+        let src = "package main\n\nfunc main() {\n\ttotal := Add(1, 2)\n\tfmt.Println(total)\n}\n\nfunc f(\n\ta int,\n\tb int,\n) {}\n\n/* a\nb */\n";
+        let mut s = Session::new("go").unwrap();
+        s.update(src);
+        let f = s.fold_ranges();
+        assert!(f.contains(&(2, 5)), "the function body folds: {f:?}");
+        assert!(
+            !f.iter().any(|&(h, _)| h == 3),
+            "no region on the first statement: {f:?}"
+        );
+        assert!(
+            f.iter().any(|&(h, _)| h == 7),
+            "a multi-line parameter list folds: {f:?}"
+        );
+        assert!(
+            f.iter().any(|&(h, _)| h == 12),
+            "a block comment folds: {f:?}"
+        );
     }
 
     #[test]
