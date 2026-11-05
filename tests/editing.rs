@@ -359,6 +359,24 @@ fn replace_ctrl_alt_enter_replaces_all_and_alt_c_toggles_case() {
 }
 
 #[test]
+fn replace_tab_moves_from_find_to_replace_and_shift_tab_back() {
+    // Gravel sweep S22: Tab in Find focused the next arrow button, so the replacement
+    // text went nowhere. VS Code moves to the Replace field.
+    let (mut ui, mut env, code) = harness("foo bar foo baz");
+    key(&mut ui, &mut env, KeyInput::Replace);
+    key(&mut ui, &mut env, KeyInput::Insert("foo".to_string()));
+    shell_chord(&mut ui, &mut env, "Tab");
+    key(&mut ui, &mut env, KeyInput::Insert("Q".to_string()));
+    shell_chord(&mut ui, &mut env, "Ctrl+Alt+Enter");
+    assert_eq!(code.get(), "Q bar Q baz");
+    // Shift+Tab back to Find: typing extends the query ("foo" no longer matches "Qx").
+    shell_chord(&mut ui, &mut env, "Shift+Tab");
+    key(&mut ui, &mut env, KeyInput::Insert("x".to_string()));
+    shell_chord(&mut ui, &mut env, "Ctrl+Alt+Enter");
+    assert_eq!(code.get(), "Q bar Q baz");
+}
+
+#[test]
 fn replace_bar_opens() {
     let (mut ui, mut env, _code) = harness("x");
     let before = ui.element_count();

@@ -36,6 +36,10 @@ pub(crate) struct State {
     /// Focus the query field on the next build (set when the bar is opened). One-shot, so
     /// later rebuilds don't pull focus back from the replace field.
     pub(crate) focus_query: Signal<bool>,
+    /// Move focus to the replace field (Tab from the query field); the field consumes it.
+    pub(crate) focus_replace: Signal<bool>,
+    /// Move focus back to the query field (Shift+Tab from replace); consumed likewise.
+    pub(crate) refocus_query: Signal<bool>,
 }
 
 impl State {
@@ -276,6 +280,17 @@ pub(crate) fn bar(
                             next();
                         }
                     }
+                    // VS Code's find widget: Tab in Find moves to Replace (when shown),
+                    // Shift+Tab in Replace back to Find.
+                    Some(ShortcutKey::Tab)
+                        if !cmd && !m.alt && replacing && (in_replace == m.shift) =>
+                    {
+                        if in_replace {
+                            st.refocus_query.set(true);
+                        } else {
+                            st.focus_replace.set(true);
+                        }
+                    }
                     Some(ShortcutKey::F(3)) if !cmd && !m.alt => {
                         if m.shift {
                             prev();
@@ -319,7 +334,8 @@ pub(crate) fn bar(
             st.query.set(s.to_string());
             st.idx.set(0);
         })
-        .on_key_event(keys(false));
+        .on_key_event(keys(false))
+        .focus_request(st.refocus_query);
     let query_field = if focus_query {
         query_field.autofocus()
     } else {
@@ -408,6 +424,7 @@ pub(crate) fn bar(
             .bare(false)
             .on_changed(move |s| st.replace.set(s.to_string()))
             .on_key_event(keys(true));
+        let replace_field = replace_field.focus_request(st.focus_replace);
         let fg2 = theme.foreground;
         let ui3 = theme.clone();
         let replace_row = row(children![

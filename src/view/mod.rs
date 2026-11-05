@@ -734,6 +734,8 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         scope: create_signal(None),
         preserve: create_signal(false),
         focus_query: create_signal(false),
+        focus_replace: create_signal(false),
+        refocus_query: create_signal(false),
     };
     let palette = extensions::Palette {
         open: create_signal(false),
