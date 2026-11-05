@@ -963,6 +963,9 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
     let (insert_spaces, tab_size) = match p.detect_indentation {
         true => detected
             .get_or_init(|| crate::ops::detect_indentation(&code.peek()))
+            // A tab-indented file keeps the configured tab size (VS Code: detection decides
+            // tabs vs spaces; a tab's width is `editor.tabSize`).
+            .map(|(sp, n)| if sp { (sp, n) } else { (false, p.tab_size) })
             .unwrap_or((p.insert_spaces, p.tab_size)),
         false => (p.insert_spaces, p.tab_size),
     };

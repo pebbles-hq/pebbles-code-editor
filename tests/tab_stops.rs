@@ -437,3 +437,28 @@ fn inline_diff_rows_and_word_marks_on_tabbed_lines() {
         assert!(d == 0, "inline diff, ts={ts}: {d} pixels differ");
     }
 }
+
+#[test]
+fn a_detected_tab_indented_file_keeps_the_configured_tab_size() {
+    // Indentation detection (on by default) picks tabs for a Go file; the tab width stays
+    // `editor.tabSize` (VS Code), not a fixed 4.
+    for ts in [2usize, 8] {
+        let code = create_root_signal("func f() {\n\tx := 1\n}\n".to_string());
+        let ctrl = editor_controller();
+        pebbles::core::keyboard::set_modifiers(false, false, false, false);
+        let mut h = Harness::new().window(f64::from(W), f64::from(H));
+        h.mount_widget(
+            code_editor(code)
+                .height(f64::from(H))
+                .gutter(false)
+                .tab_size(ts)
+                .detect_indentation(true)
+                .controller(ctrl)
+                .autofocus(),
+        );
+        h.frames(3);
+        ctrl.set_cursor(1, 1);
+        h.frames(3);
+        assert_eq!(ctrl.visual_col().peek(), ts, "ts={ts}");
+    }
+}
