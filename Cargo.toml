@@ -22,7 +22,7 @@ categories = ["gui", "text-editors"]
 [dependencies]
 # Pinned to a reviewed framework commit — `cargo update` won't silently ingest an
 # unreviewed `main` HEAD. Bump the rev deliberately when adopting framework changes.
-pebbles = { git = "https://github.com/pebbles-hq/pebbles", rev = "2378fa882632645327333706e50e3034a3bb0926" }
+pebbles = { git = "https://github.com/pebbles-hq/pebbles", rev = "7b42b207e3bd8f3be4399dfa19b2f6428243d11c" }
 # The document store: a rope for O(log n) splice + line indexing on large files.
 ropey = "1"
 # Regex search mode (find/replace). Plain + whole-word search need no engine.
@@ -49,7 +49,7 @@ tree-sitter-sequel = { version = "0.3", optional = true }
 
 [dev-dependencies]
 # Headless harness (semantics queries, chord presses through the shell's key routing).
-pebbles-testing = { git = "https://github.com/pebbles-hq/pebbles", rev = "2378fa882632645327333706e50e3034a3bb0926" }
+pebbles-testing = { git = "https://github.com/pebbles-hq/pebbles", rev = "7b42b207e3bd8f3be4399dfa19b2f6428243d11c" }
 
 [features]
 default = ["tree-sitter"]
