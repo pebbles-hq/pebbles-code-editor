@@ -380,12 +380,17 @@ fn word_wrap_toggle_and_zoom_do_not_disturb_text() {
 
 #[test]
 fn syntax_folding_uses_the_parse_tree() {
-    // A multi-line call whose argument lines are NOT indented deeper: indentation folding
-    // finds nothing here, the tree-sitter parse does.
-    let mut h = harness("fn main() {\nfoo(\n1,\n2);\n}\n");
+    // A block comment whose lines are NOT indented deeper: indentation folding finds
+    // nothing here, the tree-sitter parse does (comments fold regardless of indent).
+    let mut h = harness("fn main() {\n/* a\nb\n*/\nfoo(\n1,\n2);\n}\n");
     h.caret(1, 0);
     h.press("Ctrl+Shift+[");
     assert!(h.folds.get().contains(&1), "{:?}", h.folds.get());
+    // S14: a node whose next line is not indented deeper (this flat call, Go's
+    // statement_list) is not a region — VS Code shows no chevron there either.
+    h.caret(4, 0);
+    h.press("Ctrl+Shift+[");
+    assert!(!h.folds.get().contains(&4), "{:?}", h.folds.get());
 }
 
 #[test]
