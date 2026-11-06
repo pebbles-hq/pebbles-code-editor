@@ -211,6 +211,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         diff_original_of: None,
         diff_align: false,
         scroll_link: None,
+        diff_wrap_link: None,
         diff_ignore_ws: false,
         diff_collapse: None,
         diff_hunk_actions: Vec::new(),
@@ -338,6 +339,7 @@ pub struct CodeEditor {
     diff_original_of: Option<Signal<String>>,
     diff_align: bool,
     scroll_link: Option<Signal<f64>>,
+    diff_wrap_link: Option<(Signal<[usize; 2]>, usize)>,
     diff_ignore_ws: bool,
     diff_collapse: Option<Signal<std::collections::BTreeSet<usize>>>,
     diff_hunk_actions: Vec<DiffHunkAction>,
@@ -965,6 +967,13 @@ impl CodeEditor {
         self.scroll_link = Some(link);
         self
     }
+    /// Side-by-side diff with soft wrap: each side publishes its natural wrap width in
+    /// `link[side]` and both wrap at the narrower, so the filler rows can align wrapped
+    /// lines.
+    pub(crate) fn diff_wrap_link(mut self, link: Signal<[usize; 2]>, side: usize) -> Self {
+        self.diff_wrap_link = Some((link, side));
+        self
+    }
     /// Diff views: lines differing only in leading/trailing whitespace count as unchanged
     /// (VS Code's `diffEditor.ignoreTrimWhitespace`).
     pub fn diff_ignore_whitespace(mut self, v: bool) -> Self {
@@ -1109,6 +1118,7 @@ pub(crate) struct Props {
     pub(crate) diff_original_of: Option<Signal<String>>,
     pub(crate) diff_align: bool,
     pub(crate) scroll_link: Option<Signal<f64>>,
+    pub(crate) diff_wrap_link: Option<(Signal<[usize; 2]>, usize)>,
     pub(crate) diff_ignore_ws: bool,
     pub(crate) diff_collapse: Option<Signal<std::collections::BTreeSet<usize>>>,
     pub(crate) diff_hunk_actions: Vec<DiffHunkAction>,
@@ -1232,6 +1242,7 @@ impl From<CodeEditor> for Props {
             diff_original_of: e.diff_original_of,
             diff_align: e.diff_align,
             scroll_link: e.scroll_link,
+            diff_wrap_link: e.diff_wrap_link,
             diff_ignore_ws: e.diff_ignore_ws,
             diff_collapse: e.diff_collapse,
             diff_hunk_actions: e.diff_hunk_actions,

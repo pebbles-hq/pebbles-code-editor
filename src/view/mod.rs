@@ -996,6 +996,12 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
     };
     // Tab stops (`editor.tabSize`, or the detected indentation unit) for every geometry query.
     line_cache.peek().borrow_mut().set_tab_size(tab_size.max(1));
+    // Publish the effective indentation to the host (its status bar).
+    if let Some(c) = p.controller
+        && c.indentation.peek() != (tab_size.max(1), insert_spaces)
+    {
+        c.indentation.set((tab_size.max(1), insert_spaces));
+    }
     lsp_ctl
         .store
         .fmt
@@ -2274,6 +2280,21 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         } else {
             0
         };
+    // A side-by-side diff with soft wrap: both sides wrap at the narrower width, so a line
+    // shared by both wraps alike and the filler rows can align the rest.
+    let wrap_cols = match p.diff_wrap_link {
+        Some((link, side)) if wrap_cols > 0 => {
+            if link.peek()[side] != wrap_cols {
+                link.update(|l| l[side] = wrap_cols);
+            }
+            let r = match link.get()[1 - side] {
+                0 => wrap_cols,
+                other => wrap_cols.min(other),
+            };
+            r
+        }
+        _ => wrap_cols,
+    };
     // Extension block widgets (full-width widgets on reserved rows below a line). Collect them
     // and the per-line gap-row counts BEFORE the map so it can reserve the space.
     let block_snap = Snapshot::of(&src, &sels);
@@ -2443,7 +2464,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         block_widgets.push(b);
     }
     // Diff editor (side-by-side / inline): word highlights, removed rows, filler rows.
-    let diff_parts = diffview::parts(p, &src, eff_fs, line_px);
+    let diff_parts = diffview::parts(p, &src, eff_fs, line_px, wrap_cols);
     let diff_hidden: Vec<(usize, usize)> = diff_parts
         .hidden
         .iter()
@@ -2461,7 +2482,9 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
     if !block_widgets.is_empty() {
         block_gaps = vec![0usize; line_count];
         for b in &block_widgets {
-            block_gaps[b.line] += (b.height / line_px).ceil().max(1.0) as usize;
+            // (A hair under a whole row stays that row: `n * line_px / line_px` can land
+            // a rounding error above `n`.)
+            block_gaps[b.line] += (b.height / line_px - 1e-6).ceil().max(1.0) as usize;
         }
     }
     // Inlay hints reserve columns in the display map (host hints + language-service hints).

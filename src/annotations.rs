@@ -47,6 +47,10 @@ pub struct LineAnnotation {
     pub text: String,
     /// The card shown while the annotation is hovered.
     pub hover: Option<AnnotationHover>,
+    /// A debugger inline value (VS Code's `editor.inlineValuesForeground` /
+    /// `inlineValuesBackground`: a faded foreground on an amber tint) rather than faded
+    /// trailing text.
+    pub inline_value: bool,
 }
 
 impl LineAnnotation {
@@ -56,7 +60,13 @@ impl LineAnnotation {
             line,
             text: text.into(),
             hover: None,
+            inline_value: false,
         }
+    }
+    /// Style it as a debugger inline value.
+    pub fn inline_value(mut self) -> Self {
+        self.inline_value = true;
+        self
     }
     /// Attach a hover card.
     pub fn hover(mut self, hover: AnnotationHover) -> Self {

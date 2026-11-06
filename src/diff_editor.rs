@@ -27,6 +27,7 @@ pub struct DiffEditor {
     ignore_whitespace: bool,
     collapse_unchanged: bool,
     read_only: bool,
+    word_wrap: bool,
     hunk_actions: Vec<crate::config::DiffHunkAction>,
 }
 
@@ -41,6 +42,7 @@ pub fn diff_editor(original: Signal<String>, modified: Signal<String>) -> DiffEd
         ignore_whitespace: false,
         collapse_unchanged: false,
         read_only: false,
+        word_wrap: false,
         hunk_actions: Vec::new(),
     }
 }
@@ -67,6 +69,13 @@ impl DiffEditor {
         self.read_only = v;
         self
     }
+    /// Soft-wrap long lines on both sides (VS Code's diff editor `diffEditor.wordWrap` /
+    /// "Toggle Word Wrap" in a diff): side by side, both wrap at the narrower pane's width
+    /// and filler rows keep wrapped lines aligned.
+    pub fn word_wrap(mut self, v: bool) -> Self {
+        self.word_wrap = v;
+        self
+    }
     /// Per-hunk gutter buttons on the modified side (Stage / Revert / Unstage Change).
     pub fn hunk_actions(mut self, actions: Vec<crate::config::DiffHunkAction>) -> Self {
         self.hunk_actions = actions;
@@ -86,6 +95,7 @@ impl DiffEditor {
 
 fn render_diff(d: &DiffEditor) -> AnyWidget {
     let link = create_signal(0.0_f64);
+    let wrap_link = create_signal([0usize; 2]);
     let cfg = |e: CodeEditor| match &d.configure {
         Some(f) => f(e),
         None => e,
@@ -101,7 +111,7 @@ fn render_diff(d: &DiffEditor) -> AnyWidget {
     };
     let mut modified = diff_opts(cfg(code_editor(d.modified)))
         .height(d.height)
-        .soft_wrap(false)
+        .soft_wrap(d.word_wrap)
         .diff_base(d.original)
         .diff_hunk_actions(d.hunk_actions.clone());
     if d.read_only {
@@ -112,13 +122,17 @@ fn render_diff(d: &DiffEditor) -> AnyWidget {
     }
     let original = diff_opts(cfg(code_editor(d.original)))
         .height(d.height)
-        .soft_wrap(false)
+        .soft_wrap(d.word_wrap)
         .read_only(true)
         .minimap(false)
         .diff_original_of(d.modified)
         .diff_align(true)
-        .scroll_link(link);
-    let modified = modified.diff_align(true).scroll_link(link);
+        .scroll_link(link)
+        .diff_wrap_link(wrap_link, 0);
+    let modified = modified
+        .diff_align(true)
+        .scroll_link(link)
+        .diff_wrap_link(wrap_link, 1);
     // A 1px divider between the panes in the theme's border colour (VS Code's
     // `diffEditor.border`), so the two sides read as separate panes.
     let divider = original.effective_theme().border;

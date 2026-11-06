@@ -33,6 +33,9 @@ fn release(hover: Signal<Option<usize>>) {
     });
 }
 
+/// VS Code's `editor.inlineValuesBackground` (#ffc80033).
+const INLINE_VALUE_BG: Color = Color::from_rgba8(0xff, 0xc8, 0x00, 0x33);
+
 /// The after-text layer: each visible annotation at its line's end, and the hover card of
 /// the hovered one (below the line, owning the pointer over its area).
 pub(crate) fn after_text_layer(
@@ -54,19 +57,38 @@ pub(crate) fn after_text_layer(
             .size(f.fs as f32)
             .line_height(f.lh as f32)
             .font_family(f.font_family)
-            .color(f.theme.trailing_annotation);
+            .color(if a.inline_value {
+                // `editor.inlineValuesForeground`: #ffffff80 dark / #00000080 light.
+                crate::view::chrome::with_alpha(f.theme.foreground, 0.5)
+            } else {
+                f.theme.trailing_annotation
+            });
+        let cell = || {
+            let c = container().height(f.line_px);
+            if a.inline_value {
+                // `editor.inlineValuesBackground` (#ffc80033).
+                c.padding(EdgeInsets::symmetric(2.0, 0.0))
+                    .decoration(BoxDecoration::new().color(INLINE_VALUE_BG))
+            } else {
+                c
+            }
+        };
         let trigger: AnyWidget = if a.hover.is_some() {
-            GestureDetector::new(container().height(f.line_px).child(label))
+            GestureDetector::new(cell().child(label))
                 .on_hover_enter(action(move || hold(hover, line)))
                 .on_hover_exit(action(move || release(hover)))
                 .into_widget()
         } else {
-            container().height(f.line_px).child(label).into_widget()
+            cell().child(label).into_widget()
         };
         kids.push(
             Positioned::new(semantics(
                 SemanticsRole::Label,
-                format!("Annotation {}", a.text),
+                if a.inline_value {
+                    format!("Inline value {}", a.text)
+                } else {
+                    format!("Annotation {}", a.text)
+                },
                 trigger,
             ))
             .left(x)

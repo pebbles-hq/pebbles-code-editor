@@ -85,6 +85,18 @@ fn after_text_annotation_shows_and_hover_card_runs_actions() {
 }
 
 #[test]
+fn inline_value_annotations_are_labelled_and_tinted() {
+    let code = create_root_signal(String::from("let i = 3;\n"));
+    let anns = create_root_signal(vec![LineAnnotation::new(0, "i = 3").inline_value()]);
+    let mut h = Harness::new().window(800.0, 300.0);
+    h.mount_widget(code_editor(code).height(300.0).line_annotations(anns));
+    h.frames(3);
+    let ls = labels(&h);
+    assert!(ls.iter().any(|l| l == "Inline value i = 3"), "{ls:?}");
+    assert!(!ls.iter().any(|l| l.starts_with("Annotation")));
+}
+
+#[test]
 fn gutter_column_cells_render_and_click() {
     let code = create_root_signal(String::from("a\nb\nc\n"));
     let col = create_root_signal(None::<GutterAnnotations>);

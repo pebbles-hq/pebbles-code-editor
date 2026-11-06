@@ -255,6 +255,29 @@ fn controller_sets_multiple_selections_and_extensions_see_them_all() {
     assert_eq!(*seen.borrow(), vec![(5, 2)]);
 }
 
+#[test]
+fn controller_publishes_the_effective_indentation() {
+    // Configured: 4 spaces; the file is indented with 2 spaces, detection on → (2, spaces).
+    let code = create_root_signal(String::from("a {\n  b\n  c {\n    d\n  }\n}\n"));
+    let ctrl = editor_controller();
+    let (mut ui, mut env) = mount(code_editor(code).controller(ctrl).into_widget());
+    settle(&mut ui, &mut env);
+    assert_eq!(ctrl.indentation().peek(), (2, true));
+    // Detection off: the configured tabs.
+    let code = create_root_signal(String::from("a\n  b\n"));
+    let ctrl = editor_controller();
+    let (mut ui, mut env) = mount(
+        code_editor(code)
+            .controller(ctrl)
+            .detect_indentation(false)
+            .tab_size(8)
+            .insert_spaces(false)
+            .into_widget(),
+    );
+    settle(&mut ui, &mut env);
+    assert_eq!(ctrl.indentation().peek(), (8, false));
+}
+
 thread_local! {
     static SAME: RefCell<Option<Same>> =
         const { RefCell::new(None) };

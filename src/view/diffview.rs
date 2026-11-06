@@ -111,8 +111,61 @@ fn below(at: usize) -> Option<usize> {
     at.checked_sub(1)
 }
 
-pub(crate) fn parts(p: &Props, src: &str, fs: f64, line_px: f64) -> DiffParts {
+/// How many visual rows `line` takes soft-wrapped at `wrap` columns (`0` = no wrap): the
+/// display map's rule (tabs to their stops, continuation rows indented like the line).
+pub(crate) fn wrapped_rows(line: &str, wrap: usize, tab_size: usize) -> usize {
+    if wrap == 0 {
+        return 1;
+    }
+    let ts = tab_size.max(1);
+    let mut widths = Vec::new();
+    let mut v = 0;
+    for c in line.chars() {
+        let w = if c == '\t' { ts - v % ts } else { 1 };
+        widths.push(w);
+        v += w;
+    }
+    if v <= wrap {
+        return 1;
+    }
+    let ind: usize = line
+        .chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .zip(&widths)
+        .map(|(_, w)| *w)
+        .sum();
+    let ind = if ind * 2 < wrap { ind } else { 0 };
+    let (mut rows, mut i, mut first) = (0, 0, true);
+    while i < widths.len() {
+        let width = if first { wrap } else { wrap - ind }.max(1);
+        let mut acc = 0;
+        let s = i;
+        while i < widths.len() && (i == s || acc + widths[i] <= width) {
+            acc += widths[i];
+            i += 1;
+        }
+        rows += 1;
+        first = false;
+    }
+    rows.max(1)
+}
+
+/// The visual rows of `lines[range]` wrapped at `wrap`.
+fn rows_in(
+    lines: &[(usize, &str)],
+    range: std::ops::Range<usize>,
+    wrap: usize,
+    ts: usize,
+) -> usize {
+    range
+        .filter_map(|l| lines.get(l))
+        .map(|(_, t)| wrapped_rows(t, wrap, ts))
+        .sum()
+}
+
+pub(crate) fn parts(p: &Props, src: &str, fs: f64, line_px: f64, wrap: usize) -> DiffParts {
     let mut out = DiffParts::default();
+    let ts = p.tab_size;
     let t = &p.theme;
     let mine = line_spans(src);
     // Original side: this editor holds the base; the other side is the modified text.
@@ -143,15 +196,20 @@ pub(crate) fn parts(p: &Props, src: &str, fs: f64, line_px: f64) -> DiffParts {
                         .push(Decoration::background((s + x, s + y), t.diff_removed_text));
                 }
             }
-            if p.diff_align && h.cur.len() > h.base.len() {
+            // Filler rows: the other side's rows of the hunk beyond this side's (wrapped
+            // rows count when soft wrap is on).
+            let (me, them) = (
+                rows_in(&mine, h.base.clone(), wrap, ts),
+                rows_in(&theirs, h.cur.clone(), wrap, ts),
+            );
+            if p.diff_align && them > me {
                 let at = if h.base.is_empty() {
                     below(h.base.start)
                 } else {
                     Some(h.base.end - 1)
                 };
                 if let Some(at) = at {
-                    out.blocks
-                        .push(filler(at, h.cur.len() - h.base.len(), line_px));
+                    out.blocks.push(filler(at, them - me, line_px));
                 }
             }
         }
@@ -186,15 +244,18 @@ pub(crate) fn parts(p: &Props, src: &str, fs: f64, line_px: f64) -> DiffParts {
                     .push(Decoration::background((s + x, s + y), t.diff_inserted_text));
             }
         }
-        if p.diff_align && h.base.len() > h.cur.len() {
+        let (me, them) = (
+            rows_in(&mine, h.cur.clone(), wrap, ts),
+            rows_in(&theirs, h.base.clone(), wrap, ts),
+        );
+        if p.diff_align && them > me {
             let at = if h.cur.is_empty() {
                 below(h.cur.start)
             } else {
                 Some(h.cur.end - 1)
             };
             if let Some(at) = at {
-                out.blocks
-                    .push(filler(at, h.base.len() - h.cur.len(), line_px));
+                out.blocks.push(filler(at, them - me, line_px));
             }
         }
         if p.inline_diff
@@ -243,7 +304,7 @@ mod tests {
         let base = create_root_signal(String::from("a\nlet x = 1;\nc\n"));
         let cur = create_root_signal(String::from("a\nlet y = 1;\nc\nd\n"));
         let p = Props::from(code_editor(base).diff_original_of(cur).diff_align(true));
-        let parts = super::parts(&p, &base.get(), 14.0, 20.0);
+        let parts = super::parts(&p, &base.get(), 14.0, 20.0, 0);
         // Line 1 band + the removed word "x".
         assert!(
             parts
@@ -267,22 +328,51 @@ mod tests {
         let base = create_root_signal(String::from("a\nlet x = 1;\nold\nc\n"));
         let cur = create_root_signal(String::from("a\nlet y = 1;\nc\n"));
         let p = Props::from(code_editor(cur).diff_base(base).diff_align(true));
-        let parts = super::parts(&p, &cur.get(), 14.0, 20.0);
+        let parts = super::parts(&p, &cur.get(), 14.0, 20.0, 0);
         assert!(parts.decos.iter().any(|d| d.range == (6, 7)));
         // "old" was deleted: one filler row below line 1.
         assert_eq!(parts.blocks.len(), 1);
         assert_eq!(parts.blocks[0].line, 1);
         // Inline mode shows the removed base lines as rows above the change instead.
         let p = Props::from(code_editor(cur).diff_base(base).inline_diff(true));
-        let parts = super::parts(&p, &cur.get(), 14.0, 20.0);
+        let parts = super::parts(&p, &cur.get(), 14.0, 20.0, 0);
         assert_eq!(parts.blocks.len(), 1);
         assert_eq!((parts.blocks[0].line, parts.blocks[0].height), (0, 40.0));
         // Plain change bars (no diff view) contribute nothing.
         let p = Props::from(code_editor(cur).diff_base(base));
-        assert!(parts_empty(&super::parts(&p, &cur.get(), 14.0, 20.0)));
+        assert!(parts_empty(&super::parts(&p, &cur.get(), 14.0, 20.0, 0)));
     }
 
     fn parts_empty(p: &DiffParts) -> bool {
         p.decos.is_empty() && p.blocks.is_empty()
+    }
+
+    #[test]
+    fn wrapped_rows_follow_the_display_map_rule() {
+        assert_eq!(super::wrapped_rows("abc", 0, 4), 1);
+        assert_eq!(super::wrapped_rows("abcdefghij", 10, 4), 1);
+        assert_eq!(super::wrapped_rows("abcdefghijk", 10, 4), 2);
+        // Continuation rows keep the indent: 2 + 8, then 8 per row.
+        assert_eq!(super::wrapped_rows("  abcdefghijklmnopq", 10, 4), 3);
+        // A tab takes its tab stop.
+        assert_eq!(super::wrapped_rows("\tabcdefg", 10, 4), 2);
+    }
+
+    #[test]
+    fn soft_wrapped_hunks_get_fillers_for_their_extra_rows() {
+        // One changed line: the modified one is long and wraps to 3 rows at 10 cols.
+        let base = create_root_signal(String::from("a\nshort\nz\n"));
+        let cur = create_root_signal(String::from("a\nthis one is much longer\nz\n"));
+        let p = Props::from(code_editor(base).diff_original_of(cur).diff_align(true));
+        let parts = super::parts(&p, &base.get(), 14.0, 20.0, 10);
+        assert_eq!(parts.blocks.len(), 1);
+        assert_eq!(parts.blocks[0].line, 1);
+        assert_eq!(parts.blocks[0].height, 2.0 * 20.0, "3 rows against 1");
+        // Without wrap the same hunk is balanced.
+        assert!(
+            super::parts(&p, &base.get(), 14.0, 20.0, 0)
+                .blocks
+                .is_empty()
+        );
     }
 }

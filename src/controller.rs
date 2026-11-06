@@ -69,6 +69,7 @@ pub struct EditorController {
     pub(crate) requests: Signal<Vec<Request>>,
     pub(crate) cursor: Signal<(usize, usize)>,
     pub(crate) visual_col: Signal<usize>,
+    pub(crate) indentation: Signal<(usize, bool)>,
     pub(crate) save_ready: Signal<u64>,
     pub(crate) ticket: Signal<u64>,
 }
@@ -80,6 +81,7 @@ pub fn editor_controller() -> EditorController {
         requests: create_signal(Vec::new()),
         cursor: create_signal((0, 0)),
         visual_col: create_signal(0),
+        indentation: create_signal((4, true)),
         save_ready: create_signal(0),
         ticket: create_signal(0),
     }
@@ -183,6 +185,13 @@ impl EditorController {
     /// `.get()` inside a component re-renders on caret moves (e.g. a "Ln 3, Col 7" status).
     pub fn cursor(&self) -> Signal<(usize, usize)> {
         self.cursor
+    }
+
+    /// The editor's effective indentation `(tab size, insert spaces)` — the configured
+    /// values, or the detected ones with `detect_indentation` — what VS Code's status bar
+    /// shows as "Spaces: 4" / "Tab Size: 4". Reactive.
+    pub fn indentation(&self) -> Signal<(usize, bool)> {
+        self.indentation
     }
 
     /// The primary caret's 0-based VISUAL column: tabs count up to their tab stop
