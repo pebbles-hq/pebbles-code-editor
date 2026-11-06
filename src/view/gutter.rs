@@ -170,6 +170,24 @@ pub(crate) fn numbers(f: &Frame) -> AnyWidget {
         if let Some(top) = frame_lines.iter().find(|s| s.line == n).map(|s| s.top) {
             nums.push(frame_arrow(f, n, bp_w, y, top));
         }
+        // Decorations' gutter icons (VS Code's `gutterIconPath`): in the glyph margin, or
+        // at the gutter's left edge without one.
+        for (_, g) in f.ext_gutter_icons.iter().filter(|(l, _)| *l == n) {
+            let side = (f.line_px * 0.8).min(16.0);
+            let cell = if bp_w > 0.0 { bp_w } else { side };
+            nums.push(
+                Positioned::new(
+                    container()
+                        .width(cell)
+                        .height(f.line_px)
+                        .alignment(Alignment::CENTER)
+                        .child((g.0)(side)),
+                )
+                .left(if bp_w > 0.0 { 4.0 } else { 0.0 })
+                .top(y)
+                .into_widget(),
+            );
+        }
         if let Some(&color) = marks.get(&n) {
             nums.push(
                 Positioned::new(

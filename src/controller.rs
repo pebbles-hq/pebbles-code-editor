@@ -15,6 +15,8 @@ pub(crate) enum Request {
     Cursor(usize, usize),
     /// Select from `anchor` to `head` (the caret ends at `head`).
     Select((usize, usize), (usize, usize)),
+    /// Set every selection: `(anchor, head)` pairs, the first the primary.
+    SelectMany(Vec<((usize, usize), (usize, usize))>),
     /// Scroll so `line` is at the top of the viewport (with a one-line margin).
     ScrollTo(usize),
     /// Bring `line` into view centred, unless it is already visible (no scroll then).
@@ -94,6 +96,17 @@ impl EditorController {
     pub fn select(&self, anchor: (usize, usize), head: (usize, usize)) {
         self.requests
             .update(|r| r.push(Request::Select(anchor, head)));
+    }
+
+    /// Set every selection (multi-cursor) — VS Code's `editor.selections = […]`: each is an
+    /// `(anchor, head)` pair of `(line, col)` (0-based, char columns); the FIRST is the
+    /// primary. Overlapping ranges merge; an empty list is ignored.
+    pub fn set_selections(&self, selections: Vec<((usize, usize), (usize, usize))>) {
+        if selections.is_empty() {
+            return;
+        }
+        self.requests
+            .update(|r| r.push(Request::SelectMany(selections)));
     }
 
     /// Scroll a fixed-height editor so `line` (0-based) is at the top of the viewport.

@@ -25,6 +25,31 @@ pub struct Snapshot<'a> {
     pub caret: usize,
     /// The primary selection as `(min, max)` bytes (`min == max` for a bare caret).
     pub selection: (usize, usize),
+    /// Every selection as `(anchor, head)` bytes, the primary first and the others in
+    /// document order (VS Code's `TextEditor.selections`).
+    pub selections: Vec<(usize, usize)>,
+}
+
+impl<'a> Snapshot<'a> {
+    /// A snapshot of `text` with `sels`.
+    pub(crate) fn of(text: &'a str, sels: &Selections) -> Self {
+        let pr = sels.primary();
+        let pi = sels.primary_index();
+        let mut selections = vec![(pr.anchor, pr.head)];
+        selections.extend(
+            sels.ranges()
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != pi)
+                .map(|(_, s)| (s.anchor, s.head)),
+        );
+        Snapshot {
+            text,
+            caret: pr.head,
+            selection: (pr.min(), pr.max()),
+            selections,
+        }
+    }
 }
 
 /// Inline / line styling applied to a byte range by a [`Decoration`].
@@ -39,53 +64,134 @@ pub struct DecoStyle {
     /// A full-width mark in the overview ruler for every line the range touches (VS Code's
     /// `overviewRuler` decoration option, lane `Full`).
     pub overview_ruler: Option<Color>,
+    /// A 1px border box around the range (VS Code's `border` / `borderColor`).
+    pub border: Option<Color>,
+    /// The text colour of the range (VS Code's `color`), over the syntax colours.
+    pub color: Option<Color>,
 }
 
-/// A styled byte range contributed by an extension (mark = background/underline, line =
-/// whole-line background). Widget/replace decorations (inline widgets) are not supported on
-/// the fixed grid — they'd need line reflow.
-#[derive(Clone, Copy, Debug)]
+/// Text a [`Decoration`] injects before or after its range (VS Code's `before` / `after`
+/// `contentText`): it takes columns in the line like an inlay hint (the rest of the line
+/// shifts right) and is drawn in the editor font.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InjectedText {
+    /// The text.
+    pub text: String,
+    /// Its colour (the theme's muted text colour when `None`).
+    pub color: Option<Color>,
+}
+
+/// A gutter icon of a [`Decoration`] (VS Code's `gutterIconPath`): builds the icon widget
+/// for a square cell of the given side (px), drawn in the glyph margin of the range's first
+/// line.
+#[derive(Clone)]
+pub struct GutterIcon(pub Rc<dyn Fn(f64) -> AnyWidget>);
+
+impl std::fmt::Debug for GutterIcon {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("GutterIcon")
+    }
+}
+
+/// A styled byte range contributed by an extension (VS Code's text editor decoration):
+/// background / underline / border / text colour over the range, a whole-line background,
+/// an overview-ruler mark, text injected before / after it, a gutter icon and a hover
+/// message shown (above the language hover) while the pointer is over the range.
+#[derive(Clone, Debug)]
 pub struct Decoration {
     /// The byte range `[start, end)` the decoration styles.
     pub range: (usize, usize),
     /// How the range is styled (background / underline / line background).
     pub style: DecoStyle,
+    /// Text injected before the range's start.
+    pub before: Option<InjectedText>,
+    /// Text injected after the range's end.
+    pub after: Option<InjectedText>,
+    /// An icon in the gutter of the range's first line.
+    pub gutter_icon: Option<GutterIcon>,
+    /// Markdown shown in the hover over the range (VS Code's `hoverMessage`).
+    pub hover: Option<String>,
 }
 
 impl Decoration {
-    /// A background highlight over `range`.
-    pub fn background(range: (usize, usize), color: Color) -> Self {
+    /// A decoration over `range` with no styling yet (chain the setters).
+    pub fn new(range: (usize, usize)) -> Self {
         Decoration {
             range,
-            style: DecoStyle {
-                background: Some(color),
-                ..Default::default()
-            },
+            style: DecoStyle::default(),
+            before: None,
+            after: None,
+            gutter_icon: None,
+            hover: None,
         }
+    }
+    /// A background highlight over `range`.
+    pub fn background(range: (usize, usize), color: Color) -> Self {
+        let mut d = Decoration::new(range);
+        d.style.background = Some(color);
+        d
     }
     /// An underline under `range`.
     pub fn underline(range: (usize, usize), color: Color) -> Self {
-        Decoration {
-            range,
-            style: DecoStyle {
-                underline: Some(color),
-                ..Default::default()
-            },
-        }
+        let mut d = Decoration::new(range);
+        d.style.underline = Some(color);
+        d
     }
     /// A whole-line background for the lines `range` touches.
     pub fn line(range: (usize, usize), color: Color) -> Self {
-        Decoration {
-            range,
-            style: DecoStyle {
-                line_background: Some(color),
-                ..Default::default()
-            },
-        }
+        let mut d = Decoration::new(range);
+        d.style.line_background = Some(color);
+        d
     }
     /// Also mark the lines the range touches in the overview ruler.
     pub fn overview_ruler(mut self, color: Color) -> Self {
         self.style.overview_ruler = Some(color);
+        self
+    }
+    /// Also a background over the range.
+    pub fn with_background(mut self, color: Color) -> Self {
+        self.style.background = Some(color);
+        self
+    }
+    /// Also a whole-line background (VS Code's `isWholeLine` + `backgroundColor`).
+    pub fn with_line_background(mut self, color: Color) -> Self {
+        self.style.line_background = Some(color);
+        self
+    }
+    /// Also a 1px border around the range.
+    pub fn border(mut self, color: Color) -> Self {
+        self.style.border = Some(color);
+        self
+    }
+    /// Also colour the range's text.
+    pub fn color(mut self, color: Color) -> Self {
+        self.style.color = Some(color);
+        self
+    }
+    /// Inject `text` before the range (coloured `color`, else muted).
+    pub fn before(mut self, text: impl Into<String>, color: Option<Color>) -> Self {
+        self.before = Some(InjectedText {
+            text: text.into(),
+            color,
+        });
+        self
+    }
+    /// Inject `text` after the range (coloured `color`, else muted).
+    pub fn after(mut self, text: impl Into<String>, color: Option<Color>) -> Self {
+        self.after = Some(InjectedText {
+            text: text.into(),
+            color,
+        });
+        self
+    }
+    /// Show an icon in the gutter of the range's first line; `build` gets the cell side (px).
+    pub fn gutter_icon(mut self, build: impl Fn(f64) -> AnyWidget + 'static) -> Self {
+        self.gutter_icon = Some(GutterIcon(Rc::new(build)));
+        self
+    }
+    /// Show `markdown` in the hover while the pointer is over the range.
+    pub fn hover(mut self, markdown: impl Into<String>) -> Self {
+        self.hover = Some(markdown.into());
         self
     }
 }

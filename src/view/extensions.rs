@@ -5,8 +5,50 @@
 use pebbles::prelude::*;
 
 use crate::MONO;
-use crate::extensions::{Command, Decoration, EditContext};
+use crate::extensions::{Command, Decoration, EditContext, InjectedText};
 use crate::view::Frame;
+
+/// The decorations' injected texts as (byte, text): each `before` at its range's start,
+/// each `after` at its end.
+pub(crate) fn injected_texts(decos: &[Decoration]) -> Vec<(usize, InjectedText)> {
+    let mut v = Vec::new();
+    for d in decos {
+        if let Some(b) = &d.before {
+            v.push((d.range.0, b.clone()));
+        }
+        if let Some(a) = &d.after {
+            v.push((d.range.1, a.clone()));
+        }
+    }
+    v
+}
+
+/// The decorations' injected texts, drawn in the editor font in the columns reserved for
+/// them (VS Code's `before` / `after` decorations).
+pub(crate) fn injected_layers(f: &Frame, layers: &mut Vec<AnyWidget>) {
+    for (k, (_, t)) in f.injected.iter().enumerate() {
+        let Some(Some((line, col, _, off))) = f.inlay_slots.injected.get(k).copied() else {
+            continue;
+        };
+        if !f.line_visible(line) {
+            continue;
+        }
+        let (x, y) = f.xy(line, col);
+        layers.push(
+            Positioned::new(
+                text(t.text.clone())
+                    .size(f.fs as f32)
+                    .line_height(f.lh as f32)
+                    .font_family(f.font_family)
+                    .letter_spacing(f.letter_spacing as f32)
+                    .color(t.color.unwrap_or(f.theme.muted)),
+            )
+            .left(x + off as f64 * f.advance)
+            .top(y)
+            .into_widget(),
+        );
+    }
+}
 
 /// Build overlay layers for `decos`, clipped to the visible window (line backgrounds first,
 /// then backgrounds, then underlines).
@@ -62,9 +104,16 @@ pub(crate) fn decoration_layers(f: &Frame, decos: &[Decoration]) -> Vec<AnyWidge
             if !f.line_visible(line) {
                 continue;
             }
-            let (x, y) = f.xy(line, start_col);
+            // From where the first char is drawn (after injected text / inlay hints there)
+            // to the caret spot after the last one.
+            let (x, y) = f.char_xy(line, start_col);
             let w = if end_col > start_col {
-                f.cols_w(line, start_col, end_col)
+                let (xe, ye) = f.xy(line, end_col);
+                if ye == y && xe > x {
+                    xe - x
+                } else {
+                    f.cols_w(line, start_col, end_col)
+                }
             } else {
                 f.advance
             }
@@ -77,6 +126,19 @@ pub(crate) fn decoration_layers(f: &Frame, decos: &[Decoration]) -> Vec<AnyWidge
                                 .color(bg)
                                 .radius(BorderRadius::all(2.0)),
                         ),
+                    )
+                    .left(x)
+                    .top(y)
+                    .into_widget(),
+                );
+            }
+            if let Some(c) = d.style.border {
+                layers.push(
+                    Positioned::new(
+                        container()
+                            .width(w)
+                            .height(f.line_px)
+                            .decoration(BoxDecoration::new().border(Border::new(c, 1.0))),
                     )
                     .left(x)
                     .top(y)

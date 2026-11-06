@@ -115,6 +115,12 @@ pub(crate) struct Frame<'a> {
     pub(crate) hclip: Option<(usize, usize)>,
     /// Gutter markers contributed by extensions (rendered as colored dots).
     pub(crate) ext_gutter_marks: &'a [GutterMark],
+    /// Decorations' gutter icons: (line, icon).
+    pub(crate) ext_gutter_icons: &'a [(usize, crate::extensions::GutterIcon)],
+    /// Decorations' injected texts: (byte, text), in [`inlay::InlaySlots::injected`] order.
+    pub(crate) injected: &'a [(usize, crate::extensions::InjectedText)],
+    /// Decorations' text colours: byte ranges `[a, b)` and colour (later ones win).
+    pub(crate) text_colors: &'a [(usize, usize, Color)],
     /// Every diagnostic (old and LSP), resolved to bytes and sorted.
     pub(crate) diags: Rc<Vec<lsp::Diag>>,
     /// The inactive tab stops of the live snippet (placeholder highlight).
@@ -216,6 +222,19 @@ impl Frame<'_> {
     pub(crate) fn y_of(&self, line: usize) -> f64 {
         self.xy(line, 0).1
     }
+    /// The (x, y) px where the char at `(line, col)` is drawn: after any injected text or
+    /// inlay hint at `col` (unlike [`xy`](Self::xy), the caret spot before it).
+    pub(crate) fn char_xy(&self, line: usize, col: usize) -> (f64, f64) {
+        let segs = self.segments(line);
+        match segs
+            .iter()
+            .find(|(_, s)| s.start <= col && col < s.end.max(s.start + 1))
+            .or(segs.last())
+        {
+            Some((row, seg)) => (self.seg_char_x(seg, col), self.row_y(*row)),
+            None => self.xy(line, col),
+        }
+    }
     /// The visual rows `(row_index, Row)` that make up `line` (one unless soft-wrapped).
     pub(crate) fn segments(&self, line: usize) -> Vec<(usize, crate::fold::Row)> {
         let mut out = Vec::new();
@@ -292,6 +311,9 @@ pub(crate) struct FrameData {
     pub(crate) highlight_word_matches: bool,
     pub(crate) doc_highlights: Option<Vec<(usize, usize, crate::language::DocumentHighlightKind)>>,
     pub(crate) ext_gutter_marks: Vec<GutterMark>,
+    pub(crate) ext_gutter_icons: Vec<(usize, crate::extensions::GutterIcon)>,
+    pub(crate) injected: Rc<Vec<(usize, crate::extensions::InjectedText)>>,
+    pub(crate) text_colors: Vec<(usize, usize, Color)>,
     pub(crate) diags: Rc<Vec<lsp::Diag>>,
     pub(crate) snippet_stops: Vec<(usize, usize)>,
     pub(crate) lsp: lsp::Lsp,
@@ -352,6 +374,9 @@ impl FrameData {
             snippet_stops: self.snippet_stops.clone(),
             hclip,
             ext_gutter_marks: &self.ext_gutter_marks,
+            ext_gutter_icons: &self.ext_gutter_icons,
+            injected: &self.injected,
+            text_colors: &self.text_colors,
             disp: &self.disp,
             inlay_slots: &self.inlay_slots,
             folds: self.folds,
@@ -1591,11 +1616,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
                 let text = st.text();
                 let pr = st.primary();
                 let (a, b) = (pr.min(), pr.max());
-                let snap = Snapshot {
-                    text: &text,
-                    caret: pr.head,
-                    selection: (a, b),
-                };
+                let snap = Snapshot::of(&text, &st.selection);
                 let blocked = ro_exts.iter().any(|e| {
                     e.read_only
                         .as_ref()
@@ -1616,11 +1637,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
                     let src = st.text();
                     let pr = sels.primary();
                     let (a, b) = (pr.min(), pr.max());
-                    let snap = Snapshot {
-                        text: &src,
-                        caret: pr.head,
-                        selection: (a, b),
-                    };
+                    let snap = Snapshot::of(&src, &sels);
                     let mut edit = crate::collab::Edit {
                         from: a,
                         to: b,
@@ -1852,12 +1869,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
     create_effect(move || {
         let st = state.get();
         let text = st.text();
-        let pr = st.primary();
-        let snap = Snapshot {
-            text: &text,
-            caret: pr.head,
-            selection: (pr.min(), pr.max()),
-        };
+        let snap = Snapshot::of(&text, &st.selection);
         let changed = *prev.peek() != text;
         for e in &hook_exts {
             if changed && let Some(f) = &e.on_change {
@@ -1933,11 +1945,17 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
                 let at = |(l, col): (usize, usize)| byte_at(&text, l, col);
                 let sel = match r {
                     crate::controller::Request::Cursor(l, col) => {
-                        Some(Selection::caret(at((l, col))))
+                        Some(Selections::single(Selection::caret(at((l, col)))))
                     }
                     crate::controller::Request::Select(a, h) => {
-                        Some(Selection::range(at(a), at(h)))
+                        Some(Selections::single(Selection::range(at(a), at(h))))
                     }
+                    crate::controller::Request::SelectMany(v) => Some(Selections::new(
+                        v.into_iter()
+                            .map(|(a, h)| Selection::range(at(a), at(h)))
+                            .collect(),
+                        0,
+                    )),
                     crate::controller::Request::ScrollTo(line)
                     | crate::controller::Request::Reveal(line) => {
                         let center = matches!(r, crate::controller::Request::Reveal(_));
@@ -2034,12 +2052,13 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
                     }
                 };
                 if let Some(sel) = sel {
+                    let head = sel.primary().head;
                     state.set(EditorState {
                         doc: cur.doc.clone(),
-                        selection: Selections::single(sel),
+                        selection: sel,
                     });
                     history.peek().borrow_mut().break_group();
-                    goal.set(crate::geometry::vcol_of(&text, sel.head, tab_size));
+                    goal.set(crate::geometry::vcol_of(&text, head, tab_size));
                 }
             }
         }
@@ -2059,12 +2078,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
     // Code lenses: a row above their line (line 0's lens widens the top padding).
     let host_lenses: Vec<crate::extensions::HostCodeLens> =
         if p.extensions.iter().any(|e| e.lenses.is_some()) {
-            let pr = st.primary();
-            let snap = Snapshot {
-                text: &src,
-                caret: pr.head,
-                selection: (pr.min(), pr.max()),
-            };
+            let snap = Snapshot::of(&src, &st.selection);
             p.extensions
                 .iter()
                 .filter_map(|e| e.lenses.as_ref())
@@ -2262,11 +2276,39 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         };
     // Extension block widgets (full-width widgets on reserved rows below a line). Collect them
     // and the per-line gap-row counts BEFORE the map so it can reserve the space.
-    let block_snap = Snapshot {
-        text: &src,
-        caret: primary.head,
-        selection: (primary.min(), primary.max()),
-    };
+    let block_snap = Snapshot::of(&src, &sels);
+    // Extension decorations + gutter markers, recomputed from the current snapshot each
+    // render (here, before the display map: injected before / after text reserves columns).
+    let (ext_decos_early, ext_gutter_marks): (Vec<Decoration>, Vec<GutterMark>) =
+        if p.extensions.is_empty() {
+            (Vec::new(), Vec::new())
+        } else {
+            let decos: Vec<Decoration> = p
+                .extensions
+                .iter()
+                .filter_map(|e| e.decorations.as_ref())
+                .flat_map(|f| f(&block_snap))
+                .map(|mut d| {
+                    let n = src.len();
+                    d.range = (d.range.0.min(n), d.range.1.min(n).max(d.range.0.min(n)));
+                    d
+                })
+                .collect();
+            let marks = p
+                .extensions
+                .iter()
+                .filter_map(|e| e.gutter.as_ref())
+                .flat_map(|f| f(&block_snap))
+                .collect();
+            (decos, marks)
+        };
+    // Decoration hover messages for the hover (range, markdown).
+    lsp_ctl.set_decoration_hovers(
+        ext_decos_early
+            .iter()
+            .filter_map(|d| d.hover.clone().map(|h| (d.range, h)))
+            .collect(),
+    );
     let mut block_widgets: Vec<crate::extensions::BlockWidget> = p
         .extensions
         .iter()
@@ -2423,6 +2465,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         }
     }
     // Inlay hints reserve columns in the display map (host hints + language-service hints).
+    let injected = Rc::new(extensions::injected_texts(&ext_decos_early));
     let inlay_slots = Rc::new({
         let props = p.inlay_hints.map(|s| s.get()).unwrap_or_default();
         let lsp_hints = if lsp_ctl.inlays_on() {
@@ -2430,7 +2473,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         } else {
             Rc::new(Vec::new())
         };
-        inlay::slots(&src, &li, &props, &lsp_hints)
+        inlay::slots(&src, &li, &props, &lsp_hints, &injected)
     });
     inlay_hold.peek().replace(inlay_slots.map.clone());
     let disp = std::rc::Rc::new(crate::fold::DisplayMap::for_index_hidden(
@@ -2779,29 +2822,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
 
     // ---- extension contributions for this frame ----
     // Decorations + gutter markers are recomputed from the current snapshot each render.
-    let (mut ext_decos, ext_gutter_marks): (Vec<Decoration>, Vec<GutterMark>) =
-        if p.extensions.is_empty() {
-            (Vec::new(), Vec::new())
-        } else {
-            let snap = Snapshot {
-                text: &src,
-                caret: pcc,
-                selection: (primary.min(), primary.max()),
-            };
-            let decos = p
-                .extensions
-                .iter()
-                .filter_map(|e| e.decorations.as_ref())
-                .flat_map(|f| f(&snap))
-                .collect();
-            let marks = p
-                .extensions
-                .iter()
-                .filter_map(|e| e.gutter.as_ref())
-                .flat_map(|f| f(&snap))
-                .collect();
-            (decos, marks)
-        };
+    let mut ext_decos = ext_decos_early;
     ext_decos.extend(diff_parts.decos);
     // The call-stack lines (VS Code's stack frame highlights).
     if let Some(sf) = p.stack_frame_lines {
@@ -2891,6 +2912,20 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         highlight_word_matches: find.open.get() == 0,
         doc_highlights: lsp_ctl.h.highlights.get(),
         ext_gutter_marks: ext_gutter_marks.clone(),
+        ext_gutter_icons: ext_decos
+            .iter()
+            .filter_map(|d| {
+                d.gutter_icon
+                    .clone()
+                    .map(|g| (li.line_of(&src, d.range.0.min(src.len())), g))
+            })
+            .collect(),
+        injected: injected.clone(),
+        text_colors: ext_decos
+            .iter()
+            .filter_map(|d| d.style.color.map(|c| (d.range.0, d.range.1, c)))
+            .filter(|(a, b, _)| b > a)
+            .collect(),
         diags: diags.clone(),
         lsp: lsp_ctl.clone(),
         disp: disp.clone(),
@@ -3135,10 +3170,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             fd.lsp.request_semantic(first, last);
             let (hclip, tokens) = win_tokens(first, last);
             let frame = fd.frame(first, last, &tokens, hclip, CaretView::default());
-            let mut layers = overlays::build(&frame);
-            if !ext_decos.is_empty() {
-                layers.extend(extensions::decoration_layers(&frame, &ext_decos));
-            }
+            let mut layers = overlays::build(&frame, &ext_decos);
             if !matches.is_empty() {
                 let cur = find_idx.peek().min(matches.len() - 1);
                 layers.extend(search::match_layers(&frame, &matches, cur));
@@ -3396,12 +3428,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
                 let cur = state.peek();
                 let text = cur.text();
                 let b = p2b(&text, e.position);
-                let pr = cur.primary();
-                let snap = Snapshot {
-                    text: &text,
-                    caret: pr.head,
-                    selection: (pr.min(), pr.max()),
-                };
+                let snap = Snapshot::of(&text, &cur.selection);
                 for x in &click_exts {
                     if let Some(f) = &x.on_click {
                         f(&snap, b);

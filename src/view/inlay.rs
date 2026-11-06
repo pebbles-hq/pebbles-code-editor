@@ -29,6 +29,8 @@ pub(crate) type Slot = (usize, usize, usize, usize);
 pub(crate) struct InlaySlots {
     pub(crate) props: Vec<Option<Slot>>,
     pub(crate) lsp: Vec<Option<Slot>>,
+    /// Decorations' injected before / after texts (same order as their list).
+    pub(crate) injected: Vec<Option<Slot>>,
     pub(crate) map: Rc<crate::fold::Inlays>,
 }
 
@@ -40,12 +42,14 @@ pub(crate) fn hint_cols(chars: usize, pads: usize) -> usize {
     (w.ceil() as usize).max(1)
 }
 
-/// Lay out every hint (host hints first, then language-service hints, stable per column).
+/// Lay out every hint (decorations' injected text first, then host hints, then
+/// language-service hints, stable per column).
 pub(crate) fn slots(
     src: &str,
     li: &crate::lines::LineIndex,
     props: &[crate::providers::InlayHint],
     hints: &[lsp::InlayHint],
+    injected: &[(usize, crate::extensions::InjectedText)],
 ) -> InlaySlots {
     let mut map = crate::fold::Inlays::new();
     let mut used: std::collections::HashMap<(usize, usize), usize> = Default::default();
@@ -59,6 +63,14 @@ pub(crate) fn slots(
         map.entry(line).or_default().push((col, w));
         slot
     };
+    // Injected text is drawn in the editor font: one column per char.
+    let injected = injected
+        .iter()
+        .map(|(at, t)| {
+            let n = t.text.chars().count();
+            (n > 0).then(|| place(*at, n))
+        })
+        .collect();
     let props = props
         .iter()
         .map(|h| Some(place(h.at, hint_cols(h.label.chars().count(), 0))))
@@ -80,6 +92,7 @@ pub(crate) fn slots(
     InlaySlots {
         props,
         lsp,
+        injected,
         map: Rc::new(map),
     }
 }

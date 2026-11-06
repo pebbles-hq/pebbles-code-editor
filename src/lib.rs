@@ -93,8 +93,8 @@ pub use edit::{
 };
 pub use emmet::{expand_css, expand_html};
 pub use extensions::{
-    BlockWidget, Command, ConfigPatch, DecoStyle, Decoration, EditContext, Extension, GutterMark,
-    HostCodeLens, LensItem, Snapshot, extension,
+    BlockWidget, Command, ConfigPatch, DecoStyle, Decoration, EditContext, Extension, GutterIcon,
+    GutterMark, HostCodeLens, InjectedText, LensItem, Snapshot, extension,
 };
 pub use keymap::{
     BuiltinCommand, HostCommand, HostKey, HostKeyContext, HostResolver, KeyStroke, Keymap,

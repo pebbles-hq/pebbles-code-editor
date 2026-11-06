@@ -12,7 +12,9 @@ use crate::view::Frame;
 use crate::view::chrome::{band, with_alpha};
 
 /// Build every overlay layer for the current frame, bottom to top.
-pub(crate) fn build(f: &Frame) -> Vec<AnyWidget> {
+/// `decos` (extension decorations) paint under the selection and the text, as VS Code's
+/// decoration backgrounds do.
+pub(crate) fn build(f: &Frame, decos: &[crate::extensions::Decoration]) -> Vec<AnyWidget> {
     let mut layers: Vec<AnyWidget> = Vec::new();
     diff_bands(f, &mut layers);
     current_line(f, &mut layers);
@@ -21,6 +23,9 @@ pub(crate) fn build(f: &Frame) -> Vec<AnyWidget> {
     indent_guides(f, &mut layers);
     crate::view::decor::active_indent_guide(f, &mut layers);
     crate::view::decor::bracket_pair_guide(f, &mut layers);
+    if !decos.is_empty() {
+        layers.extend(crate::view::extensions::decoration_layers(f, decos));
+    }
     word_occurrences(f, &mut layers);
     crate::view::decor::occurrences(f, &mut layers);
     crate::view::decor::snippet_placeholders(f, &mut layers);
@@ -33,6 +38,7 @@ pub(crate) fn build(f: &Frame) -> Vec<AnyWidget> {
     crate::view::decor::color_swatches(f, &mut layers, f.color_picker);
     crate::view::decor::fold_badges(f, &mut layers);
     inlay_hints(f, &mut layers);
+    crate::view::extensions::injected_layers(f, &mut layers);
     f.lsp.inlay_layers(f, &mut layers);
     diagnostics(f, &mut layers);
     whitespace(f, &mut layers);
@@ -288,15 +294,22 @@ fn code_text(f: &Frame, layers: &mut Vec<AnyWidget>) {
             };
             // One run per piece between inlay hints and tabs (tabs are blank space up to
             // their tab stop; the next piece starts there).
-            for (a, b) in f.text_pieces(line, cs, ce) {
+            for (a, b) in text_pieces_colored(f, line, cs, ce) {
                 // Byte range of this piece's char span [a, b).
                 let bs = f.li.byte_at(f.src, line, a);
                 let be = f.li.byte_at(f.src, line, b);
                 if be <= bs {
                     continue;
                 }
+                // A decoration's text colour over the piece (later decorations win).
+                let over = f
+                    .text_colors
+                    .iter()
+                    .rev()
+                    .find(|&&(x, y, _)| x <= bs && be <= y)
+                    .map(|&(_, _, c)| c);
                 let toks = slice_tokens(f.tokens, bs, be);
-                let spans = to_spans(
+                let mut spans = to_spans(
                     &f.src[bs..be],
                     &toks,
                     f.theme,
@@ -304,6 +317,11 @@ fn code_text(f: &Frame, layers: &mut Vec<AnyWidget>) {
                     f.font_family,
                     f.font_weight,
                 );
+                if let Some(c) = over {
+                    for sp in &mut spans {
+                        sp.color = Some(c);
+                    }
+                }
                 layers.push(
                     Positioned::new(
                         text_rich(spans)
@@ -317,6 +335,42 @@ fn code_text(f: &Frame, layers: &mut Vec<AnyWidget>) {
             }
         }
     }
+}
+
+/// [`Frame::text_pieces`] further split where a decoration's text colour starts or ends,
+/// so each piece has one colour.
+fn text_pieces_colored(f: &Frame, line: usize, cs: usize, ce: usize) -> Vec<(usize, usize)> {
+    let pieces = f.text_pieces(line, cs, ce);
+    if f.text_colors.is_empty() {
+        return pieces;
+    }
+    let (ls, le) = (
+        f.li.byte_at(f.src, line, 0),
+        f.li.byte_at(f.src, line, usize::MAX),
+    );
+    let mut cuts: Vec<usize> = Vec::new();
+    for &(x, y, _) in f.text_colors {
+        for b in [x, y] {
+            if b > ls && b < le {
+                cuts.push(f.li.col_of(f.src, b));
+            }
+        }
+    }
+    if cuts.is_empty() {
+        return pieces;
+    }
+    cuts.sort_unstable();
+    cuts.dedup();
+    let mut out = Vec::new();
+    for (a, b) in pieces {
+        let mut at = a;
+        for &c in cuts.iter().filter(|&&c| c > a && c < b) {
+            out.push((at, c));
+            at = c;
+        }
+        out.push((at, b));
+    }
+    out
 }
 
 /// Whitespace/EOL markers: spaces→·, tabs→→ (aligned overlay) plus a ¶ at each line end.

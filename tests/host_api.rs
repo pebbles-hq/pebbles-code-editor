@@ -224,6 +224,37 @@ fn controller_moves_caret_selects_and_opens_at_line_across_a_switch() {
     settle(&mut ui, &mut env);
 }
 
+#[test]
+fn controller_sets_multiple_selections_and_extensions_see_them_all() {
+    use std::rc::Rc;
+    let code = create_root_signal(String::from("one\ntwo\nthree\n"));
+    let ctrl = editor_controller();
+    let seen: Rc<RefCell<Vec<(usize, usize)>>> = Rc::default();
+    let s2 = seen.clone();
+    let ext = pebbles_code_editor::extension("t").on_selection(move |snap| {
+        *s2.borrow_mut() = snap.selections.clone();
+    });
+    let (mut ui, mut env) = mount(
+        code_editor(code)
+            .autofocus()
+            .controller(ctrl)
+            .extension(ext)
+            .into_widget(),
+    );
+    // Primary first: the caret on line 2, then a selection of "one" and a caret on "two".
+    ctrl.set_selections(vec![((2, 5), (2, 5)), ((0, 0), (0, 3)), ((1, 3), (1, 3))]);
+    settle(&mut ui, &mut env);
+    assert_eq!(*seen.borrow(), vec![(13, 13), (0, 3), (7, 7)]);
+    assert_eq!(ctrl.cursor().peek(), (2, 5), "the first is the primary");
+    // Typing goes to every cursor.
+    key(&mut ui, &mut env, KeyInput::Insert("!".into()));
+    assert_eq!(code.peek(), "!\ntwo!\nthree!\n");
+    // A backwards selection keeps its direction (anchor after head).
+    ctrl.set_selections(vec![((1, 3), (1, 0))]);
+    settle(&mut ui, &mut env);
+    assert_eq!(*seen.borrow(), vec![(5, 2)]);
+}
+
 thread_local! {
     static SAME: RefCell<Option<Same>> =
         const { RefCell::new(None) };

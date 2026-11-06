@@ -134,6 +134,9 @@ pub(crate) struct Store {
     bulb_at: Cell<Option<(usize, u64)>>,
     /// The (caret, version) of the last document-highlight request.
     hl_at: Cell<Option<(usize, u64)>>,
+    /// Decorations' hover messages: (byte range, markdown), set each render.
+    #[allow(clippy::type_complexity)]
+    pub(crate) deco_hovers: RefCell<Vec<((usize, usize), String)>>,
     /// Hover replies per (byte, document version).
     pub(crate) hover_cache: RefCell<HashMap<(usize, u64), Option<lsp::Hover>>>,
     ver: Cell<u64>,
@@ -465,6 +468,14 @@ impl Lsp {
         });
     }
 
+    /// The decorations' hover messages for this render.
+    pub(crate) fn set_decoration_hovers(&self, v: Vec<((usize, usize), String)>) {
+        let mut cur = self.store.deco_hovers.borrow_mut();
+        if *cur != v {
+            *cur = v;
+        }
+    }
+
     /// Hide the hover (and cancel a pending dwell / reply).
     pub(crate) fn hide_hover(&self) {
         pebbles::core::animation::clear_timeout(self.hover_timer());
@@ -493,18 +504,39 @@ impl Lsp {
             .map(|d| d.d)
             .collect();
         let word = crate::view::word_range_at(&src, byte);
-        let has_diags = !diags.is_empty();
+        // Decorations' hover messages under the position (shown before the language
+        // hover, as VS Code does), and the range they cover.
+        let mut deco_range: Option<(usize, usize)> = None;
+        let deco_secs: Vec<lsp::MarkupContent> = self
+            .store
+            .deco_hovers
+            .borrow()
+            .iter()
+            .filter(|((a, b), _)| *a <= byte && byte < (*b).max(*a + 1))
+            .map(|(r, m)| {
+                deco_range = Some(match deco_range {
+                    Some((x, y)) => (x.max(r.0), y.min(r.1.max(r.0 + 1))),
+                    None => (r.0, r.1.max(r.0 + 1)),
+                });
+                lsp::MarkupContent {
+                    kind: lsp::MarkupKind::Markdown,
+                    value: m.clone(),
+                }
+            })
+            .collect();
+        let has_diags = !diags.is_empty() || !deco_secs.is_empty();
         let me = self.clone();
         let show = move |h: Option<lsp::Hover>| {
             let src = me.state.peek().text();
-            let mut range = word.unwrap_or((byte, byte));
-            let mut secs = Vec::new();
+            let mut range = deco_range.or(word).unwrap_or((byte, byte));
+            let mut secs = deco_secs.clone();
             if let Some(h) = &h {
                 if let Some(r) = h.range {
                     range = lsp::range_to_bytes(&src, r);
                 }
-                secs = sections(&h.contents);
-                secs.retain(|s| !s.value.trim().is_empty());
+                let mut more = sections(&h.contents);
+                more.retain(|s| !s.value.trim().is_empty());
+                secs.extend(more);
             }
             if secs.is_empty() && diags.is_empty() {
                 me.h.hover.set(None);
