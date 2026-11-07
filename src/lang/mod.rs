@@ -157,6 +157,12 @@ pub trait SyntaxSession {
     fn enclosing_nodes(&mut self, _from: usize, _to: usize) -> Vec<(usize, usize)> {
         Vec::new()
     }
+    /// A counter bumped by every reparse that changed the syntax STRUCTURE or the line
+    /// count (not by one that only changed a token's text): syntax-derived regions are
+    /// keyed by it. Defaults to [`version`](Self::version).
+    fn structure_version(&self) -> u64 {
+        self.version()
+    }
     /// A counter bumped on every reparse (for caching derived data).
     fn version(&self) -> u64 {
         0

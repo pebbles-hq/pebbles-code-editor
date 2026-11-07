@@ -706,8 +706,8 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
     // (a full re-highlight per slice per frame).
     // Session highlight blocks: ((parse version, text identity), block index → tokens).
     #[allow(clippy::type_complexity)]
-    let hl_blocks: Signal<Rc<RefCell<((u64, usize), std::collections::HashMap<usize, Rc<Vec<Token>>>)>>> =
-        create_signal(Rc::new(RefCell::new(((u64::MAX, 0), std::collections::HashMap::new()))));
+    let hl_blocks: Signal<Rc<RefCell<((u64, Rc<String>), std::collections::HashMap<usize, Rc<Vec<Token>>>)>>> =
+        create_signal(Rc::new(RefCell::new(((u64::MAX, Rc::new(String::new())), std::collections::HashMap::new()))));
     let win_tok_cache: Signal<Rc<RefCell<Vec<WinTokCache>>>> =
         create_signal(Rc::new(RefCell::new(Vec::new())));
     // Imperative scroll handles — drive caret-into-view autoscroll (only used when a fixed
@@ -2155,9 +2155,9 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             }
             let fc = syntax_folds.peek();
             let mut fc = fc.borrow_mut();
-            if fc.0 != sess.version() || fc.1.is_none() {
+            if fc.1.is_none() || fc.0 != sess.structure_version() {
                 let r = sess.fold_ranges();
-                *fc = (sess.version(), Some(Rc::new(r)));
+                *fc = (sess.structure_version(), Some(Rc::new(r)));
             }
             fc.1.clone().filter(|r| !r.is_empty())
         });
@@ -2755,11 +2755,24 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
                     // where a fresh window ± margin query per scroll step cost ~10 ms.
                     const BLOCK: usize = 64;
                     sess.update(&src);
-                    let stamp = (sess.version(), Rc::as_ptr(&src_rc) as usize);
+                    let ver = sess.version();
                     let cell = hl_blocks.peek();
                     let mut bc = cell.borrow_mut();
-                    if bc.0 != stamp {
-                        *bc = (stamp, std::collections::HashMap::new());
+                    if bc.0.0 != ver || !Rc::ptr_eq(&bc.0.1, &src_rc) {
+                        // An edit keeps the blocks wholly above its first changed byte (their
+                        // offsets and highlighting stand); a new parse of the same text keeps
+                        // none (the tree landed).
+                        let old = bc.0.1.clone();
+                        let keep_lines = if old.as_bytes() == src.as_bytes() {
+                            if bc.0.0 == ver { usize::MAX } else { 0 }
+                        } else if bc.0.0 == u64::MAX {
+                            0
+                        } else {
+                            let at = old.bytes().zip(src.bytes()).take_while(|(a, b)| a == b).count();
+                            li.line_of(&src, at.min(src.len()))
+                        };
+                        bc.1.retain(|&b, _| (b + 1) * BLOCK <= keep_lines);
+                        bc.0 = (ver, src_rc.clone());
                     }
                     let last = line_count.saturating_sub(1);
                     let mut toks = Vec::new();
@@ -4071,4 +4084,3 @@ fn schedule_highlight_continuation(sess: &dyn crate::lang::SyntaxSession, tick: 
         );
     }
 }
-

@@ -490,6 +490,8 @@ pub struct Session {
     /// Whether a large first parse may go to a background thread (off for one-shot
     /// whole-document highlighting, which needs the tree now).
     background: bool,
+    /// Bumped by every reparse that changed the tree's structure or the line count.
+    structure_version: u64,
 }
 
 /// Documents at least this large take their first parse off the UI thread (a 5k-line Rust
@@ -510,6 +512,7 @@ impl Session {
             version: 0,
             pending: None,
             background: true,
+            structure_version: 0,
         })
     }
 
@@ -523,6 +526,7 @@ impl Session {
                 self.tree = tree;
                 self.text = text;
                 self.version = self.version.wrapping_add(1);
+                self.structure_version = self.structure_version.wrapping_add(1);
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
             Err(std::sync::mpsc::TryRecvError::Disconnected) => self.pending = None,
@@ -612,7 +616,21 @@ impl SyntaxSession for Session {
             }
             _ => None,
         };
+        let incremental = old_tree.is_some();
         let next = self.parser.parse(src, old_tree);
+        // Did the syntax STRUCTURE change (not just a token's text)? Typing inside an
+        // identifier or a string doesn't — then syntax-derived data (fold regions) stands.
+        let changed = match (incremental, self.tree.as_ref(), next.as_ref()) {
+            (true, Some(old), Some(new)) => {
+                old.changed_ranges(new).next().is_some()
+                    || self.text.bytes().filter(|&b| b == b'\n').count()
+                        != src.bytes().filter(|&b| b == b'\n').count()
+            }
+            _ => true,
+        };
+        if changed {
+            self.structure_version = self.structure_version.wrapping_add(1);
+        }
         self.tree = next;
         self.text.clear();
         self.text.push_str(src);
@@ -692,6 +710,10 @@ impl SyntaxSession for Session {
 
     fn needs_more(&self) -> bool {
         self.pending.is_some()
+    }
+
+    fn structure_version(&self) -> u64 {
+        self.structure_version
     }
 
     fn enclosing_nodes(&mut self, from: usize, to: usize) -> Vec<(usize, usize)> {
