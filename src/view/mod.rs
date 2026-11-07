@@ -638,7 +638,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
     if last_props.replace(Rc::as_ptr(props) as usize) != Rc::as_ptr(props) as usize {
         crate::debug::record_slice("host", 0.0);
     }
-    crate::view::tmpm_impl("L641");
     let code = p.code;
     // The document + selection live in one immutable-style state, mutated only by dispatching
     // transactions (see the `edit` module). `code` (the public `Signal<String>`) is kept in
@@ -698,7 +697,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
     let syntax: Signal<Rc<RefCell<Option<(String, Box<dyn crate::lang::SyntaxSession>)>>>> =
         create_signal(Rc::new(RefCell::new(None)));
     // Bumped by a scheduled frame while the syntax session reports `needs_more()` (a
-    crate::view::tmpm_impl("L700");
     // budgeted tokenizer that did not reach the end of the window), so highlighting
     // continues in the background until the window is complete.
     let highlight_tick = create_signal(0u64);
@@ -760,7 +758,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         hover: create_signal(false),
         grab: create_signal(None),
     };
-    crate::view::tmpm_impl("L761");
     let mmap = minimap::MinimapState {
         hover: create_signal(false),
         grab: create_signal(None),
@@ -831,7 +828,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         focus_replace: create_signal(false),
         refocus_query: create_signal(false),
     };
-    crate::view::tmpm_impl("L831");
     let palette = extensions::Palette {
         open: create_signal(false),
         query: create_signal(String::new()),
@@ -887,7 +883,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         let st = state.get();
         cursor_hist.peek().borrow_mut().observe(&st);
     });
-    crate::view::tmpm_impl("L886");
     // Go to Line jumps feed the navigation history.
     {
         let l = lsp_ctl.clone();
@@ -978,7 +973,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         prev_code.set(new);
     });
 
-    crate::view::tmpm_impl("L976");
     // Grab focus on mount if requested — but only ONCE, so it never steals focus back from a
     // child input (the find bar's query field) on later re-renders. The hook is created
     // UNCONDITIONALLY (the condition lives inside the effect) so the hook order never churns.
@@ -1005,7 +999,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         }
     });
 
-    crate::view::tmpm_impl("L1002");
     // Register the key handler (semantic edit commands from the framework).
     let read_only = p.read_only;
     // Indentation detection (once per mounted document, VS Code `detectIndentation`).
@@ -1064,7 +1057,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
     });
     // Editor command environment (shared by the raw-key resolver and the palette).
     let eff_fs = (p.fs + zoom.get()).max(6.0);
-    crate::view::tmpm_impl("L1060");
     let ops_cfg = Rc::new(crate::ops::OpCfg {
         tab: indent_unit.clone(),
         tab_size: tab_size.max(1),
@@ -1894,7 +1886,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         }
     }
 
-    crate::view::tmpm_impl("L1889");
     // Extension event hooks (on_change / on_selection). The signal + effect are created
     // UNCONDITIONALLY (they no-op with no hooks) so toggling the extension set never churns
     // this component's hook order.
@@ -1918,7 +1909,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         }
     });
 
-    crate::view::tmpm_impl("L1912");
     // Extension focus hook (unconditional, gated inside).
     let focus_exts = p.extensions.clone();
     create_effect(move || {
@@ -2099,7 +2089,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         }
     }
 
-    crate::view::tmpm_impl("L2092");
     // ---- read model ----
     let st = state.get();
     let src = st.text();
@@ -2149,7 +2138,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
     // (minified code, data dumps) is not parsed; visible lines are tokenized one by one and
     // the over-long lines render as plain text — so typing on them stays cheap.
     const MAX_TOKENIZATION_LINE_LENGTH: usize = 20_000;
-    crate::view::tmpm_impl("L2141");
     let too_long =
         line_cache.peek().borrow_mut().sync(&src).max_cols() > MAX_TOKENIZATION_LINE_LENGTH;
     let syntax_regions: Option<Rc<Vec<(usize, usize)>>> =
@@ -2260,7 +2248,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         }
         li
     };
-    crate::view::tmpm_impl("L2251");
     let cl = li.line_of(&src, pcc);
     let cc = li.col_of(&src, pcc);
     let line_count = li.line_count();
@@ -2273,7 +2260,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         }
     }
 
-    crate::view::tmpm_impl("L2263");
     // Inline diff against the base (added lines + removed markers), recomputed reactively.
     let line_diff = p.diff_base.map(|base| {
         Rc::new(crate::diff::diff_lines_ws(
@@ -2331,7 +2317,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
     // Extension block widgets (full-width widgets on reserved rows below a line). Collect them
     // and the per-line gap-row counts BEFORE the map so it can reserve the space.
     let block_snap = Snapshot::of(&src, &sels);
-    crate::view::tmpm_impl("L2320");
     // Extension decorations + gutter markers, recomputed from the current snapshot each
     // render (here, before the display map: injected before / after text reserves columns).
     let (ext_decos_early, ext_gutter_marks): (Vec<Decoration>, Vec<GutterMark>) =
@@ -2408,7 +2393,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             });
         }
     }
-    crate::view::tmpm_impl("L2396");
     // The diff view's gutter hunk buttons (Stage / Revert / Unstage Change): resolved
     // against the hunks at click time.
     let hunk_run: Option<HunkRun> = match p.diff_base {
@@ -2470,7 +2454,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             block_widgets.push(b);
         }
     }
-    crate::view::tmpm_impl("L2457");
     // The language-service peek (definitions / references) is an internal block widget.
     if let Some(b) = lsp_ctl.peek_block(&p.theme, eff_fs, eff_fs * p.lh, &p.font_family)
         && b.line < line_count
@@ -2514,7 +2497,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             .into_iter()
             .filter(|b| b.line < line_count),
     );
-    crate::view::tmpm_impl("L2500");
     let mut block_gaps = Vec::new();
     if !block_widgets.is_empty() {
         block_gaps = vec![0usize; line_count];
@@ -2590,7 +2572,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         byte_at(text, line, col)
     };
 
-    crate::view::tmpm_impl("L2575");
     // ---- caret blink ----
     // A 0.5s phase that ticks ONLY while focused, reset to solid on any edit or caret move
     // (the effect below), so the caret is steady while you work.
@@ -2665,7 +2646,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         });
     }
 
-    crate::view::tmpm_impl("L2649");
     // ---- the visible window's tokens (+ long-line clip), per window ----
     // Called by the slices (visible rows, sticky headers, minimap) with their window; the
     // result is cached per (window, highlight tick, semantic tokens) so slices sharing a
@@ -2925,7 +2905,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         })
     };
 
-    crate::view::tmpm_impl("L2908");
     // ---- extension contributions for this frame ----
     // Decorations + gutter markers are recomputed from the current snapshot each render.
     let mut ext_decos = ext_decos_early;
@@ -2946,7 +2925,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             }
         }
     }
-    crate::view::tmpm_impl("L2928");
     // Overview-ruler marks of decorations that ask for one (merge conflicts), one per line
     // touched (capped so a huge range stays cheap).
     let ext_ruler: Vec<ruler::Mark> = ext_decos
@@ -3051,7 +3029,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             })
             .unwrap_or_default(),
     });
-    crate::view::tmpm_impl("L3032");
     // The component's own frame: the whole document, no tokens (it builds only the
     // caret-anchored pieces — popups, blocks, ghost text; the rows are the slices').
     let no_tokens: Vec<Token> = Vec::new();
@@ -3063,7 +3040,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         CaretView::default(),
     );
 
-    crate::view::tmpm_impl("L3043");
     // Overlay layers on the monospace grid (current-line, rulers, guides, selection, bracket
     // match, text, whitespace, carets), plus the completion popup when open.
     // Find matches for the current query/options (only while the bar is open) — highlighted
@@ -3124,7 +3100,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             );
         }
     }
-    crate::view::tmpm_impl("L3103");
     // Extension block widgets: render each on its reserved gap rows below the line.
     if !block_widgets.is_empty() {
         let mut used: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
@@ -3186,7 +3161,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             .into_widget(),
         );
     }
-    crate::view::tmpm_impl("L3164");
     // Touch selection handles: draggable knobs at the selection ends (opt-in). Dragging a
     // handle moves that endpoint (the other stays anchored).
     if p.selection_handles && has_primary_sel {
@@ -3255,7 +3229,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         }
         None => container().into_widget(),
     };
-    crate::view::tmpm_impl("L3232");
     let popups = popup_layer(
         vec![
             picker_slot.pop(),
@@ -3308,7 +3281,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
                 .into_widget()
         })
     };
-    crate::view::tmpm_impl("L3284");
     let grid = stack(vec![
         rows_slice,
         stack(layers)
@@ -3397,7 +3369,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             tab_size,
         ));
     };
-    crate::view::tmpm_impl("L3372");
     // Double-click selects the word under the pointer (new single selection).
     let word_select = move |pos: Offset| {
         let cur = state.peek();
@@ -3430,7 +3401,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         goal.set(crate::geometry::vcol_of(&text, e, tab_size));
         history.peek().borrow_mut().break_group();
     };
-    crate::view::tmpm_impl("L3404");
     // Column (rectangular) selection: Shift+Alt+drag makes one caret/range per row.
     let column_select = move |from: Offset, to: Offset| {
         let cur = state.peek();
@@ -3487,7 +3457,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         Some(w) => container().width(w).height(h).child(child).into_widget(),
         None => container().height(h).child(child).into_widget(),
     };
-    crate::view::tmpm_impl("L3460");
     let content_box = sized(content_h, grid.into_widget());
     // Per-plugin pointer handlers: notify each extension's on_click with the byte under the
     // press. (The editor's own hit-testing above already placed the caret.)
@@ -3634,7 +3603,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             }
         }));
 
-    crate::view::tmpm_impl("L3606");
     // Horizontal scroll: wrap the content (not the gutter) so long lines scroll sideways
     // while the line numbers stay put. Only when the editor is a bounded viewport.
     // The popup layer over the click area (a sibling, in the same content coordinates).
@@ -3676,7 +3644,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             gutter::numbers(&frame)
         })
     };
-    crate::view::tmpm_impl("L3647");
     let host_cells = host_col.map(|col| {
         let fd = fd.clone();
         let w = col.width;
@@ -3757,7 +3724,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         body
     };
 
-    crate::view::tmpm_impl("L3727");
     // With a fixed height the editor scrolls within a viewport (with sticky headers + an
     // optional minimap); without one it grows to its content (inline snippets).
     let code_area: AnyWidget = match p.height {
@@ -3936,7 +3902,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             .into_widget(),
     };
 
-    crate::view::tmpm_impl("L3905");
     // Overlay the find/replace bar (top-right) when open.
     let code_area: AnyWidget = if find.open.get() > 0 {
         let bar = search::bar(
@@ -4012,7 +3977,6 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         code_area
     };
 
-    crate::view::tmpm_impl("L3980");
     // The rename preview dialog (edits across files, accepted per file).
     let code_area: AnyWidget = match lsp_ctl.preview_layer(theme, &p.font_family) {
         Some(d) => stack(children![code_area, d]).into_widget(),
@@ -4108,13 +4072,3 @@ fn schedule_highlight_continuation(sess: &dyn crate::lang::SyntaxSession, tick: 
     }
 }
 
-#[doc(hidden)]
-pub fn tmpm_impl(l: &str) {
-    thread_local! { static T: std::cell::Cell<Option<(std::time::Instant, &'static str)>> = const { std::cell::Cell::new(None) }; }
-    let now = std::time::Instant::now();
-    let l: &'static str = Box::leak(l.to_string().into_boxed_str());
-    if let Some((t, prev)) = T.with(|t| t.replace(Some((now, l)))) {
-        let ms = (now - t).as_secs_f64() * 1e3;
-        if ms > 0.4 && ms < 50.0 { eprintln!("[tmpe] {prev}->{l} {ms:.2}ms"); }
-    }
-}
