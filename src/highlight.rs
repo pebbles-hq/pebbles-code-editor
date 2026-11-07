@@ -259,8 +259,15 @@ pub(crate) fn bracket_depth(prefix: &str, pairs: &[(char, char)]) -> i64 {
 /// Clip `tokens` to the byte range `from..to` and rebase their offsets to the start of that
 /// slice — so the visible block can be highlighted as its own rich-text (virtualization).
 pub(crate) fn slice_tokens(tokens: &[Token], from: usize, to: usize) -> Vec<Token> {
-    tokens
+    // Tokens are sorted by start: jump to the window (a scan over every token per line
+    // made the visible rows quadratic in the window's token count).
+    let mut i = tokens.partition_point(|t| t.start < from);
+    while i > 0 && tokens[i - 1].start + tokens[i - 1].len > from {
+        i -= 1;
+    }
+    tokens[i..]
         .iter()
+        .take_while(|t| t.start < to)
         .filter_map(|t| {
             let s = t.start.max(from);
             let e = (t.start + t.len).min(to);

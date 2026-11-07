@@ -486,7 +486,7 @@ pub struct Session {
     version: u64,
     /// A large document's FIRST parse, running on a background thread: the text it parses
     /// and where the tree arrives. Until it lands the document shows unhighlighted.
-    pending: Option<(String, std::sync::mpsc::Receiver<Option<Tree>>)>,
+    pending: Option<Pending>,
     /// Whether a large first parse may go to a background thread (off for one-shot
     /// whole-document highlighting, which needs the tree now).
     background: bool,
@@ -494,7 +494,18 @@ pub struct Session {
     structure_version: u64,
 }
 
-/// Documents at least this large take their first parse off the UI thread (a 5k-line Rust
+/// A parse running on a background thread: the text it parses, where the tree arrives,
+/// and (an edit's reparse) the edited previous tree to diff structure against.
+struct Pending {
+    text: String,
+    rx: std::sync::mpsc::Receiver<Option<Tree>>,
+    base: Option<Tree>,
+    lines_changed: bool,
+}
+
+/// Documents at least this large parse off the UI thread — the first parse, and every
+/// edit's reparse (2 ms per keystroke on a 5k-line file). Meanwhile the previous tree,
+/// edited to the new offsets, keeps highlighting; the new one lands a few ms later. (a 5k-line Rust
 /// file parses in ~50 ms; below this it is a few ms).
 const BACKGROUND_PARSE_BYTES: usize = 64 * 1024;
 
@@ -519,18 +530,42 @@ impl Session {
     /// Collect a finished background first parse (if any); then the tree describes
     /// `self.text` — the next [`update`](SyntaxSession::update) catches up incrementally.
     fn poll_pending(&mut self) {
-        let Some((_, rx)) = &self.pending else { return };
-        match rx.try_recv() {
+        let Some(p) = &self.pending else { return };
+        match p.rx.try_recv() {
             Ok(tree) => {
-                let (text, _) = self.pending.take().expect("pending");
+                let p = self.pending.take().expect("pending");
+                let changed = match (&p.base, tree.as_ref()) {
+                    (Some(old), Some(new)) => p.lines_changed || old.changed_ranges(new).next().is_some(),
+                    _ => true,
+                };
                 self.tree = tree;
-                self.text = text;
+                self.text = p.text;
                 self.version = self.version.wrapping_add(1);
-                self.structure_version = self.structure_version.wrapping_add(1);
+                if changed {
+                    self.structure_version = self.structure_version.wrapping_add(1);
+                }
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
             Err(std::sync::mpsc::TryRecvError::Disconnected) => self.pending = None,
         }
+    }
+
+    /// Parse `src` on a background thread (from `base`, an edited previous tree, if any).
+    fn parse_in_background(&mut self, src: &str, base: Option<Tree>, lines_changed: bool) -> bool {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let language = self.grammar.language.clone();
+        let text = src.to_string();
+        let copy = text.clone();
+        let from = base.clone();
+        let spawned = std::thread::Builder::new().name("syntax-parse".into()).spawn(move || {
+            let mut parser = Parser::new();
+            let tree = parser.set_language(&language).ok().and_then(|()| parser.parse(&copy, from.as_ref()));
+            let _ = tx.send(tree);
+        });
+        if spawned.is_ok() {
+            self.pending = Some(Pending { text, rx, base, lines_changed });
+        }
+        spawned.is_ok()
     }
 
     /// The current syntax tree (after the last [`update`](SyntaxSession::update)).
@@ -584,22 +619,11 @@ impl SyntaxSession for Session {
         if self.tree.is_some() && self.text == src {
             return;
         }
-        if self.tree.is_none() && self.background && src.len() >= BACKGROUND_PARSE_BYTES {
-            let (tx, rx) = std::sync::mpsc::channel();
-            let language = self.grammar.language.clone();
-            let text = src.to_string();
-            let copy = text.clone();
-            let spawned = std::thread::Builder::new().name("syntax-parse".into()).spawn(move || {
-                let mut parser = Parser::new();
-                let tree = parser.set_language(&language).ok().and_then(|()| parser.parse(&copy, None));
-                let _ = tx.send(tree);
-            });
-            if spawned.is_ok() {
-                self.pending = Some((text, rx));
-                return;
-            }
+        let background = self.background && src.len() >= BACKGROUND_PARSE_BYTES;
+        if self.tree.is_none() && background && self.parse_in_background(src, None, true) {
+            return;
         }
-        let old_tree = match (self.tree.as_mut(), crate::collab::diff(&self.text, src)) {
+        let incremental = match (self.tree.as_mut(), crate::collab::diff(&self.text, src)) {
             (Some(tree), Some(e)) => {
                 let start_position = point_at(&self.text, e.from);
                 let old_end_position = point_at(&self.text, e.to);
@@ -612,12 +636,22 @@ impl SyntaxSession for Session {
                     old_end_position,
                     new_end_position,
                 });
-                Some(&*tree)
+                true
             }
-            _ => None,
+            _ => false,
         };
-        let incremental = old_tree.is_some();
-        let next = self.parser.parse(src, old_tree);
+        if incremental && background {
+            // Keep highlighting with the edited previous tree; reparse off the UI thread.
+            let lines_changed = self.text.bytes().filter(|&b| b == b'\n').count()
+                != src.bytes().filter(|&b| b == b'\n').count();
+            let base = self.tree.clone();
+            if self.parse_in_background(src, base, lines_changed) {
+                self.text.clear();
+                self.text.push_str(src);
+                return;
+            }
+        }
+        let next = self.parser.parse(src, if incremental { self.tree.as_ref() } else { None });
         // Did the syntax STRUCTURE change (not just a token's text)? Typing inside an
         // identifier or a string doesn't — then syntax-derived data (fold regions) stands.
         let changed = match (incremental, self.tree.as_ref(), next.as_ref()) {
