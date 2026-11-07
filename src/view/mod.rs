@@ -2775,14 +2775,21 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
                         bc.0 = (ver, src_rc.clone());
                     }
                     let last = line_count.saturating_sub(1);
+                    // Blocks highlighted off-thread since the last window (same parse only).
+                    for (b, t) in sess.take_prefetched() {
+                        bc.1.entry(b).or_insert_with(|| Rc::new(t));
+                    }
+                    let block_range = |b: usize| {
+                        let lo = li.line_start_of(b * BLOCK);
+                        let hi = line_end(&src, li.line_start_of(((b + 1) * BLOCK - 1).min(last)));
+                        lo..hi
+                    };
                     let mut toks = Vec::new();
                     for b in first_line / BLOCK..=last_line.min(last) / BLOCK {
                         let block = match bc.1.get(&b) {
                             Some(t) => t.clone(),
                             None => {
-                                let lo = li.line_start_of(b * BLOCK);
-                                let hi = line_end(&src, li.line_start_of(((b + 1) * BLOCK - 1).min(last)));
-                                let t = Rc::new(sess.highlight_range(&src, lo..hi));
+                                let t = Rc::new(sess.highlight_range(&src, block_range(b)));
                                 // An unfinished highlight (a parse still landing) isn't final.
                                 if !sess.needs_more() {
                                     bc.1.insert(b, t.clone());
@@ -2791,6 +2798,18 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
                             }
                         };
                         toks.extend(block.iter().cloned());
+                    }
+                    // Highlight the blocks around the window on a background thread, so a
+                    // scroll revealing one finds it cached (a 64-line block costs ~2 ms: it
+                    // was every p99 scroll frame).
+                    if !sess.needs_more() {
+                        let (b0, b1) = (first_line / BLOCK, last_line.min(last) / BLOCK);
+                        let want: Vec<(usize, std::ops::Range<usize>)> = (b0.saturating_sub(2)
+                            ..=(b1 + 3).min(last / BLOCK))
+                            .filter(|b| !bc.1.contains_key(b))
+                            .map(|b| (b, block_range(b)))
+                            .collect();
+                        sess.prefetch(&src, want);
                     }
                     schedule_highlight_continuation(sess.as_ref(), highlight_tick);
                     Some(Rc::new(toks))

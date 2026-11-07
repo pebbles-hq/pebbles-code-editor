@@ -174,6 +174,15 @@ pub trait SyntaxSession {
     fn needs_more(&self) -> bool {
         false
     }
+    /// Start highlighting `ranges` (each tagged with a caller id) off the UI thread, for the
+    /// current parse; collect them with [`take_prefetched`](Self::take_prefetched). Scrolling
+    /// asks for the blocks just past the viewport so revealing them costs no highlighting.
+    /// A no-op by default (and while a previous prefetch is still running).
+    fn prefetch(&mut self, _src: &str, _ranges: Vec<(usize, std::ops::Range<usize>)>) {}
+    /// Finished prefetches `(id, tokens)` that still match the current parse.
+    fn take_prefetched(&mut self) -> Vec<(usize, Vec<Token>)> {
+        Vec::new()
+    }
 }
 
 /// Cap on the bracket nesting the tree represents. [`SyntaxNode`] is a recursive

@@ -492,6 +492,9 @@ pub struct Session {
     background: bool,
     /// Bumped by every reparse that changed the tree's structure or the line count.
     structure_version: u64,
+    /// Highlighting running on a background thread ([`SyntaxSession::prefetch`]): the parse
+    /// version it highlights and where its `(id, tokens)` arrive.
+    prefetch: Option<(u64, std::sync::mpsc::Receiver<(usize, Vec<Token>)>)>,
 }
 
 /// A parse running on a background thread: the text it parses, where the tree arrives,
@@ -524,6 +527,7 @@ impl Session {
             pending: None,
             background: true,
             structure_version: 0,
+            prefetch: None,
         })
     }
 
@@ -744,6 +748,52 @@ impl SyntaxSession for Session {
 
     fn needs_more(&self) -> bool {
         self.pending.is_some()
+    }
+
+    fn prefetch(&mut self, src: &str, ranges: Vec<(usize, Range<usize>)>) {
+        if ranges.is_empty() || self.prefetch.is_some() || self.pending.is_some() || self.text != src {
+            return;
+        }
+        let Some(tree) = self.tree.clone() else { return };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let grammar = self.grammar.clone();
+        let text = src.to_string();
+        let spawned = std::thread::Builder::new().name("syntax-highlight".into()).spawn(move || {
+            for (id, r) in ranges {
+                let start = r.start.min(text.len());
+                let end = r.end.clamp(start, text.len());
+                let mut paint: Vec<Paint> = vec![None; end - start];
+                paint_layer(&grammar, &tree, &text, start..end, &mut paint, 0);
+                if tx.send((id, runs(&paint, start))).is_err() {
+                    return;
+                }
+            }
+        });
+        if spawned.is_ok() {
+            self.prefetch = Some((self.version, rx));
+        }
+    }
+
+    fn take_prefetched(&mut self) -> Vec<(usize, Vec<Token>)> {
+        self.poll_pending();
+        let Some((ver, rx)) = &self.prefetch else { return Vec::new() };
+        if *ver != self.version || self.pending.is_some() {
+            // Highlighted against a superseded parse: drop it (the thread stops on send).
+            self.prefetch = None;
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        loop {
+            match rx.try_recv() {
+                Ok(r) => out.push(r),
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.prefetch = None;
+                    break;
+                }
+            }
+        }
+        out
     }
 
     fn structure_version(&self) -> u64 {
