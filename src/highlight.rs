@@ -238,6 +238,7 @@ pub(crate) fn bracket_depth_from(depth: i64, text: &str, pairs: &[(char, char)])
     d
 }
 
+#[cfg(test)]
 /// Naive bracket depth after `prefix` (strings/comments not excluded — the prefix scan is
 /// an approximation; the visible window itself is token-aware).
 pub(crate) fn bracket_depth(prefix: &str, pairs: &[(char, char)]) -> i64 {

@@ -16,10 +16,9 @@
 //! themeable. Grammars whose query fails to compile fall back to the hand-written scanner for
 //! that language (see [`by_name`](super::by_name)).
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Range;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use tree_sitter::{
     InputEdit, Parser, Point, Query, QueryCursor, Range as TsRange, StreamingIterator, Tree,
@@ -318,28 +317,38 @@ pub fn canonical_id(name: &str) -> Option<&'static str> {
     })
 }
 
-thread_local! {
-    /// Compiled grammars, built on first use (query compilation costs milliseconds).
-    static GRAMMARS: RefCell<HashMap<&'static str, Option<Rc<GrammarDef>>>> =
-        RefCell::new(HashMap::new());
+/// One grammar's compile-once cell (shared by every thread: a [`prewarm`] on a background
+/// thread and the UI thread's [`grammar`] wait on the same compile, never repeat it).
+type GrammarCell = Arc<OnceLock<Option<Arc<GrammarDef>>>>;
+
+/// Compiled grammars, built on first use (a highlight query compiles in tens of ms).
+fn cell(id: &'static str) -> GrammarCell {
+    static GRAMMARS: OnceLock<Mutex<HashMap<&'static str, GrammarCell>>> = OnceLock::new();
+    let map = GRAMMARS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut m = map.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    m.entry(id).or_default().clone()
 }
 
 /// The compiled grammar for `name` (any alias — see [`canonical_id`]), or `None` when it is
 /// unknown or its query does not compile against the bundled parser.
-pub fn grammar(name: &str) -> Option<Rc<GrammarDef>> {
+pub fn grammar(name: &str) -> Option<Arc<GrammarDef>> {
     let id = canonical_id(name)?;
-    GRAMMARS.with(|g| {
-        if let Some(hit) = g.borrow().get(id) {
-            return hit.clone();
-        }
-        let built = specs()
-            .into_iter()
-            .find(|s| s.id == id)
-            .and_then(|s| build(&s).ok())
-            .map(Rc::new);
-        g.borrow_mut().insert(id, built.clone());
-        built
-    })
+    cell(id)
+        .get_or_init(|| specs().into_iter().find(|s| s.id == id).and_then(|s| build(&s).ok()).map(Arc::new))
+        .clone()
+}
+
+/// Compile `name`'s grammar on a background thread now, so the first editor to open a
+/// file of that language doesn't compile its highlight query on the UI thread (tens of
+/// milliseconds for Rust/TypeScript). A no-op when unknown or already built.
+pub fn prewarm(name: &str) {
+    let Some(id) = canonical_id(name) else { return };
+    if cell(id).get().is_some() {
+        return;
+    }
+    let _ = std::thread::Builder::new().name(format!("grammar-{id}")).spawn(move || {
+        let _ = grammar(id);
+    });
 }
 
 fn build(s: &Spec) -> Result<GrammarDef, String> {
@@ -414,6 +423,7 @@ impl Language for TreeSitter {
     fn highlight(&self, src: &str) -> Vec<Token> {
         match Session::new(self.id) {
             Some(mut s) => {
+                s.background = false;
                 s.update(src);
                 s.highlight_range(src, 0..src.len())
             }
@@ -468,13 +478,23 @@ fn opens_a_region(text: &str, at: usize, kind: &str) -> bool {
 
 /// The incremental parse state for one document.
 pub struct Session {
-    grammar: Rc<GrammarDef>,
+    grammar: Arc<GrammarDef>,
     parser: Parser,
     tree: Option<Tree>,
     text: String,
     /// Bumped on every reparse (lets callers cache derived data).
     version: u64,
+    /// A large document's FIRST parse, running on a background thread: the text it parses
+    /// and where the tree arrives. Until it lands the document shows unhighlighted.
+    pending: Option<(String, std::sync::mpsc::Receiver<Option<Tree>>)>,
+    /// Whether a large first parse may go to a background thread (off for one-shot
+    /// whole-document highlighting, which needs the tree now).
+    background: bool,
 }
+
+/// Documents at least this large take their first parse off the UI thread (a 5k-line Rust
+/// file parses in ~50 ms; below this it is a few ms).
+const BACKGROUND_PARSE_BYTES: usize = 64 * 1024;
 
 impl Session {
     /// A fresh session for grammar `name`.
@@ -488,7 +508,25 @@ impl Session {
             tree: None,
             text: String::new(),
             version: 0,
+            pending: None,
+            background: true,
         })
+    }
+
+    /// Collect a finished background first parse (if any); then the tree describes
+    /// `self.text` — the next [`update`](SyntaxSession::update) catches up incrementally.
+    fn poll_pending(&mut self) {
+        let Some((_, rx)) = &self.pending else { return };
+        match rx.try_recv() {
+            Ok(tree) => {
+                let (text, _) = self.pending.take().expect("pending");
+                self.tree = tree;
+                self.text = text;
+                self.version = self.version.wrapping_add(1);
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.pending = None,
+        }
     }
 
     /// The current syntax tree (after the last [`update`](SyntaxSession::update)).
@@ -535,8 +573,27 @@ fn advance_point(base: Point, text: &str) -> Point {
 
 impl SyntaxSession for Session {
     fn update(&mut self, src: &str) {
+        self.poll_pending();
+        if self.pending.is_some() {
+            return; // still parsing the first version; it catches up when it lands
+        }
         if self.tree.is_some() && self.text == src {
             return;
+        }
+        if self.tree.is_none() && self.background && src.len() >= BACKGROUND_PARSE_BYTES {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let language = self.grammar.language.clone();
+            let text = src.to_string();
+            let copy = text.clone();
+            let spawned = std::thread::Builder::new().name("syntax-parse".into()).spawn(move || {
+                let mut parser = Parser::new();
+                let tree = parser.set_language(&language).ok().and_then(|()| parser.parse(&copy, None));
+                let _ = tx.send(tree);
+            });
+            if spawned.is_ok() {
+                self.pending = Some((text, rx));
+                return;
+            }
         }
         let old_tree = match (self.tree.as_mut(), crate::collab::diff(&self.text, src)) {
             (Some(tree), Some(e)) => {
@@ -563,7 +620,7 @@ impl SyntaxSession for Session {
     }
 
     fn highlight_range(&mut self, src: &str, range: Range<usize>) -> Vec<Token> {
-        if self.text != src {
+        if self.text != src || self.pending.is_some() {
             self.update(src);
         }
         let Some(tree) = self.tree.as_ref() else {
@@ -631,6 +688,10 @@ impl SyntaxSession for Session {
 
     fn version(&self) -> u64 {
         self.version
+    }
+
+    fn needs_more(&self) -> bool {
+        self.pending.is_some()
     }
 
     fn enclosing_nodes(&mut self, from: usize, to: usize) -> Vec<(usize, usize)> {
