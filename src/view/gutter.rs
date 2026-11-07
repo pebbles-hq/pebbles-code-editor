@@ -3,7 +3,9 @@
 //! scroll range stays exact. Foldable lines get a clickable ▾/▸ fold arrow. The gutter stays
 //! fixed while the content scrolls horizontally, so it wraps `content` in a row to its right.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use pebbles::prelude::*;
 
@@ -45,9 +47,14 @@ pub(crate) fn wrap(
         .into_widget()
 }
 
+/// The glyph-margin rows `(y, line)` of the gutter's current window, written by
+/// [`numbers`] (the scroll slice) and read by [`breakpoint_menu`] on a right-click.
+pub(crate) type MarkRows = Rc<RefCell<Vec<(f64, usize)>>>;
+
 /// The gutter's per-line cells (numbers, fold arrows, change bars, breakpoints, markers,
-/// the lightbulb) over the frame's window — the body of the gutter's scroll slice.
-pub(crate) fn numbers(f: &Frame) -> AnyWidget {
+/// the lightbulb) over the frame's window — the body of the gutter's scroll slice. The
+/// glyph-margin rows go to `rows_out` for [`breakpoint_menu`].
+pub(crate) fn numbers(f: &Frame, rows_out: &MarkRows) -> AnyWidget {
     if !f.p.gutter {
         return container().into_widget();
     }
@@ -318,43 +325,49 @@ pub(crate) fn numbers(f: &Frame) -> AnyWidget {
             .into_widget(),
         );
     }
-    let body = stack(nums).alignment(Alignment::TOP_LEFT).into_widget();
-    match f.p.breakpoint_menu.clone() {
-        Some(menu) if !mark_rows.is_empty() => {
-            let line_px = f.line_px;
-            let bp_w = glyph_margin_w(&f.p, f.line_px);
-            context_menu(body)
-                .width(240.0)
-                .entries_with(move |e| {
-                    let Some(&(_, n)) = mark_rows
-                        .iter()
-                        .find(|(y, _)| e.position.x < bp_w + 4.0 && e.position.y >= *y && e.position.y < y + line_px)
-                    else {
-                        return Vec::new();
-                    };
-                    let ctx = crate::annotations::MenuContext { caret: (n, 0), ..Default::default() };
-                    let mut out = Vec::new();
-                    for row in crate::annotations::arrange(menu(n)) {
-                        match row {
-                            None => out.push(MenuEntry::Separator),
-                            Some(it) => {
-                                let run = it.run.clone();
-                                let ctx = ctx.clone();
-                                out.push(
-                                    menu_item(it.label.clone())
-                                        .disabled(!it.enabled)
-                                        .on_select(move || run(&ctx))
-                                        .into(),
-                                );
-                            }
-                        }
+    *rows_out.borrow_mut() = mark_rows;
+    stack(nums).alignment(Alignment::TOP_LEFT).into_widget()
+}
+
+/// The breakpoint area's right-click menu around the gutter's scroll slice `numbers`:
+/// ONE menu outside the slice, mapping the click to a line through `rows` (the slice's
+/// current window). Inside the slice it re-rendered on every scroll frame.
+pub(crate) fn breakpoint_menu(f: &Frame, numbers: AnyWidget, rows: MarkRows) -> AnyWidget {
+    let Some(menu) = f.p.breakpoint_menu.clone() else {
+        return numbers;
+    };
+    let line_px = f.line_px;
+    let bp_w = glyph_margin_w(f.p, f.line_px);
+    context_menu(numbers)
+        .width(240.0)
+        .entries_with(move |e| {
+            let Some(&(_, n)) = rows
+                .borrow()
+                .iter()
+                .find(|(y, _)| e.position.x < bp_w + 4.0 && e.position.y >= *y && e.position.y < y + line_px)
+            else {
+                return Vec::new();
+            };
+            let ctx = crate::annotations::MenuContext { caret: (n, 0), ..Default::default() };
+            let mut out = Vec::new();
+            for row in crate::annotations::arrange(menu(n)) {
+                match row {
+                    None => out.push(MenuEntry::Separator),
+                    Some(it) => {
+                        let run = it.run.clone();
+                        let ctx = ctx.clone();
+                        out.push(
+                            menu_item(it.label.clone())
+                                .disabled(!it.enabled)
+                                .on_select(move || run(&ctx))
+                                .into(),
+                        );
                     }
-                    out
-                })
-                .into_widget()
-        }
-        _ => body,
-    }
+                }
+            }
+            out
+        })
+        .into_widget()
 }
 
 /// The fold-arrow column at the gutter's right edge.

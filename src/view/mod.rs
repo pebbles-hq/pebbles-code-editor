@@ -3667,15 +3667,20 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
 
     // Gutter to the left of the (horizontally-scrolling) content.
     // The gutter's cells follow the scroll window like the rows (their own slice).
+    // The breakpoint area's menu sits OUTSIDE the scroll slice (it re-rendered with every
+    // scroll frame inside it); the slice hands it the window's glyph-margin rows.
+    let mark_rows: gutter::MarkRows = Default::default();
     let numbers = {
         let fd = fd.clone();
+        let rows = mark_rows.clone();
         slice("gutter", move || {
             let _ = win_q.get();
             let (first, last) = window_lines(&fd, scroll_top.peek());
             let frame = fd.frame(first, last, &[], None, CaretView::default());
-            gutter::numbers(&frame)
+            gutter::numbers(&frame, &rows)
         })
     };
+    let numbers = gutter::breakpoint_menu(&frame, numbers, mark_rows);
     let host_cells = host_col.map(|col| {
         let fd = fd.clone();
         let w = col.width;
