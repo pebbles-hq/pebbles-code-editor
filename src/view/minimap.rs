@@ -74,6 +74,61 @@ fn geom(lines: usize, mm_h: f64, view_h: f64, extent: f64, line_px: f64, scroll:
     }
 }
 
+thread_local! {
+    /// Minimap blocks per line `(x0, x1, colour)` for one (text, theme, columns), with
+    /// whether tokens covered the line when they were computed.
+    #[allow(clippy::type_complexity)]
+    static MM_LINES: std::cell::RefCell<(
+        (usize, usize, usize),
+        std::collections::HashMap<usize, (bool, Vec<(f64, f64, Color)>)>,
+    )> = std::cell::RefCell::new(((0, 0, 0), std::collections::HashMap::new()));
+}
+
+/// One line's same-coloured runs of non-whitespace `(x0, x1, colour)`.
+fn line_blocks(f: &Frame, text: &str, start: usize, max_cols: usize, fg: Color) -> Vec<(f64, f64, Color)> {
+    let tokens = f.tokens;
+    let mut ti = tokens.partition_point(|t| t.start + t.len <= start);
+    let mut out = Vec::new();
+    let mut run: Option<(usize, Color)> = None;
+    let mut col = 0usize;
+    let mut byte = start;
+    let flush = |run: &mut Option<(usize, Color)>, end: usize, out: &mut Vec<(f64, f64, Color)>| {
+        if let Some((c0, color)) = run.take() {
+            out.push((PAD_L + c0 as f64 * CHAR_W, PAD_L + end as f64 * CHAR_W, with_alpha(color, INK_ALPHA)));
+        }
+    };
+    let ts = f.li.tab_size().max(1);
+    for chr in text.chars() {
+        if col >= max_cols {
+            break;
+        }
+        let width = if chr == '\t' { ts - col % ts } else { 1 };
+        if chr.is_whitespace() {
+            flush(&mut run, col, &mut out);
+        } else {
+            while ti < tokens.len() && tokens[ti].start + tokens[ti].len <= byte {
+                ti += 1;
+            }
+            let (kind, scope) = match tokens.get(ti) {
+                Some(t) if t.start <= byte => (t.kind, t.scope),
+                _ => (TokenKind::Plain, 0),
+            };
+            let color = if kind == TokenKind::Plain && scope == 0 { fg } else { f.theme.style_token(kind, scope).color };
+            match run {
+                Some((_, c)) if c == color => {}
+                _ => {
+                    flush(&mut run, col, &mut out);
+                    run = Some((col, color));
+                }
+            }
+        }
+        col += width;
+        byte += chr.len_utf8();
+    }
+    flush(&mut run, col.min(max_cols), &mut out);
+    out
+}
+
 /// Build the minimap panel, or `None` when the minimap is off or the editor is unbounded.
 pub(crate) fn panel(
     f: &Frame,
@@ -100,60 +155,42 @@ pub(crate) fn panel(
     let last = (((g.top + h) / LINE_H).ceil() as usize).min(n);
     let fg = f.theme.foreground;
     let tokens = f.tokens;
-    let mut ti =
-        tokens.partition_point(|t| t.start + t.len <= f.li.line_start_of(first.min(n - 1)));
-    let mut blocks: Vec<(f64, f64, f64, Color)> = Vec::new();
-    for line in first..last {
-        let start = f.li.line_start_of(line);
-        let text = f.src[start..].split('\n').next().unwrap_or("");
-        let y = line as f64 * LINE_H - g.top;
-        let mut run: Option<(usize, Color)> = None;
-        let mut col = 0usize;
-        let mut byte = start;
-        let flush = |run: &mut Option<(usize, Color)>, end: usize, out: &mut Vec<_>| {
-            if let Some((c0, color)) = run.take() {
-                out.push((
-                    PAD_L + c0 as f64 * CHAR_W,
-                    y,
-                    PAD_L + end as f64 * CHAR_W,
-                    with_alpha(color, INK_ALPHA),
-                ));
-            }
-        };
-        for chr in text.chars() {
-            if col >= max_cols {
-                break;
-            }
-            let ts = f.li.tab_size().max(1);
-            let width = if chr == '\t' { ts - col % ts } else { 1 };
-            if chr.is_whitespace() {
-                flush(&mut run, col, &mut blocks);
-            } else {
-                while ti < tokens.len() && tokens[ti].start + tokens[ti].len <= byte {
-                    ti += 1;
-                }
-                let (kind, scope) = match tokens.get(ti) {
-                    Some(t) if t.start <= byte => (t.kind, t.scope),
-                    _ => (TokenKind::Plain, 0),
-                };
-                let color = if kind == TokenKind::Plain && scope == 0 {
-                    fg
-                } else {
-                    f.theme.style_token(kind, scope).color
-                };
-                match run {
-                    Some((_, c)) if c == color => {}
-                    _ => {
-                        flush(&mut run, col, &mut blocks);
-                        run = Some((col, color));
-                    }
-                }
-            }
-            col += width;
-            byte += chr.len_utf8();
+    // The blocks depend on the first line, the text and its tokens — not on the pixel
+    // offset, which changes every scroll frame: cache them (one char-by-char pass over the
+    // ~350 lines on screen cost ~2 ms per frame) and only translate.
+    // Per-line block cache: a line's blocks depend on its text and its tokens, not on the
+    // scroll offset — scrolling recomputes only lines it hasn't seen (one char-by-char pass
+    // over the ~350 lines on screen cost ~2 ms per window move). Cleared by a new text,
+    // theme or width; a line first seen without tokens is redone once they cover it.
+    let text_id = f.src.as_ptr() as usize ^ f.src.len();
+    let theme_id = std::ptr::from_ref(f.theme) as usize;
+    let (tok_lo, tok_hi) = match (tokens.first(), tokens.last()) {
+        (Some(a), Some(b)) => (a.start, b.start + b.len),
+        _ => (usize::MAX, 0),
+    };
+    let blocks: Vec<(f64, f64, f64, Color)> = MM_LINES.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.0 != (text_id, theme_id, max_cols) {
+            *c = ((text_id, theme_id, max_cols), std::collections::HashMap::new());
         }
-        flush(&mut run, col.min(max_cols), &mut blocks);
-    }
+        let mut out = Vec::new();
+        for line in first..last {
+            let start = f.li.line_start_of(line);
+            let text = f.src[start..].split('\n').next().unwrap_or("");
+            let covered = start >= tok_lo && start + text.len() <= tok_hi;
+            let fresh = match c.1.get(&line) {
+                Some((had_tokens, _)) => *had_tokens || !covered,
+                None => false,
+            };
+            if !fresh {
+                c.1.insert(line, (covered, line_blocks(f, text, start, max_cols, fg)));
+            }
+            let y = (line - first) as f64 * LINE_H;
+            out.extend(c.1[&line].1.iter().map(|&(x0, x1, col)| (x0, y, x1, col)));
+        }
+        out
+    });
+    let dy = first as f64 * LINE_H - g.top;
 
     let show_slider = st.hover.get() || st.grab.get().is_some();
     let slider = if st.grab.get().is_some() {
@@ -162,7 +199,8 @@ pub(crate) fn panel(
         with_alpha(f.theme.scrollbar, 0.5)
     };
     let painter = move |cv: &mut Canvas<'_>| {
-        for &(x0, y, x1, c) in &blocks {
+        for &(x0, y, x1, c) in blocks.iter() {
+            let y = y + dy;
             cv.fill_rect(Rect::new(x0, y, x1, y + LINE_H), c);
         }
         if show_slider {

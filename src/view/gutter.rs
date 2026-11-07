@@ -85,6 +85,9 @@ pub(crate) fn numbers(f: &Frame) -> AnyWidget {
     let folded = f.folds.get();
 
     let mut nums: Vec<AnyWidget> = Vec::new();
+    // Glyph-margin rows `(y, line)`: ONE context menu over the gutter maps a right-click
+    // to its line (a menu component per visible line re-rendered on every scroll frame).
+    let mut mark_rows: Vec<(f64, usize)> = Vec::new();
     for n in f.first_line..=f.last_line {
         if f.disp.is_hidden(n) {
             continue;
@@ -130,6 +133,7 @@ pub(crate) fn numbers(f: &Frame) -> AnyWidget {
         }
         if let Some(marks) = &bp_marks {
             nums.push(mark_cell(f, n, bp_w, y, marks.get(&n)));
+            mark_rows.push((y, n));
         } else if let Some((sig, set)) = &breakpoints {
             let sig = *sig;
             let on = set.contains(&n);
@@ -314,7 +318,43 @@ pub(crate) fn numbers(f: &Frame) -> AnyWidget {
             .into_widget(),
         );
     }
-    stack(nums).alignment(Alignment::TOP_LEFT).into_widget()
+    let body = stack(nums).alignment(Alignment::TOP_LEFT).into_widget();
+    match f.p.breakpoint_menu.clone() {
+        Some(menu) if !mark_rows.is_empty() => {
+            let line_px = f.line_px;
+            let bp_w = glyph_margin_w(&f.p, f.line_px);
+            context_menu(body)
+                .width(240.0)
+                .entries_with(move |e| {
+                    let Some(&(_, n)) = mark_rows
+                        .iter()
+                        .find(|(y, _)| e.position.x < bp_w + 4.0 && e.position.y >= *y && e.position.y < y + line_px)
+                    else {
+                        return Vec::new();
+                    };
+                    let ctx = crate::annotations::MenuContext { caret: (n, 0), ..Default::default() };
+                    let mut out = Vec::new();
+                    for row in crate::annotations::arrange(menu(n)) {
+                        match row {
+                            None => out.push(MenuEntry::Separator),
+                            Some(it) => {
+                                let run = it.run.clone();
+                                let ctx = ctx.clone();
+                                out.push(
+                                    menu_item(it.label.clone())
+                                        .disabled(!it.enabled)
+                                        .on_select(move || run(&ctx))
+                                        .into(),
+                                );
+                            }
+                        }
+                    }
+                    out
+                })
+                .into_widget()
+        }
+        _ => body,
+    }
 }
 
 /// The fold-arrow column at the gutter's right edge.
@@ -485,31 +525,6 @@ fn mark_cell(
             }
         })),
     );
-    let cell: AnyWidget = match &f.p.breakpoint_menu {
-        Some(menu) => {
-            let mut m = context_menu(cell).width(240.0);
-            let ctx = crate::annotations::MenuContext {
-                caret: (n, 0),
-                ..Default::default()
-            };
-            for row in crate::annotations::arrange(menu(n)) {
-                match row {
-                    None => m = m.separator(),
-                    Some(it) => {
-                        let run = it.run.clone();
-                        let ctx = ctx.clone();
-                        m = m.item(
-                            menu_item(it.label.clone())
-                                .disabled(!it.enabled)
-                                .on_select(move || run(&ctx)),
-                        );
-                    }
-                }
-            }
-            m.into_widget()
-        }
-        None => cell.into_widget(),
-    };
     Positioned::new(cell).left(4.0).top(y).into_widget()
 }
 
