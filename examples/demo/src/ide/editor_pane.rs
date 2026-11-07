@@ -4,7 +4,7 @@
 
 use pebbles::prelude::*;
 use pebbles_code_editor::{
-    BlockWidget, Command, Decoration, EditorTheme, Extension, GutterMark, code_editor, extension,
+    BlockWidget, Command, Decoration, Extension, GutterMark, code_editor, diff_editor, extension,
 };
 
 use super::providers;
@@ -103,12 +103,12 @@ pub fn pane(ws: Workspace, s: Settings, height: f64) -> AnyWidget {
         .initial_scroll(scroll.peek())
         .on_scroll(move |px| scroll.set(px))
         .folds(f.folds)
+        .breakpoints(f.breakpoints)
+        .smooth_scrolling(true)
+        .suggest_preview(true)
+        .emmet(true)
+        .format_on_paste(true)
         .diff_base(f.saved) // inline diff of unsaved edits (git-gutter style)
-        .theme(if s.light.get() {
-            EditorTheme::light()
-        } else {
-            EditorTheme::dark()
-        })
         .height(height.max(120.0))
         .font_size(s.font_size.get())
         .line_height(if relaxed { 2.0 } else { 1.6 })
@@ -134,6 +134,14 @@ pub fn pane(ws: Workspace, s: Settings, height: f64) -> AnyWidget {
     if s.plugins.get() {
         editor = editor.extensions(sample_extensions());
     }
+    if s.diff_view.get() {
+        // VS Code's diff editor: saved (left, read-only) vs. the buffer (right).
+        let l = lang;
+        let diff = diff_editor(f.saved, code)
+            .height(height.max(120.0))
+            .configure(move |e| e.language(providers::lang_for(l)));
+        return container().color(c.background).child(diff).into_widget();
+    }
 
     container().color(c.background).child(editor).into_widget()
 }
@@ -148,7 +156,7 @@ fn welcome() -> AnyWidget {
             column(children![
                 icon(tabler::FILE_CODE).size(46.0).color(c.muted_foreground),
                 gap_h(14.0),
-                text("Pebbles IDE").size(20.0).bold().color(c.foreground),
+                text("Pebbles IDE").size(20.0).bold(),
                 gap_h(4.0),
                 text("Open a file from the Explorer to start editing.")
                     .size(13.0)

@@ -37,7 +37,7 @@ pub fn dock(ws: Workspace) -> AnyWidget {
                             .color(c.border)
                             .radius(BorderRadius::all(8.0))
                     )
-                    .child(text(diags.len().to_string()).size(10.5).color(c.foreground)),
+                    .child(text(diags.len().to_string()).size(10.5)),
             ])
             .cross_axis_alignment(CrossAxisAlignment::Center),
         );
@@ -74,7 +74,7 @@ pub fn dock(ws: Workspace) -> AnyWidget {
                         row(children![
                             icon(kind).size(13.0).color(col),
                             gap_w(8.0),
-                            text(d.message.clone()).size(12.0).color(c.foreground),
+                            text(d.message.clone()).size(12.0),
                             gap_w(8.0),
                             text(format!("[Ln {line}]"))
                                 .size(11.5)

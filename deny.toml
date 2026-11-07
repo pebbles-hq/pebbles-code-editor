@@ -2,7 +2,7 @@
 # Run locally with `cargo deny check`; CI runs it on every push.
 #
 # This crate's dependency graph is dominated by the `pebbles` framework (a git dependency),
-# so it inherits the framework's GPU/windowing stack (vello/wgpu/winit) and the same
+# so it inherits the framework's GPU/windowing stack (wgpu/winit) and the same
 # transitive advisory picture — this policy mirrors `pebbles/deny.toml` accordingly.
 
 [graph]
@@ -18,6 +18,8 @@ targets = [
     "x86_64-pc-windows-msvc",
     "aarch64-apple-darwin",
     "x86_64-apple-darwin",
+    # web is a supported platform (WebGPU + WebGL2 fallback)
+    "wasm32-unknown-unknown",
 ]
 
 [advisories]
@@ -43,10 +45,22 @@ ignore = [
     # proc-macro-error, a build-time proc-macro dep of glib-macros in that same GTK chain.
     # Build-time only; never linked into a shipped binary.
     "RUSTSEC-2024-0370",
-    # ttf-parser, via ab_glyph <- sctk-adwaita <- winit (Wayland client-side decorations).
-    # This one IS built on Linux. Font PARSING of untrusted files would matter, but this path
-    # only renders winit's own title-bar text, and the fix belongs upstream in winit.
+    # ttf-parser — unmaintained (RUSTSEC-2026-0192; a maintenance notice, no known
+    # vulnerability, no patched release). Reached on the PRIMARY font path: fontdb 0.23
+    # (cosmic-text's font database) parses every bundled font, every `App::font` /
+    # `fonts::register_user_font` byte slice and, on desktop, every system font; also via
+    # ab_glyph <- sctk-adwaita <- winit (Wayland client-side decorations).
+    # Accepted for this release because fonts are TRUSTED input (SECURITY.md "Renderer & fonts").
+    # Mitigations: font fuzz targets (fuzz/, weekly) + seeded font-mutation tests (every CI run).
+    # Revisit when cosmic-text/fontdb move off ttf-parser.
     "RUSTSEC-2026-0192",
+    # zvariant / zvariant_derive / zbus_names — unmaintained as standalone crates
+    # (RUSTSEC-2026-0370/0371/0372; maintenance notices, no vulnerability): merged into
+    # zbus 6. Reached via accesskit_unix <- accesskit_winit (Linux AT-SPI accessibility);
+    # no safe upgrade until accesskit moves to zbus 6. Revisit on the next accesskit bump.
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
 ]
 
 [licenses]
@@ -72,6 +86,21 @@ allow = [
 ]
 
 [bans]
+deny = [
+    { crate = "rustybuzz", reason = "unmaintained (RUSTSEC-2026-0206); cosmic-text 0.19 shapes with harfrust" },
+    # The removed renderer and text stack (S38, DR-23). This file is the one place outside
+    # CHANGELOG.md allowed to name them (zero-trace exclusion, owner decision 2026-10-26).
+    { crate = "vello", reason = "Pebbles renders with its own wgpu renderer (wgpu migration)" },
+    { crate = "vello_cpu", reason = "see vello" },
+    { crate = "vello_hybrid", reason = "see vello" },
+    { crate = "vello_common", reason = "see vello" },
+    { crate = "vello_encoding", reason = "see vello" },
+    { crate = "vello_shaders", reason = "see vello" },
+    { crate = "vello_sparse_shaders", reason = "see vello" },
+    { crate = "glifo", reason = "see vello" },
+    { crate = "parley", reason = "text is cosmic-text" },
+    { crate = "fontique", reason = "text is cosmic-text (fontdb)" },
+]
 multiple-versions = "warn"
 # `warn`, not `deny`: this crate's one non-registry dep is `pebbles` by git, which has no
 # crates.io version req and so reads as a wildcard. Unpinned-ingestion — the actual risk — is

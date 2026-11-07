@@ -42,37 +42,76 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod actions;
+pub mod annotations;
+pub mod debug;
 pub mod edit;
+mod emmet;
 pub mod extensions;
+pub mod keymap;
 pub mod lang;
+pub mod langconfig;
+pub mod language;
 pub mod providers;
 
 mod brackets;
 mod collab;
 mod commands;
 mod config;
+mod controller;
 mod diff;
+mod diff_editor;
 mod fold;
+#[cfg(test)]
+mod fuzz_tests;
 mod geometry;
 mod highlight;
+mod lines;
+mod ops;
+mod scan_text;
 mod search;
+mod snippet;
+mod snippets;
 mod theme;
 mod view;
 
-pub use collab::Edit;
-pub use config::{CodeEditor, code_editor};
-pub use edit::{ChangeSet, EditorState, History, Selection, Selections, Transaction};
-pub use extensions::{
-    BlockWidget, Command, ConfigPatch, DecoStyle, Decoration, EditContext, Extension, GutterMark,
-    Snapshot, extension,
+pub use actions::EditorCommand;
+pub use annotations::{
+    AnnotationAction, AnnotationHover, BreakpointMark, BreakpointMenu, EditorMenuItem,
+    GutterAnnotation, GutterAnnotations, LineAnnotation, MenuContext, MenuProvider, StackFrameLine,
 };
-pub use lang::{Language, SyntaxNode, Token, TokenKind, bracket_tree};
+pub use collab::Edit;
+pub use config::{
+    BreadcrumbPick, BreadcrumbSegment, CodeEditor, CursorBlinking, CursorStyle, DiffHunkAction,
+    DiffHunkRun, LineNumbers, code_editor,
+};
+pub use controller::{EditorController, Refresh, editor_controller};
+pub use diff::{ChangeHunk, ChangeKind, UnchangedRegion};
+pub use diff_editor::{DiffEditor, DiffSideConfig, diff_editor};
+pub use edit::{
+    ChangeSet, DocumentHistory, EditorState, History, Selection, Selections, Transaction,
+};
+pub use emmet::{expand_css, expand_html};
+pub use extensions::{
+    BlockWidget, Command, ConfigPatch, DecoStyle, Decoration, EditContext, Extension, GutterIcon,
+    GutterMark, HostCodeLens, InjectedText, LensItem, Snapshot, extension,
+};
+pub use keymap::{
+    BuiltinCommand, HostCommand, HostKey, HostKeyContext, HostResolver, KeyStroke, Keymap,
+};
+pub use lang::{Language, SyntaxNode, SyntaxSession, Token, TokenKind, bracket_tree};
+pub use langconfig::{
+    AutoClosingPair, IndentAction, IndentationRules, LanguageConfiguration, NotIn, OnEnterRule,
+};
+pub use language::{LanguageService, ProviderService, RequestGate};
+pub use ops::{LineEnding, detect_indentation, detect_line_ending};
 pub use providers::{
     CompletionContext, CompletionItem, CompletionKind, CompletionProvider, DefinitionProvider,
-    Diagnostic, Diagnostics, FormatProvider, Hover, HoverProvider, InlayHint, InlayHints, Severity,
-    SignatureHelp, SignatureProvider,
+    Diagnostic, Diagnostics, FormatProvider, Hover, HoverProvider, InlayHint, InlayHints,
+    InlineSuggestionProvider, Severity, SignatureHelp, SignatureProvider,
 };
-pub use theme::{EditorTheme, HighlightStyle, TokenStyle};
+pub use snippets::{Snippet, builtin_snippets};
+pub use theme::{EditorTheme, HighlightStyle, ScopeStyles, TokenStyle};
 
 /// The monospace family used for all editor text.
 pub(crate) const MONO: &str = "JetBrains Mono";

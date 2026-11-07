@@ -6,6 +6,77 @@
 use pebbles::prelude::*;
 
 use crate::ADVANCE_RATIO;
+
+/// A breadcrumb path segment supplied by the host (`CodeEditor::breadcrumb_path`): its
+/// label and the entries its dropdown lists (e.g. the other files in that folder).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BreadcrumbSegment {
+    /// The shown label.
+    pub label: String,
+    /// The dropdown entries (siblings); `label` among them is preselected.
+    pub siblings: Vec<String>,
+}
+
+impl BreadcrumbSegment {
+    /// A segment with its sibling list.
+    pub fn new(label: impl Into<String>, siblings: Vec<String>) -> Self {
+        BreadcrumbSegment {
+            label: label.into(),
+            siblings,
+        }
+    }
+}
+
+/// Called with (segment index, picked entry) when a path segment's dropdown entry is chosen.
+pub type BreadcrumbPick = std::rc::Rc<dyn Fn(usize, &str)>;
+
+/// The host's link opener (`CodeEditor::on_open_link`).
+pub(crate) type LinkOpener = std::rc::Rc<dyn Fn(&str)>;
+/// A per-hunk gutter button of a diff view ([`CodeEditor::diff_hunk_actions`]).
+#[derive(Clone)]
+pub struct DiffHunkAction {
+    /// The tooltip / accessibility label ("Stage Change", "Revert Change", …).
+    pub label: String,
+    /// The button icon.
+    pub icon: IconData,
+    /// What clicking does.
+    pub run: DiffHunkRun,
+}
+
+/// What a [`DiffHunkAction`] does.
+#[derive(Clone)]
+pub enum DiffHunkRun {
+    /// Revert the hunk in this editor's buffer to the base lines (undoable).
+    Revert,
+    /// Call the host with the hunk and the current text of its lines (e.g. stage it).
+    Host(std::rc::Rc<dyn Fn(&crate::diff::ChangeHunk, &str)>),
+}
+
+impl DiffHunkAction {
+    /// A built-in Revert Change button.
+    pub fn revert() -> Self {
+        DiffHunkAction {
+            label: "Revert Change".into(),
+            icon: tabler::ARROW_BACK_UP,
+            run: DiffHunkRun::Revert,
+        }
+    }
+    /// A host button.
+    pub fn host(
+        label: impl Into<String>,
+        icon: IconData,
+        f: impl Fn(&crate::diff::ChangeHunk, &str) + 'static,
+    ) -> Self {
+        DiffHunkAction {
+            label: label.into(),
+            icon,
+            run: DiffHunkRun::Host(std::rc::Rc::new(f)),
+        }
+    }
+}
+
+/// The host's stage-hunk callback (`CodeEditor::on_stage_hunk`).
+pub(crate) type StageHunk = std::rc::Rc<dyn Fn(&crate::diff::ChangeHunk, &str)>;
 use crate::extensions::Extension;
 use crate::lang::{Language, Token};
 use crate::providers::{
@@ -15,16 +86,65 @@ use crate::providers::{
 use crate::theme::EditorTheme;
 use crate::view::render_editor;
 
+/// Caret shape (VS Code `editor.cursorStyle`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CursorStyle {
+    /// A 2px vertical bar (default).
+    #[default]
+    Line,
+    /// A 1px vertical bar.
+    LineThin,
+    /// A filled cell.
+    Block,
+    /// An outlined cell.
+    BlockOutline,
+    /// A thick underline.
+    Underline,
+    /// A thin underline.
+    UnderlineThin,
+}
+
+/// Caret blinking (VS Code `editor.cursorBlinking`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CursorBlinking {
+    /// On/off (default).
+    #[default]
+    Blink,
+    /// Fade in and out.
+    Smooth,
+    /// Eased fade.
+    Phase,
+    /// Grow/shrink vertically.
+    Expand,
+    /// No blinking.
+    Solid,
+}
+
+/// Line-number style (VS Code `editor.lineNumbers`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum LineNumbers {
+    /// Absolute line numbers (default).
+    #[default]
+    On,
+    /// Distance from the caret line (the caret line shows its absolute number).
+    Relative,
+    /// No line numbers (the gutter keeps fold arrows and markers).
+    Off,
+}
+
 /// Build a code editor bound to `code`. Configure fluently, then drop it into any tree.
 pub fn code_editor(code: Signal<String>) -> CodeEditor {
     CodeEditor {
         code,
         language: None,
-        theme: EditorTheme::dark(),
+        theme: None,
         font_size: 13.5,
         line_height: 1.6,
         font_family: None,
         letter_spacing: 0.0,
+        font_weight: 400.0,
+        mouse_wheel_zoom: false,
+        zoom: None,
         height: None,
         gutter: true,
         read_only: false,
@@ -39,10 +159,13 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         rulers: Vec::new(),
         minimap: false,
         sticky_scroll: false,
+        folding: true,
         auto_close: true,
         match_brackets: true,
         semantic: None,
         completion: None,
+        language_service: None,
+        document_uri: None,
         hover: None,
         signature: None,
         diagnostics: None,
@@ -57,8 +180,62 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         initial_scroll: 0.0,
         selection_handles: false,
         folds: None,
+        snippets: Vec::new(),
+        language_configuration: None,
+        builtin_snippets: true,
+        breakpoints: None,
+        breakpoint_marks: None,
+        on_breakpoint_click: None,
+        breakpoint_menu: None,
+        stack_frame_lines: None,
         soft_wrap: false,
         diff_base: None,
+        keymap: crate::keymap::Keymap::default(),
+        document_id: None,
+        history: None,
+        controller: None,
+        suggest_preview: false,
+        format_on_paste: false,
+        format_on_type: false,
+        hover_delay: 0.3,
+        lsp_diagnostics: None,
+        outline: None,
+        breadcrumbs: false,
+        inlay_hints_enabled: true,
+        code_lens: true,
+        breadcrumb_path: Vec::new(),
+        on_breadcrumb_pick: None,
+        problem_counts: None,
+        emmet: false,
+        inline_diff: false,
+        diff_original_of: None,
+        diff_align: false,
+        scroll_link: None,
+        diff_wrap_link: None,
+        diff_ignore_ws: false,
+        diff_collapse: None,
+        diff_hunk_actions: Vec::new(),
+        inline_suggestions: None,
+        line_numbers: LineNumbers::On,
+        smooth_caret: false,
+        smooth_scrolling: false,
+        scroll_beyond_last_line: true,
+        cursor_blinking: CursorBlinking::Blink,
+        cursor_style: CursorStyle::Line,
+        on_stage_hunk: None,
+        on_open_link: None,
+        line_annotations: None,
+        gutter_annotations: None,
+        context_menu_items: None,
+        word_based_suggestions: true,
+        overview_ruler: true,
+        linked_editing: true,
+        color_decorators: true,
+        unicode_highlight: true,
+        bracket_pair_guides: true,
+        occurrences_highlight: true,
+        bracket_pair_colorization: true,
+        detect_indentation: true,
     }
 }
 
@@ -66,11 +243,14 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
 pub struct CodeEditor {
     code: Signal<String>,
     language: Option<Box<dyn Language>>,
-    theme: EditorTheme,
+    theme: Option<EditorTheme>,
     font_size: f64,
     line_height: f64,
     font_family: Option<String>,
     letter_spacing: f64,
+    font_weight: f32,
+    mouse_wheel_zoom: bool,
+    zoom: Option<Signal<f64>>,
     height: Option<f64>,
     gutter: bool,
     read_only: bool,
@@ -85,10 +265,13 @@ pub struct CodeEditor {
     rulers: Vec<usize>,
     minimap: bool,
     sticky_scroll: bool,
+    folding: bool,
     auto_close: bool,
     match_brackets: bool,
     semantic: Option<Signal<Vec<Token>>>,
     completion: Option<CompletionProvider>,
+    language_service: Option<std::rc::Rc<dyn crate::language::LanguageService>>,
+    document_uri: Option<String>,
     hover: Option<HoverProvider>,
     signature: Option<SignatureProvider>,
     diagnostics: Option<Diagnostics>,
@@ -103,8 +286,63 @@ pub struct CodeEditor {
     initial_scroll: f64,
     selection_handles: bool,
     folds: Option<Signal<std::collections::BTreeSet<usize>>>,
+    breakpoints: Option<Signal<std::collections::BTreeSet<usize>>>,
+    breakpoint_marks:
+        Option<Signal<std::collections::BTreeMap<usize, crate::annotations::BreakpointMark>>>,
+    on_breakpoint_click: Option<std::rc::Rc<dyn Fn(usize)>>,
+    breakpoint_menu: Option<crate::annotations::BreakpointMenu>,
+    stack_frame_lines: Option<Signal<Vec<crate::annotations::StackFrameLine>>>,
+    snippets: Vec<crate::snippets::Snippet>,
+    language_configuration: Option<crate::langconfig::LanguageConfiguration>,
+    builtin_snippets: bool,
     soft_wrap: bool,
     diff_base: Option<Signal<String>>,
+    keymap: crate::keymap::Keymap,
+    document_id: Option<u64>,
+    history: Option<crate::edit::DocumentHistory>,
+    controller: Option<crate::controller::EditorController>,
+    detect_indentation: bool,
+    bracket_pair_colorization: bool,
+    occurrences_highlight: bool,
+    bracket_pair_guides: bool,
+    unicode_highlight: bool,
+    color_decorators: bool,
+    linked_editing: bool,
+    overview_ruler: bool,
+    word_based_suggestions: bool,
+    on_open_link: Option<LinkOpener>,
+    line_annotations: Option<Signal<Vec<crate::annotations::LineAnnotation>>>,
+    gutter_annotations: Option<Signal<Option<crate::annotations::GutterAnnotations>>>,
+    context_menu_items: Option<crate::annotations::MenuProvider>,
+    on_stage_hunk: Option<StageHunk>,
+    cursor_style: CursorStyle,
+    cursor_blinking: CursorBlinking,
+    smooth_caret: bool,
+    smooth_scrolling: bool,
+    scroll_beyond_last_line: bool,
+    line_numbers: LineNumbers,
+    inline_suggestions: Option<crate::providers::InlineSuggestionProvider>,
+    suggest_preview: bool,
+    format_on_paste: bool,
+    format_on_type: bool,
+    hover_delay: f64,
+    lsp_diagnostics: Option<Signal<Vec<crate::language::LspDiagnostic>>>,
+    outline: Option<Signal<Vec<crate::language::DocumentSymbol>>>,
+    breadcrumbs: bool,
+    inlay_hints_enabled: bool,
+    code_lens: bool,
+    breadcrumb_path: Vec<BreadcrumbSegment>,
+    on_breadcrumb_pick: Option<BreadcrumbPick>,
+    problem_counts: Option<Signal<crate::language::ProblemCounts>>,
+    emmet: bool,
+    inline_diff: bool,
+    diff_original_of: Option<Signal<String>>,
+    diff_align: bool,
+    scroll_link: Option<Signal<f64>>,
+    diff_wrap_link: Option<(Signal<[usize; 2]>, usize)>,
+    diff_ignore_ws: bool,
+    diff_collapse: Option<Signal<std::collections::BTreeSet<usize>>>,
+    diff_hunk_actions: Vec<DiffHunkAction>,
 }
 
 /// Fired after each change with the minimal [`Edit`] delta; `remote` is true when the change
@@ -114,14 +352,20 @@ pub type EditHook = std::rc::Rc<dyn Fn(&crate::collab::Edit, bool)>;
 pub type ScrollHook = std::rc::Rc<dyn Fn(f64)>;
 
 impl CodeEditor {
+    /// The theme this editor will paint with (the pinned one, else the app default).
+    pub(crate) fn effective_theme(&self) -> EditorTheme {
+        self.theme.clone().unwrap_or_else(EditorTheme::from_theme)
+    }
     /// The syntax highlighter (default: none — plain text).
     pub fn language(mut self, lang: Box<dyn Language>) -> Self {
         self.language = Some(lang);
         self
     }
-    /// The color theme (default: [`EditorTheme::dark`]).
+    /// The color theme. Default: [`EditorTheme::from_theme`] — the light or dark editor
+    /// theme matching the app's current Pebbles theme, so the editor follows
+    /// `ThemeMode` / `toggle_theme` live. Setting a theme pins it.
     pub fn theme(mut self, theme: EditorTheme) -> Self {
-        self.theme = theme;
+        self.theme = Some(theme);
         self
     }
     /// Font size in logical px (default 13.5).
@@ -145,6 +389,26 @@ impl CodeEditor {
     /// caret/click/selection stay exact.
     pub fn letter_spacing(mut self, px: f64) -> Self {
         self.letter_spacing = px;
+        self
+    }
+    /// The weight of code text (CSS / VS Code `editor.fontWeight`: 100..=900, default 400).
+    /// Tokens the theme draws bold stay at least 700.
+    pub fn font_weight(mut self, weight: f32) -> Self {
+        self.font_weight = weight.clamp(1.0, 1000.0);
+        self
+    }
+    /// Ctrl+wheel zooms the font (VS Code `editor.mouseWheelZoom`, default false: Ctrl+wheel
+    /// scrolls like a plain wheel).
+    pub fn mouse_wheel_zoom(mut self, on: bool) -> Self {
+        self.mouse_wheel_zoom = on;
+        self
+    }
+    /// Bind the font zoom (px added to [`font_size`](Self::font_size); changed by
+    /// `editor.action.fontZoomIn/Out/Reset` and Ctrl+wheel) to a caller-owned signal — share
+    /// one signal across editors for VS Code's window-wide editor zoom, kept across
+    /// rebuilds. Without it each editor keeps its own zoom.
+    pub fn zoom(mut self, zoom: Signal<f64>) -> Self {
+        self.zoom = Some(zoom);
         self
     }
     /// The editor's viewport height; it scrolls within. Unset = grows to content.
@@ -221,6 +485,13 @@ impl CodeEditor {
         self.sticky_scroll = on;
         self
     }
+    /// Code folding (VS Code `editor.folding`, default on). Off: no fold chevrons, no
+    /// foldable regions (indentation, syntax, `#region` or manual), the fold commands do
+    /// nothing and the syntax fold computation is skipped — e.g. for large-file mode.
+    pub fn folding(mut self, on: bool) -> Self {
+        self.folding = on;
+        self
+    }
     /// Auto-close brackets and quotes: typing an opener inserts its closer, typing the
     /// closer over an auto-inserted one skips it, and backspacing an empty pair clears both.
     /// Default on.
@@ -240,6 +511,22 @@ impl CodeEditor {
     /// The autocomplete source (Ctrl+Space, and as you type). See [`CompletionProvider`].
     pub fn completion(mut self, provider: CompletionProvider) -> Self {
         self.completion = Some(provider);
+        self
+    }
+    /// The language intelligence (an LSP client): completion, hover, navigation, edits, …
+    /// See [`LanguageService`](crate::language::LanguageService). The older synchronous
+    /// providers ([`completion`](Self::completion), [`hover`](Self::hover), …) still work and
+    /// are used for requests the service does not support.
+    pub fn language_service(
+        mut self,
+        service: std::rc::Rc<dyn crate::language::LanguageService>,
+    ) -> Self {
+        self.language_service = Some(service);
+        self
+    }
+    /// The document URI sent with language-service requests (default `untitled:Untitled-1`).
+    pub fn document_uri(mut self, uri: impl Into<String>) -> Self {
+        self.document_uri = Some(uri.into());
         self
     }
     /// The hover-tooltip source. See [`HoverProvider`].
@@ -283,8 +570,11 @@ impl CodeEditor {
         self.extensions.extend(exts);
         self
     }
-    /// Overlay provider/LSP **semantic tokens** on top of the lexical highlighting (a reactive
+    /// Overlay host-computed **semantic tokens** on top of the lexical highlighting (a reactive
     /// list). Semantic tokens win on any overlap and re-highlight when the signal changes.
+    /// A [`language_service`](Self::language_service) with a semantic-token legend supplies
+    /// LSP semantic tokens itself (full / delta / range); tokens from this signal are layered
+    /// on top of those.
     pub fn semantic_tokens(mut self, tokens: Signal<Vec<Token>>) -> Self {
         self.semantic = Some(tokens);
         self
@@ -332,6 +622,70 @@ impl CodeEditor {
         self.folds = Some(folds);
         self
     }
+    /// Show the breakpoint area (VS Code glyph margin) left of the line numbers, bound to
+    /// a caller-owned set of 0-based breakpoint lines: a click toggles the line's
+    /// breakpoint, set lines draw a breakpoint dot. Lines move with edits above them.
+    pub fn breakpoints(mut self, lines: Signal<std::collections::BTreeSet<usize>>) -> Self {
+        self.breakpoints = Some(lines);
+        self
+    }
+    /// Rich breakpoints in the glyph margin (VS Code's breakpoint decorations), bound to a
+    /// caller-owned map of 0-based line → [`BreakpointMark`]: plain, conditional and
+    /// logpoint glyphs, disabled (grey) and unverified (hollow). Lines move with edits
+    /// above them, like [`breakpoints`](Self::breakpoints). A click toggles a plain
+    /// breakpoint unless [`on_breakpoint_click`](Self::on_breakpoint_click) is set.
+    ///
+    /// [`BreakpointMark`]: crate::BreakpointMark
+    pub fn breakpoint_marks(
+        mut self,
+        marks: Signal<std::collections::BTreeMap<usize, crate::annotations::BreakpointMark>>,
+    ) -> Self {
+        self.breakpoint_marks = Some(marks);
+        self
+    }
+    /// Handle a click in the glyph margin on a 0-based line (instead of the default
+    /// toggle) — the host's breakpoint model (persistence, debugger sync).
+    pub fn on_breakpoint_click(mut self, f: impl Fn(usize) + 'static) -> Self {
+        self.on_breakpoint_click = Some(std::rc::Rc::new(f));
+        self
+    }
+    /// The glyph margin's right-click menu for a line (VS Code: Add Breakpoint / Add
+    /// Conditional Breakpoint… / Add Logpoint… / Edit / Disable / Remove).
+    pub fn breakpoint_menu(
+        mut self,
+        f: impl Fn(usize) -> Vec<crate::annotations::EditorMenuItem> + 'static,
+    ) -> Self {
+        self.breakpoint_menu = Some(std::rc::Rc::new(f));
+        self
+    }
+    /// The call-stack lines to highlight (VS Code's `editor.stackFrameHighlightBackground`
+    /// / `focusedStackFrameHighlightBackground` and the current-statement arrow).
+    pub fn stack_frame_lines(
+        mut self,
+        lines: Signal<Vec<crate::annotations::StackFrameLine>>,
+    ) -> Self {
+        self.stack_frame_lines = Some(lines);
+        self
+    }
+    /// User-defined snippets, offered in the completion list next to the built-in ones
+    /// (VS Code user snippet files).
+    pub fn snippets(mut self, snippets: impl Into<Vec<crate::snippets::Snippet>>) -> Self {
+        self.snippets = snippets.into();
+        self
+    }
+    /// Declarative editing behaviour (VS Code `language-configuration.json`): comments,
+    /// brackets, auto-closing / surrounding pairs, folding markers, indentation and on-Enter
+    /// rules. Overrides the [`Language`]'s comment and bracket metadata.
+    pub fn language_configuration(mut self, cfg: crate::langconfig::LanguageConfiguration) -> Self {
+        self.language_configuration = Some(cfg);
+        self
+    }
+    /// Offer the language's built-in snippets ([`builtin_snippets`](crate::builtin_snippets);
+    /// default on).
+    pub fn builtin_snippets(mut self, v: bool) -> Self {
+        self.builtin_snippets = v;
+        self
+    }
     /// Soft-wrap long lines to the viewport width instead of scrolling horizontally (needs a
     /// fixed [`height`](Self::height)). Default off. Caret, click, and selection all follow the
     /// wrapped rows.
@@ -346,11 +700,319 @@ impl CodeEditor {
         self.diff_base = Some(base);
         self
     }
+    /// Override the built-in keybindings: disable a default chord (the key then bubbles to the
+    /// app's shortcuts) or bind a built-in to another chord. See [`Keymap`](crate::Keymap).
+    pub fn keymap(mut self, keymap: crate::keymap::Keymap) -> Self {
+        self.keymap = keymap;
+        self
+    }
+    /// Identify the document being edited. The editor's internal state (selection, undo
+    /// history, scroll, folds, find/palette) is per document: it resets whenever the bound
+    /// `code` signal is a *different* signal or `document_id` changes — like a VS Code editor
+    /// switching models. Use this when one `Signal<String>` is reused for several files
+    /// (set the signal's text AND bump the id). Without it, setting the text of the same
+    /// signal is treated as an external edit of the same document (carets are remapped).
+    pub fn document_id(mut self, id: u64) -> Self {
+        self.document_id = Some(id);
+        self
+    }
+    /// Keep the undo/redo history in the host's document model instead of the editor view,
+    /// so it survives remounts (switching tabs, re-opening the file) and is shared by every
+    /// editor showing the document (split groups). If the text changed while no editor held
+    /// the history (e.g. a reload from disk), the stale history is dropped on mount.
+    pub fn history(mut self, history: crate::edit::DocumentHistory) -> Self {
+        self.history = Some(history);
+        self
+    }
+    /// Drive the caret, selection and scroll programmatically (e.g. "open at line") — see
+    /// [`EditorController`](crate::EditorController).
+    pub fn controller(mut self, controller: crate::controller::EditorController) -> Self {
+        self.controller = Some(controller);
+        self
+    }
+    /// Detect the file's indentation (spaces vs tabs and the unit) on open, overriding `tab_size`/`insert_spaces` when the file is indented (VS Code `editor.detectIndentation`, default on).
+    pub fn detect_indentation(mut self, v: bool) -> Self {
+        self.detect_indentation = v;
+        self
+    }
+    /// Colour brackets by nesting depth from the theme's `syntax.brackets` palette (VS Code `editor.bracketPairColorization.enabled`, default on).
+    pub fn bracket_pair_colorization(mut self, v: bool) -> Self {
+        self.bracket_pair_colorization = v;
+        self
+    }
+    /// Highlight every occurrence of the word at the caret (VS Code `editor.occurrencesHighlight`, default on). A document-highlight provider replaces the textual match when wired.
+    pub fn occurrences_highlight(mut self, v: bool) -> Self {
+        self.occurrences_highlight = v;
+        self
+    }
+    /// Draw the bracket-pair guide of the pair enclosing the caret (VS Code `editor.guides.bracketPairs: active`, default on).
+    pub fn bracket_pair_guides(mut self, v: bool) -> Self {
+        self.bracket_pair_guides = v;
+        self
+    }
+    /// Box invisible / ambiguous Unicode characters and draw control characters as symbols (VS Code `editor.unicodeHighlight.*` + `renderControlCharacters`, default on).
+    pub fn unicode_highlight(mut self, v: bool) -> Self {
+        self.unicode_highlight = v;
+        self
+    }
+    /// Show a colour swatch (with a picker) before CSS colour literals (VS Code `editor.colorDecorators`, default on).
+    pub fn color_decorators(mut self, v: bool) -> Self {
+        self.color_decorators = v;
+        self
+    }
+    /// Edit a markup tag's opening and closing names together (VS Code `editor.linkedEditing` + auto-rename tag). Active for HTML / XML / JSX / TSX / Markdown / Vue / Svelte.
+    pub fn linked_editing(mut self, v: bool) -> Self {
+        self.linked_editing = v;
+        self
+    }
+    /// Show the overview ruler beside the scrollbar (cursor, selections, matches, diagnostics, changes) — fixed-height editors only.
+    pub fn overview_ruler(mut self, v: bool) -> Self {
+        self.overview_ruler = v;
+        self
+    }
+    /// Offer completion from words in the document when no completion provider is set (VS Code `editor.wordBasedSuggestions`, default on).
+    pub fn word_based_suggestions(mut self, v: bool) -> Self {
+        self.word_based_suggestions = v;
+        self
+    }
+    /// Open links: Ctrl/Cmd+click on a URL in the text calls `f(url)` (links are underlined while set).
+    pub fn on_open_link(mut self, f: impl Fn(&str) + 'static) -> Self {
+        self.on_open_link = Some(std::rc::Rc::new(f));
+        self
+    }
+    /// End-of-line "after text" annotations (GitLens inline blame): faded text after a line's
+    /// last character, with an optional hover card. The editor re-renders only the
+    /// annotation layer when `annotations` changes.
+    pub fn line_annotations(
+        mut self,
+        annotations: Signal<Vec<crate::annotations::LineAnnotation>>,
+    ) -> Self {
+        self.line_annotations = Some(annotations);
+        self
+    }
+    /// A host gutter column left of the line numbers (blame annotations); `None` hides it.
+    pub fn gutter_annotations(
+        mut self,
+        column: Signal<Option<crate::annotations::GutterAnnotations>>,
+    ) -> Self {
+        self.gutter_annotations = Some(column);
+        self
+    }
+    /// Contribute items to the right-click menu: `f` gets the editor's state when the menu
+    /// is built and returns items merged with the editor's own (Cut / Copy / Paste /
+    /// Select All) by group (see [`EditorMenuItem`](crate::EditorMenuItem)). Each item's
+    /// action receives the state at the moment it is chosen.
+    pub fn context_menu_items(
+        mut self,
+        f: impl Fn(&crate::annotations::MenuContext) -> Vec<crate::annotations::EditorMenuItem>
+        + 'static,
+    ) -> Self {
+        self.context_menu_items = Some(std::rc::Rc::new(f));
+        self
+    }
+    /// Show **Stage** in the change peek: `f(hunk, current_text_of_the_hunk_lines)` stages that change (the host runs e.g. `git apply --cached`).
+    pub fn on_stage_hunk(mut self, f: impl Fn(&crate::diff::ChangeHunk, &str) + 'static) -> Self {
+        self.on_stage_hunk = Some(std::rc::Rc::new(f));
+        self
+    }
+    /// Caret shape (VS Code `editor.cursorStyle`).
+    pub fn cursor_style(mut self, v: CursorStyle) -> Self {
+        self.cursor_style = v;
+        self
+    }
+    /// Caret blinking mode (VS Code `editor.cursorBlinking`).
+    pub fn cursor_blinking(mut self, v: CursorBlinking) -> Self {
+        self.cursor_blinking = v;
+        self
+    }
+    /// Animate programmatic scrolls — paging, scroll commands, caret-into-view and
+    /// "reveal line" — over 125 ms (VS Code `editor.smoothScrolling`, default off).
+    pub fn smooth_scrolling(mut self, v: bool) -> Self {
+        self.smooth_scrolling = v;
+        self
+    }
+    /// Let the last line scroll up to the top of the viewport (VS Code
+    /// `editor.scrollBeyondLastLine`, default on) — fixed-height editors only. The
+    /// scrollbar thumb measures the whole scrollable height, padding included.
+    pub fn scroll_beyond_last_line(mut self, v: bool) -> Self {
+        self.scroll_beyond_last_line = v;
+        self
+    }
+    /// Animate the caret between positions (VS Code `editor.cursorSmoothCaretAnimation`).
+    pub fn smooth_caret(mut self, v: bool) -> Self {
+        self.smooth_caret = v;
+        self
+    }
+    /// Line-number style (VS Code `editor.lineNumbers`): absolute, relative to the caret, or off.
+    pub fn line_numbers(mut self, v: LineNumbers) -> Self {
+        self.line_numbers = v;
+        self
+    }
+    /// Inline (ghost-text) suggestions: `provider(text, caret)` returns candidate insertions shown greyed at the caret; Tab accepts, Esc dismisses, Alt+] / Alt+[ cycle.
+    pub fn inline_suggestions(mut self, p: crate::providers::InlineSuggestionProvider) -> Self {
+        self.inline_suggestions = Some(p);
+        self
+    }
+    /// The change baseline for the gutter change bars, peek, next/previous change and the
+    /// overview ruler (e.g. the file at `git show HEAD:path`). Alias of
+    /// [`diff_base`](Self::diff_base).
+    pub fn change_baseline(self, base: Signal<String>) -> Self {
+        self.diff_base(base)
+    }
+    /// Preview the selected completion inline as ghost text at the caret (VS Code `editor.suggest.preview`, default off).
+    pub fn suggest_preview(mut self, v: bool) -> Self {
+        self.suggest_preview = v;
+        self
+    }
+    /// Run the [`format`](Self::format) provider after each paste (VS Code
+    /// `editor.formatOnPaste`, default off). The format is its own undo step, so one undo
+    /// restores the pasted text as typed.
+    pub fn format_on_paste(mut self, v: bool) -> Self {
+        self.format_on_paste = v;
+        self
+    }
+    /// Format the line as you type the language service's on-type trigger characters (VS
+    /// Code `editor.formatOnType`, default off). Each format is its own undo step.
+    pub fn format_on_type(mut self, v: bool) -> Self {
+        self.format_on_type = v;
+        self
+    }
+    /// The pointer dwell before a hover request, in seconds (VS Code `editor.hover.delay`,
+    /// default 0.3).
+    pub fn hover_delay(mut self, secs: f64) -> Self {
+        self.hover_delay = secs.max(0.0);
+        self
+    }
+    /// Diagnostics in LSP form (`textDocument/publishDiagnostics`), a reactive list:
+    /// squiggles by severity (unnecessary = faded, deprecated = struck through), gutter
+    /// markers, hover messages with related information, F8 / Shift+F8 problem navigation
+    /// and quick fixes. Merged with [`diagnostics`](Self::diagnostics).
+    pub fn lsp_diagnostics(
+        mut self,
+        diagnostics: Signal<Vec<crate::language::LspDiagnostic>>,
+    ) -> Self {
+        self.lsp_diagnostics = Some(diagnostics);
+        self
+    }
+    /// A signal the editor keeps updated with the document outline (the language service's
+    /// `textDocument/documentSymbol` reply, refreshed per document version), for the host's
+    /// Outline view.
+    pub fn outline(mut self, outline: Signal<Vec<crate::language::DocumentSymbol>>) -> Self {
+        self.outline = Some(outline);
+        self
+    }
+    /// Show the breadcrumbs bar above the code (VS Code `breadcrumbs.enabled`): the
+    /// [`breadcrumb_path`](Self::breadcrumb_path) segments, then the document symbols
+    /// containing the caret. Each segment opens a dropdown of its siblings / children;
+    /// Ctrl+Shift+; focuses the bar (arrows move, Enter opens), Ctrl+Shift+. focuses and
+    /// opens the last segment.
+    pub fn breadcrumbs(mut self, on: bool) -> Self {
+        self.breadcrumbs = on;
+        self
+    }
+    /// Show the language service's inlay hints (VS Code `editor.inlayHints.enabled`, default
+    /// on; toggled at runtime by `editor.action.toggleInlayHints`).
+    pub fn inlay_hints_enabled(mut self, on: bool) -> Self {
+        self.inlay_hints_enabled = on;
+        self
+    }
+    /// Show the language service's code lenses (VS Code `editor.codeLens`, default on;
+    /// toggled at runtime by `editor.action.toggleCodeLens`).
+    pub fn code_lens(mut self, on: bool) -> Self {
+        self.code_lens = on;
+        self
+    }
+    /// The path segments shown before the symbols (e.g. folders and the file name).
+    pub fn breadcrumb_path(mut self, path: Vec<BreadcrumbSegment>) -> Self {
+        self.breadcrumb_path = path;
+        self
+    }
+    /// Called when an entry of a path segment's dropdown is picked: (segment, entry).
+    pub fn on_breadcrumb_pick(mut self, f: impl Fn(usize, &str) + 'static) -> Self {
+        self.on_breadcrumb_pick = Some(std::rc::Rc::new(f));
+        self
+    }
+    /// A signal the editor keeps updated with its problem counts (errors / warnings / infos
+    /// / hints), for the host's status bar or problems panel.
+    pub fn problem_counts(mut self, counts: Signal<crate::language::ProblemCounts>) -> Self {
+        self.problem_counts = Some(counts);
+        self
+    }
+    /// Tab expands Emmet abbreviations in HTML / CSS (VS Code `emmet.triggerExpansionOnTab`,
+    /// default off). The "Emmet: Expand Abbreviation" command works regardless.
+    pub fn emmet(mut self, v: bool) -> Self {
+        self.emmet = v;
+        self
+    }
+    /// Inline diff view against [`diff_base`](Self::diff_base): removed base lines are shown
+    /// as red rows above their position and changed words are highlighted (VS Code's inline
+    /// diff editor). See [`diff_editor`](crate::diff_editor) for side-by-side.
+    pub fn inline_diff(mut self, v: bool) -> Self {
+        self.inline_diff = v;
+        self
+    }
+    /// Diff editor, original side: this editor shows the base text; `modified` is the other
+    /// side (removed lines and words are highlighted).
+    pub(crate) fn diff_original_of(mut self, modified: Signal<String>) -> Self {
+        self.diff_original_of = Some(modified);
+        self
+    }
+    /// Diff editor: reserve filler rows so both sides stay line-aligned.
+    pub(crate) fn diff_align(mut self, v: bool) -> Self {
+        self.diff_align = v;
+        self
+    }
+    /// Share the vertical scroll offset with another editor (side-by-side diff).
+    pub(crate) fn scroll_link(mut self, link: Signal<f64>) -> Self {
+        self.scroll_link = Some(link);
+        self
+    }
+    /// Side-by-side diff with soft wrap: each side publishes its natural wrap width in
+    /// `link[side]` and both wrap at the narrower, so the filler rows can align wrapped
+    /// lines.
+    pub(crate) fn diff_wrap_link(mut self, link: Signal<[usize; 2]>, side: usize) -> Self {
+        self.diff_wrap_link = Some((link, side));
+        self
+    }
+    /// Diff views: lines differing only in leading/trailing whitespace count as unchanged
+    /// (VS Code's `diffEditor.ignoreTrimWhitespace`).
+    pub fn diff_ignore_whitespace(mut self, v: bool) -> Self {
+        self.diff_ignore_ws = v;
+        self
+    }
+    /// Diff views: collapse unchanged regions into "N hidden lines" bars (VS Code's
+    /// `diffEditor.hideUnchangedRegions`). `expanded` holds the indices of regions the user
+    /// expanded (click a bar); share it between both sides of a side-by-side diff.
+    pub fn diff_collapse_unchanged(
+        mut self,
+        expanded: Signal<std::collections::BTreeSet<usize>>,
+    ) -> Self {
+        self.diff_collapse = Some(expanded);
+        self
+    }
+    /// Per-hunk buttons in the gutter at each change's first line (VS Code's diff editor
+    /// gutter: Stage / Revert / Unstage Change).
+    pub fn diff_hunk_actions(mut self, actions: Vec<DiffHunkAction>) -> Self {
+        self.diff_hunk_actions = actions;
+        self
+    }
 }
 
 impl IntoWidget for CodeEditor {
     fn into_widget(self) -> AnyWidget {
-        component_props(render_editor, Props::from(self)).into_widget()
+        // Key the editor by document identity (the bound signal + optional `document_id`), so a
+        // different document REMOUNTS it with fresh state instead of keeping the previous
+        // document's carets, history and scroll (Flutter: a new Key → a new State).
+        let key = format!(
+            "pebbles-code-editor:{}:{}",
+            self.code.raw_id(),
+            self.document_id.map_or_else(String::new, |d| d.to_string())
+        );
+        keyed(
+            key,
+            component_props(render_editor, std::rc::Rc::new(Props::from(self))),
+        )
+        .into_widget()
     }
 }
 
@@ -366,10 +1028,14 @@ pub(crate) struct Props {
     pub(crate) lh: f64,
     pub(crate) font_family: String,
     pub(crate) letter_spacing: f64,
+    pub(crate) font_weight: f32,
+    pub(crate) mouse_wheel_zoom: bool,
+    pub(crate) zoom: Option<Signal<f64>>,
     pub(crate) height: Option<f64>,
     pub(crate) gutter: bool,
     pub(crate) read_only: bool,
     pub(crate) autofocus: bool,
+    pub(crate) history: Option<crate::edit::DocumentHistory>,
     pub(crate) current_line: bool,
     pub(crate) context_menu: bool,
     pub(crate) tab_size: usize,
@@ -380,10 +1046,13 @@ pub(crate) struct Props {
     pub(crate) rulers: Vec<usize>,
     pub(crate) minimap: bool,
     pub(crate) sticky_scroll: bool,
+    pub(crate) folding: bool,
     pub(crate) auto_close: bool,
     pub(crate) match_brackets: bool,
     pub(crate) semantic: Option<Signal<Vec<Token>>>,
     pub(crate) completion: Option<CompletionProvider>,
+    pub(crate) language_service: Option<std::rc::Rc<dyn crate::language::LanguageService>>,
+    pub(crate) document_uri: String,
     pub(crate) hover: Option<HoverProvider>,
     pub(crate) signature: Option<SignatureProvider>,
     pub(crate) diagnostics: Option<Diagnostics>,
@@ -398,8 +1067,61 @@ pub(crate) struct Props {
     pub(crate) initial_scroll: f64,
     pub(crate) selection_handles: bool,
     pub(crate) folds: Option<Signal<std::collections::BTreeSet<usize>>>,
+    pub(crate) breakpoints: Option<Signal<std::collections::BTreeSet<usize>>>,
+    pub(crate) breakpoint_marks:
+        Option<Signal<std::collections::BTreeMap<usize, crate::annotations::BreakpointMark>>>,
+    pub(crate) on_breakpoint_click: Option<std::rc::Rc<dyn Fn(usize)>>,
+    pub(crate) breakpoint_menu: Option<crate::annotations::BreakpointMenu>,
+    pub(crate) stack_frame_lines: Option<Signal<Vec<crate::annotations::StackFrameLine>>>,
+    pub(crate) snippets: Vec<crate::snippets::Snippet>,
+    pub(crate) lang_cfg: Option<std::rc::Rc<crate::langconfig::Compiled>>,
+    pub(crate) builtin_snippets: bool,
     pub(crate) soft_wrap: bool,
     pub(crate) diff_base: Option<Signal<String>>,
+    pub(crate) keymap: crate::keymap::Keymap,
+    pub(crate) controller: Option<crate::controller::EditorController>,
+    pub(crate) detect_indentation: bool,
+    pub(crate) bracket_pair_colorization: bool,
+    pub(crate) occurrences_highlight: bool,
+    pub(crate) bracket_pair_guides: bool,
+    pub(crate) unicode_highlight: bool,
+    pub(crate) color_decorators: bool,
+    pub(crate) linked_editing: bool,
+    pub(crate) overview_ruler: bool,
+    pub(crate) word_based_suggestions: bool,
+    pub(crate) on_open_link: Option<LinkOpener>,
+    pub(crate) line_annotations: Option<Signal<Vec<crate::annotations::LineAnnotation>>>,
+    pub(crate) gutter_annotations: Option<Signal<Option<crate::annotations::GutterAnnotations>>>,
+    pub(crate) context_menu_items: Option<crate::annotations::MenuProvider>,
+    pub(crate) on_stage_hunk: Option<StageHunk>,
+    pub(crate) cursor_style: CursorStyle,
+    pub(crate) cursor_blinking: CursorBlinking,
+    pub(crate) smooth_caret: bool,
+    pub(crate) smooth_scrolling: bool,
+    pub(crate) scroll_beyond_last_line: bool,
+    pub(crate) line_numbers: LineNumbers,
+    pub(crate) inline_suggestions: Option<crate::providers::InlineSuggestionProvider>,
+    pub(crate) suggest_preview: bool,
+    pub(crate) format_on_paste: bool,
+    pub(crate) format_on_type: bool,
+    pub(crate) hover_delay: f64,
+    pub(crate) lsp_diagnostics: Option<Signal<Vec<crate::language::LspDiagnostic>>>,
+    pub(crate) outline: Option<Signal<Vec<crate::language::DocumentSymbol>>>,
+    pub(crate) breadcrumbs: bool,
+    pub(crate) inlay_hints_enabled: bool,
+    pub(crate) code_lens: bool,
+    pub(crate) breadcrumb_path: Vec<BreadcrumbSegment>,
+    pub(crate) on_breadcrumb_pick: Option<BreadcrumbPick>,
+    pub(crate) problem_counts: Option<Signal<crate::language::ProblemCounts>>,
+    pub(crate) emmet: bool,
+    pub(crate) inline_diff: bool,
+    pub(crate) diff_original_of: Option<Signal<String>>,
+    pub(crate) diff_align: bool,
+    pub(crate) scroll_link: Option<Signal<f64>>,
+    pub(crate) diff_wrap_link: Option<(Signal<[usize; 2]>, usize)>,
+    pub(crate) diff_ignore_ws: bool,
+    pub(crate) diff_collapse: Option<Signal<std::collections::BTreeSet<usize>>>,
+    pub(crate) diff_hunk_actions: Vec<DiffHunkAction>,
 }
 
 impl From<CodeEditor> for Props {
@@ -434,7 +1156,9 @@ impl From<CodeEditor> for Props {
         }
         // Fold extension theme transforms over the builder theme (applied in order) — this is
         // "theme = an extension": a plugin can fully replace or partially compose the theme.
-        let mut theme = e.theme;
+        // Resolved here, inside the parent's build, so reading the app theme subscribes the
+        // parent and a light/dark switch rebuilds the editor with the matching palette.
+        let mut theme = e.theme.unwrap_or_else(EditorTheme::from_theme);
         for tx in e.extensions.iter().filter_map(|x| x.theme.as_ref()) {
             theme = tx(theme);
         }
@@ -446,10 +1170,14 @@ impl From<CodeEditor> for Props {
             lh: e.line_height,
             font_family: e.font_family.unwrap_or_else(|| crate::MONO.to_string()),
             letter_spacing: e.letter_spacing,
+            font_weight: e.font_weight,
+            mouse_wheel_zoom: e.mouse_wheel_zoom,
+            zoom: e.zoom,
             height: e.height,
             gutter: e.gutter,
             read_only: e.read_only,
             autofocus: e.autofocus,
+            history: e.history,
             current_line: e.current_line,
             context_menu: e.context_menu,
             tab_size,
@@ -460,10 +1188,15 @@ impl From<CodeEditor> for Props {
             rulers: e.rulers,
             minimap: e.minimap,
             sticky_scroll: e.sticky_scroll,
+            folding: e.folding,
             auto_close,
             match_brackets,
             semantic: e.semantic,
             completion: e.completion,
+            language_service: e.language_service,
+            document_uri: e
+                .document_uri
+                .unwrap_or_else(|| "untitled:Untitled-1".to_string()),
             hover: e.hover,
             signature: e.signature,
             diagnostics: e.diagnostics,
@@ -478,8 +1211,62 @@ impl From<CodeEditor> for Props {
             initial_scroll: e.initial_scroll,
             selection_handles: e.selection_handles,
             folds: e.folds,
+            breakpoints: e.breakpoints,
+            breakpoint_marks: e.breakpoint_marks,
+            on_breakpoint_click: e.on_breakpoint_click,
+            breakpoint_menu: e.breakpoint_menu,
+            stack_frame_lines: e.stack_frame_lines,
+            snippets: e.snippets,
+            lang_cfg: e
+                .language_configuration
+                .map(|c| std::rc::Rc::new(crate::langconfig::Compiled::new(c))),
+            builtin_snippets: e.builtin_snippets,
             soft_wrap: e.soft_wrap,
             diff_base: e.diff_base,
+            keymap: e.keymap,
+            controller: e.controller,
+            suggest_preview: e.suggest_preview,
+            format_on_paste: e.format_on_paste,
+            format_on_type: e.format_on_type,
+            hover_delay: e.hover_delay,
+            lsp_diagnostics: e.lsp_diagnostics,
+            outline: e.outline,
+            breadcrumbs: e.breadcrumbs,
+            inlay_hints_enabled: e.inlay_hints_enabled,
+            code_lens: e.code_lens,
+            breadcrumb_path: e.breadcrumb_path,
+            on_breadcrumb_pick: e.on_breadcrumb_pick,
+            problem_counts: e.problem_counts,
+            emmet: e.emmet,
+            inline_diff: e.inline_diff,
+            diff_original_of: e.diff_original_of,
+            diff_align: e.diff_align,
+            scroll_link: e.scroll_link,
+            diff_wrap_link: e.diff_wrap_link,
+            diff_ignore_ws: e.diff_ignore_ws,
+            diff_collapse: e.diff_collapse,
+            diff_hunk_actions: e.diff_hunk_actions,
+            inline_suggestions: e.inline_suggestions,
+            line_numbers: e.line_numbers,
+            smooth_caret: e.smooth_caret,
+            smooth_scrolling: e.smooth_scrolling,
+            scroll_beyond_last_line: e.scroll_beyond_last_line,
+            cursor_blinking: e.cursor_blinking,
+            cursor_style: e.cursor_style,
+            on_stage_hunk: e.on_stage_hunk,
+            on_open_link: e.on_open_link,
+            line_annotations: e.line_annotations,
+            gutter_annotations: e.gutter_annotations,
+            context_menu_items: e.context_menu_items,
+            word_based_suggestions: e.word_based_suggestions,
+            overview_ruler: e.overview_ruler,
+            linked_editing: e.linked_editing,
+            color_decorators: e.color_decorators,
+            unicode_highlight: e.unicode_highlight,
+            bracket_pair_guides: e.bracket_pair_guides,
+            occurrences_highlight: e.occurrences_highlight,
+            bracket_pair_colorization: e.bracket_pair_colorization,
+            detect_indentation: e.detect_indentation,
         }
     }
 }
