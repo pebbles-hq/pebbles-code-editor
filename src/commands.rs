@@ -17,6 +17,32 @@ use crate::edit::{
 };
 use crate::geometry::*;
 
+thread_local! {
+    /// The change sets dispatched while [`record`] runs (snippet sessions map their stops
+    /// through every edit a key causes).
+    static LOG: RefCell<Option<Vec<crate::edit::ChangeSet>>> = const { RefCell::new(None) };
+}
+
+/// Run `f`, returning the change sets it dispatched.
+pub(crate) fn record<R>(f: impl FnOnce() -> R) -> (R, Vec<crate::edit::ChangeSet>) {
+    let outer = LOG.with(|l| l.borrow_mut().replace(Vec::new()));
+    let r = f();
+    let log = LOG
+        .with(|l| std::mem::replace(&mut *l.borrow_mut(), outer))
+        .unwrap_or_default();
+    (r, log)
+}
+
+/// Forget the change sets recorded so far (an edit that created state already in the new
+/// coordinates, e.g. a snippet insertion starting its session).
+pub(crate) fn clear_recorded() {
+    LOG.with(|l| {
+        if let Some(v) = l.borrow_mut().as_mut() {
+            v.clear();
+        }
+    });
+}
+
 /// The single mutation path: apply `tx` to the state, record its inverse for undo (edits
 /// only), and keep the public `code` signal in sync with the document.
 pub(crate) fn dispatch(
@@ -29,6 +55,11 @@ pub(crate) fn dispatch(
     let cur = state.peek();
     let (next, inverse) = cur.apply(&tx);
     if tx.is_edit() {
+        LOG.with(|l| {
+            if let Some(v) = l.borrow_mut().as_mut() {
+                v.push(tx.changes.clone());
+            }
+        });
         history
             .peek()
             .borrow_mut()
@@ -42,9 +73,13 @@ pub(crate) fn dispatch(
 /// handler): the indent unit, the line-comment prefix, the bracket pairs, and auto-close.
 pub(crate) struct EditCfg {
     pub(crate) tab: String,
+    /// Tab stop width (visual columns): the goal column of Up/Down is a visual column.
+    pub(crate) tab_size: usize,
     pub(crate) line_comment: Option<String>,
     pub(crate) brackets: Vec<(char, char)>,
     pub(crate) auto_close: bool,
+    /// The language configuration (VS Code `language-configuration.json`), when set.
+    pub(crate) lang_cfg: Option<Rc<crate::langconfig::Compiled>>,
 }
 
 pub(crate) fn apply_key(
@@ -122,6 +157,104 @@ pub(crate) fn apply_key(
             } else {
                 Coalesce::Never
             };
+            // A language configuration drives typing: auto-closing pairs (with `notIn`,
+            // `autoCloseBefore`, multi-char openers), surrounding pairs, closer overtype,
+            // and `decreaseIndentPattern` re-indent of the typed line.
+            if let Some(lc) = cfg.lang_cfg.as_ref()
+                && s.chars().count() == 1
+            {
+                let ch = s.chars().next().unwrap_or(' ');
+                let mut changes: Vec<Change> = Vec::new();
+                let mut out: Vec<Selection> = Vec::new();
+                let mut delta: isize = 0;
+                for r in &ranges {
+                    let shift = |p: usize| (p as isize + delta) as usize;
+                    let head = r.head;
+                    let at_caret = src.get(head..).and_then(|x| x.chars().next());
+                    if cfg.auto_close && r.is_empty() && at_caret == Some(ch) && lc.is_closer(ch) {
+                        out.push(Selection::caret(shift(next_char(&src, head))));
+                        continue;
+                    }
+                    if cfg.auto_close
+                        && !r.is_empty()
+                        && let Some((o, c)) = lc.surround(ch)
+                    {
+                        changes.push(Change {
+                            from: r.min(),
+                            to: r.min(),
+                            insert: o.clone(),
+                        });
+                        changes.push(Change {
+                            from: r.max(),
+                            to: r.max(),
+                            insert: c.clone(),
+                        });
+                        let lo = shift(r.min()) + o.len();
+                        let hi = shift(r.max()) + o.len();
+                        out.push(if r.head >= r.anchor {
+                            Selection::range(lo, hi)
+                        } else {
+                            Selection::range(hi, lo)
+                        });
+                        delta += (o.len() + c.len()) as isize;
+                        continue;
+                    }
+                    let (ins, caret) = match cfg.auto_close && r.is_empty() {
+                        true => lc
+                            .auto_close(&src, head, ch)
+                            .unwrap_or((s.clone(), s.len())),
+                        false => (s.clone(), s.len()),
+                    };
+                    changes.push(Change {
+                        from: r.min(),
+                        to: r.max(),
+                        insert: ins.clone(),
+                    });
+                    out.push(Selection::caret(shift(r.min()) + caret));
+                    delta += ins.len() as isize - (r.max() - r.min()) as isize;
+                }
+                let pi = primary_idx.min(out.len().saturating_sub(1));
+                let tx = if changes.is_empty() {
+                    Transaction::select(Selections::new(out, pi))
+                } else {
+                    Transaction::change_and_select(
+                        ChangeSet::from_changes(changes),
+                        Selections::new(out, pi),
+                    )
+                };
+                if tx.is_edit() {
+                    dispatch(state, history, code, tx, coalesce);
+                } else {
+                    let (next, _) = state.peek().apply(&tx);
+                    state.set(next);
+                    history.peek().borrow_mut().break_group();
+                }
+                // Re-indent the typed line when it now matches `decreaseIndentPattern`.
+                if !is_multi && !ch.is_whitespace() {
+                    let st2 = state.peek();
+                    let t2 = st2.text();
+                    let h2 = st2.primary().head;
+                    if let Some((a, b, ind)) = lc.reindent_line(&t2, h2, tab) {
+                        let caret = (h2 as isize + ind.len() as isize - (b - a) as isize) as usize;
+                        dispatch(
+                            state,
+                            history,
+                            code,
+                            Transaction::change_and_select(
+                                ChangeSet::from_changes(vec![Change {
+                                    from: a,
+                                    to: b,
+                                    insert: ind,
+                                }]),
+                                Selections::single(Selection::caret(caret)),
+                            ),
+                            Coalesce::Typing,
+                        );
+                    }
+                }
+                goal.set(col_of(&state.peek().text(), state.peek().primary().head));
+                return;
+            }
             // Language-aware reindent: typing a closing bracket on an otherwise-blank line
             // dedents that line one level, so `}` / `)` / `]` line up under their opener.
             if !is_multi && primary.is_empty() && s.chars().count() == 1 {
@@ -158,74 +291,146 @@ pub(crate) fn apply_key(
                     }
                 }
             }
-            // Auto-close (single caret / selection only): type an opener → insert its pair
-            // (caret between) or wrap the selection; type a closer/quote sitting right at the
-            // caret → skip over it instead of doubling.
-            if cfg.auto_close && !is_multi && s.chars().count() == 1 {
-                let ch = s.chars().next().unwrap();
+            // Auto-close / auto-surround, for EVERY cursor: an opener inserts its pair (caret
+            // between) or wraps a selection; typing a closer/quote that sits right at the caret
+            // steps over it. Like VS Code's `autoCloseBefore`, a pair only auto-closes when the
+            // next char is whitespace, a closer, punctuation or the line end.
+            if cfg.auto_close && s.chars().count() == 1 {
+                let ch = s.chars().next().unwrap_or(' ');
                 let is_quote = matches!(ch, '"' | '\'' | '`');
                 let opener = cfg.brackets.iter().find(|(o, _)| *o == ch).copied();
                 let closer_or_quote = cfg.brackets.iter().any(|(_, c)| *c == ch) || is_quote;
-                let head = primary.head;
-                let at_caret = src.get(head..).and_then(|s| s.chars().next());
-                if closer_or_quote && at_caret == Some(ch) {
-                    // Overtype the auto-inserted closer/quote.
-                    select_many(Selections::single(Selection::caret(next_char(&src, head))));
-                    return;
-                }
                 let pair = opener.or(if is_quote { Some((ch, ch)) } else { None });
-                if let Some((o, c)) = pair {
-                    // Don't pair a quote right after a word char (apostrophes in `don't`).
-                    let after_word = is_quote
-                        && head > 0
-                        && src[..head]
-                            .chars()
-                            .next_back()
-                            .is_some_and(|p| p.is_alphanumeric());
-                    if !after_word {
-                        let (lo, hi) = (primary.min(), primary.max());
-                        let (cs, caret) = if primary.is_empty() {
-                            (
-                                ChangeSet::insert(head, format!("{o}{c}")),
-                                head + o.len_utf8(),
-                            )
-                        } else {
-                            (
-                                ChangeSet::from_changes(vec![
-                                    Change {
-                                        from: lo,
-                                        to: lo,
-                                        insert: o.to_string(),
-                                    },
-                                    Change {
-                                        from: hi,
-                                        to: hi,
-                                        insert: c.to_string(),
-                                    },
-                                ]),
-                                hi + o.len_utf8(),
-                            )
-                        };
-                        let sel = if primary.is_empty() {
-                            Selections::single(Selection::caret(caret))
-                        } else {
-                            Selections::single(Selection::range(lo + o.len_utf8(), caret))
-                        };
-                        dispatch(
-                            state,
-                            history,
-                            code,
-                            Transaction::change_and_select(cs, sel),
-                            Coalesce::Never,
-                        );
-                        goal.set(col_of(&state.peek().text(), state.peek().primary().head));
-                        return;
+                let mut changes: Vec<Change> = Vec::new();
+                let mut out: Vec<Selection> = Vec::new();
+                let mut delta: isize = 0;
+                let mut special = false;
+                for r in &ranges {
+                    let head = r.head;
+                    let at_caret = src.get(head..).and_then(|x| x.chars().next());
+                    let shift = |p: usize| (p as isize + delta) as usize;
+                    if r.is_empty() && closer_or_quote && at_caret == Some(ch) {
+                        // Overtype the closer/quote.
+                        special = true;
+                        let n = next_char(&src, head);
+                        out.push(Selection::caret(shift(n)));
+                        continue;
                     }
+                    let prev = src[..r.min()].chars().next_back();
+                    let after_word =
+                        is_quote && prev.is_some_and(|p| p.is_alphanumeric() || p == '_');
+                    let next_ok = at_caret.is_none_or(|c| {
+                        c.is_whitespace()
+                            || cfg.brackets.iter().any(|(_, x)| *x == c)
+                            || matches!(c, ';' | ',' | '.' | ':' | '"' | '\'' | '`')
+                    });
+                    match pair {
+                        Some((o, c)) if !r.is_empty() => {
+                            // Surround the selection.
+                            special = true;
+                            changes.push(Change {
+                                from: r.min(),
+                                to: r.min(),
+                                insert: o.to_string(),
+                            });
+                            changes.push(Change {
+                                from: r.max(),
+                                to: r.max(),
+                                insert: c.to_string(),
+                            });
+                            let lo = shift(r.min()) + o.len_utf8();
+                            let hi = shift(r.max()) + o.len_utf8();
+                            out.push(if r.head >= r.anchor {
+                                Selection::range(lo, hi)
+                            } else {
+                                Selection::range(hi, lo)
+                            });
+                            delta += (o.len_utf8() + c.len_utf8()) as isize;
+                        }
+                        Some((o, c)) if !after_word && next_ok => {
+                            special = true;
+                            changes.push(Change {
+                                from: head,
+                                to: head,
+                                insert: format!("{o}{c}"),
+                            });
+                            out.push(Selection::caret(shift(head) + o.len_utf8()));
+                            delta += (o.len_utf8() + c.len_utf8()) as isize;
+                        }
+                        _ => {
+                            changes.push(Change {
+                                from: r.min(),
+                                to: r.max(),
+                                insert: s.clone(),
+                            });
+                            out.push(Selection::caret(shift(r.min()) + s.len()));
+                            delta += s.len() as isize - (r.max() - r.min()) as isize;
+                        }
+                    }
+                }
+                if special {
+                    let pi = primary_idx.min(out.len().saturating_sub(1));
+                    let tx = if changes.is_empty() {
+                        Transaction::select(Selections::new(out, pi))
+                    } else {
+                        Transaction::change_and_select(
+                            ChangeSet::from_changes(changes),
+                            Selections::new(out, pi),
+                        )
+                    };
+                    if tx.is_edit() {
+                        dispatch(state, history, code, tx, Coalesce::Never);
+                    } else {
+                        let (next, _) = state.peek().apply(&tx);
+                        state.set(next);
+                        history.peek().borrow_mut().break_group();
+                    }
+                    goal.set(col_of(&state.peek().text(), state.peek().primary().head));
+                    return;
                 }
             }
             replace(&s, coalesce);
         }
         KeyInput::Enter if !read_only => {
+            // A language configuration's on-Enter / indentation rules decide the new line.
+            if let Some(lc) = cfg.lang_cfg.as_ref() {
+                let mut changes: Vec<Change> = Vec::new();
+                let mut out: Vec<Selection> = Vec::new();
+                let mut delta: isize = 0;
+                for r in &ranges {
+                    let at = r.min();
+                    let (ins, caret) = lc.on_enter(&src, at, tab).unwrap_or_else(|| {
+                        let ls = line_start(&src, at);
+                        let ind: String = src[ls..at]
+                            .chars()
+                            .take_while(|c| *c == ' ' || *c == '\t')
+                            .collect();
+                        let t = format!("\n{ind}");
+                        let n = t.len();
+                        (t, n)
+                    });
+                    out.push(Selection::caret((at as isize + delta) as usize + caret));
+                    delta += ins.len() as isize - (r.max() - r.min()) as isize;
+                    changes.push(Change {
+                        from: r.min(),
+                        to: r.max(),
+                        insert: ins,
+                    });
+                }
+                let pi = primary_idx.min(out.len().saturating_sub(1));
+                dispatch(
+                    state,
+                    history,
+                    code,
+                    Transaction::change_and_select(
+                        ChangeSet::from_changes(changes),
+                        Selections::new(out, pi),
+                    ),
+                    Coalesce::Never,
+                );
+                goal.set(col_of(&state.peek().text(), state.peek().primary().head));
+                return;
+            }
             // Pressing Enter with the caret between a bracket pair (`{|}`) opens the block:
             // the caret lands on an indented middle line and the closer drops below it.
             if !is_multi && primary.is_empty() {
@@ -359,8 +564,9 @@ pub(crate) fn apply_key(
             let moved: Vec<Selection> = ranges
                 .iter()
                 .map(|&r| {
-                    let col = if is_multi {
-                        col_of(&src, r.head)
+                    let ts = cfg.tab_size;
+                    let col = if is_multi || goal.peek() == usize::MAX {
+                        crate::geometry::vcol_of(&src, r.head, ts)
                     } else {
                         goal.peek()
                     };
@@ -369,15 +575,22 @@ pub(crate) fn apply_key(
                         Motion::Right => next_char(&src, r.head),
                         Motion::WordLeft => prev_word(&src, r.head),
                         Motion::WordRight => next_word(&src, r.head),
-                        Motion::LineStart => line_start(&src, r.head),
+                        // Smart Home: first non-blank column, then the line start.
+                        Motion::LineStart => crate::ops::smart_home(&src, r.head),
                         Motion::LineEnd => line_end(&src, r.head),
                         Motion::DocStart => 0,
                         Motion::DocEnd => len,
                         Motion::Up => {
                             let l = line_of(&src, r.head);
-                            if l == 0 { 0 } else { byte_at(&src, l - 1, col) }
+                            if l == 0 {
+                                0
+                            } else {
+                                crate::geometry::byte_at_vcol(&src, l - 1, col, ts)
+                            }
                         }
-                        Motion::Down => byte_at(&src, line_of(&src, r.head) + 1, col),
+                        Motion::Down => {
+                            crate::geometry::byte_at_vcol(&src, line_of(&src, r.head) + 1, col, ts)
+                        }
                     };
                     let anchor = if extend { r.anchor } else { target };
                     Selection::range(anchor, target)
@@ -385,7 +598,11 @@ pub(crate) fn apply_key(
                 .collect();
             select_many(Selections::new(moved, primary_idx.min(last)));
             if !is_multi && !matches!(motion, Motion::Up | Motion::Down) {
-                goal.set(col_of(&src, state.peek().primary().head));
+                goal.set(crate::geometry::vcol_of(
+                    &src,
+                    state.peek().primary().head,
+                    cfg.tab_size,
+                ));
             }
         }
         KeyInput::SelectAll => select_many(Selections::single(Selection::range(0, len))),
@@ -510,6 +727,18 @@ pub(crate) fn apply_key(
                         },
                         Coalesce::Never,
                     );
+                } else if !is_multi && p.contains('\n') {
+                    // Indent on paste: re-base the pasted block's indentation onto the caret
+                    // line's indentation when the caret sits in leading whitespace.
+                    let at = primary.min();
+                    let ls = line_start(&src, at);
+                    let before = &src[ls..at];
+                    let text = if before.chars().all(|c| c == ' ' || c == '\t') {
+                        crate::ops::reindent_paste(p.trim_start_matches([' ', '\t']), before)
+                    } else {
+                        p.clone()
+                    };
+                    replace(&text, Coalesce::Never);
                 } else {
                     replace(&p, Coalesce::Never);
                 }

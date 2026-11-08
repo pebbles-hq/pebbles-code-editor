@@ -26,10 +26,12 @@ mod ide;
 mod samples;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    Theme::dark().make_current();
+    // The window follows the system light/dark setting (the default `ThemeMode::System`);
+    // `SHOT=` captures pin dark so the docs screenshots stay as they were.
     #[cfg(not(target_family = "wasm"))]
     {
         if let Ok(spec) = std::env::var("SHOT") {
+            set_theme_mode(ThemeMode::Dark);
             return capture::shot(
                 &spec,
                 || ide::ide().into_widget(),

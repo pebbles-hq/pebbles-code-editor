@@ -20,6 +20,9 @@ impl Language for Rust {
     fn line_comment(&self) -> Option<&str> {
         Some("//")
     }
+    fn block_comment(&self) -> Option<(&str, &str)> {
+        Some(("/*", "*/"))
+    }
     fn name(&self) -> &str {
         "Rust"
     }

@@ -31,6 +31,9 @@ impl Language for CLike {
         // Hash-comment languages (Python-family via CLike) use `#`; C-family use `//`.
         Some(if self.0.hash_comments { "#" } else { "//" })
     }
+    fn block_comment(&self) -> Option<(&str, &str)> {
+        (!self.0.hash_comments).then_some(("/*", "*/"))
+    }
     fn highlight(&self, src: &str) -> Vec<Token> {
         let g = self.0;
         let mut out = Vec::new();
