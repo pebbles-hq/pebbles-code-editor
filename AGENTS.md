@@ -3,6 +3,9 @@
 
 > ## ⚠️ MANDATORY: Coding Standards
 > Before writing ANY code in Pebbles, pebbles-code-editor or Gravel, read **`CODING_STANDARDS.md`** (in each repo root; master copy `/home/reyco/xreyc/pebbles-hq/documentations/coding-standards.md`). Its MUST rules are hard requirements: no IO/process spawns/parsing in render paths, fine-grained reactivity, worker pool for slow work, zero idle frames/wakeups, no polling, bounded caches, state freed on close, lazy loading, no heavy dependencies. Every commit must keep `perf_budget` + `memory_soak` green in release and include the §9 checklist + before/after numbers in its message. A change that violates a MUST rule is **not done** and must be reverted or fixed, even if its feature works.
+>
+> ## ⚠️ MANDATORY: UI & Feature-Completeness Standards
+> Also read **`UI_FEATURE_STANDARDS.md`** (repo root; master `/home/reyco/xreyc/pebbles-hq/documentations/ui-feature-standards.md`). A feature is done only when every spec item works end to end in the real app (no stubs, no dead controls), every control has hover/pressed/selected/focus/disabled feedback, it reuses Gravel's shared components and matches neighbouring views' sizes/alignment/colours, loading/empty/error states are designed, it is keyboard accessible, and every action/menu item is tested with real pointer/key events. Commits include its Part G checklist and screenshots. Never tick a checklist item that isn't working in the real app.
 
 This repo is part of the owner's pebbles-hq workspace. **Read the full handoff first:**
 `/home/reyco/xreyc/pebbles-hq/AGENTS.md` (workspace root; the same text is committed in the Gravel repo as `AGENTS.md`).
