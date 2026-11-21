@@ -1,0 +1,202 @@
+//! [`EditorController`] — drive the editor's caret, selection and scroll from the host
+//! (Flutter's `TextEditingController` / Monaco's `editor.setPosition` + `revealLine`).
+//!
+//! Positions are **0-based** `(line, column)`, columns counted in `char`s (Unicode scalar
+//! values), clamped to the document. Requests are queued and applied by the editor on its next
+//! render — so "open file at line N" works even when the same handler also switches the
+//! document (the request lands on the newly mounted editor, not the old one).
+
+use pebbles::prelude::*;
+
+/// A queued host request.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Request {
+    /// Collapse the selection to a caret at `(line, col)`.
+    Cursor(usize, usize),
+    /// Select from `anchor` to `head` (the caret ends at `head`).
+    Select((usize, usize), (usize, usize)),
+    /// Set every selection: `(anchor, head)` pairs, the first the primary.
+    SelectMany(Vec<((usize, usize), (usize, usize))>),
+    /// Scroll so `line` is at the top of the viewport (with a one-line margin).
+    ScrollTo(usize),
+    /// Bring `line` into view centred, unless it is already visible (no scroll then).
+    Reveal(usize),
+    /// Give the editor keyboard focus.
+    Focus,
+    /// Run a built-in editor command.
+    Run(crate::actions::EditorCommand),
+    /// Run a built-in's editing intent.
+    Builtin(crate::keymap::BuiltinCommand),
+    /// Format the document through the language service, then publish the ticket.
+    FormatForSave(u64),
+    /// Apply text edits as one undo step (a workspace edit from the host).
+    ApplyEdits(Vec<crate::language::TextEdit>),
+    /// Drop cached language-service results and ask again.
+    Refresh(Refresh),
+    /// Insert a snippet body (VS Code snippet syntax) over the primary selection.
+    InsertSnippet(String),
+}
+
+/// Which language-service results [`EditorController::refresh`] re-requests — the LSP
+/// `workspace/inlayHint/refresh`, `workspace/codeLens/refresh` and
+/// `workspace/semanticTokens/refresh` server requests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refresh {
+    /// `textDocument/inlayHint` for the viewport.
+    InlayHints,
+    /// `textDocument/codeLens`.
+    CodeLens,
+    /// `textDocument/semanticTokens` (a full request, not a delta).
+    SemanticTokens,
+    /// Forget cached hovers (their content changed without an edit — a debugger's
+    /// hover values after a step) and close the open one.
+    Hover,
+}
+
+/// A handle for driving an editor programmatically. `Copy`; create it with
+/// [`editor_controller`] in the host component and pass it to
+/// [`CodeEditor::controller`](crate::CodeEditor::controller).
+///
+/// ```ignore
+/// let ctrl = editor_controller();
+/// // open at line 42 (0-based 41), column 0, and focus the editor:
+/// ctrl.set_cursor(41, 0);
+/// ctrl.focus();
+/// code_editor(code).height(600.0).controller(ctrl)
+/// ```
+#[derive(Clone, Copy)]
+pub struct EditorController {
+    pub(crate) requests: Signal<Vec<Request>>,
+    pub(crate) cursor: Signal<(usize, usize)>,
+    pub(crate) visual_col: Signal<usize>,
+    pub(crate) indentation: Signal<(usize, bool)>,
+    pub(crate) save_ready: Signal<u64>,
+    pub(crate) ticket: Signal<u64>,
+}
+
+/// Create an [`EditorController`] (a hook: call it at the top level of a component, or at app
+/// scope).
+pub fn editor_controller() -> EditorController {
+    EditorController {
+        requests: create_signal(Vec::new()),
+        cursor: create_signal((0, 0)),
+        visual_col: create_signal(0),
+        indentation: create_signal((4, true)),
+        save_ready: create_signal(0),
+        ticket: create_signal(0),
+    }
+}
+
+impl EditorController {
+    /// Move the caret to `(line, col)` (0-based, char columns), clearing any selection. A
+    /// fixed-height editor scrolls it into view.
+    pub fn set_cursor(&self, line: usize, col: usize) {
+        self.requests.update(|r| r.push(Request::Cursor(line, col)));
+    }
+
+    /// Select from `anchor` to `head` (each `(line, col)`, 0-based); the caret ends at `head`.
+    pub fn select(&self, anchor: (usize, usize), head: (usize, usize)) {
+        self.requests
+            .update(|r| r.push(Request::Select(anchor, head)));
+    }
+
+    /// Set every selection (multi-cursor) — VS Code's `editor.selections = […]`: each is an
+    /// `(anchor, head)` pair of `(line, col)` (0-based, char columns); the FIRST is the
+    /// primary. Overlapping ranges merge; an empty list is ignored.
+    pub fn set_selections(&self, selections: Vec<((usize, usize), (usize, usize))>) {
+        if selections.is_empty() {
+            return;
+        }
+        self.requests
+            .update(|r| r.push(Request::SelectMany(selections)));
+    }
+
+    /// Scroll a fixed-height editor so `line` (0-based) is at the top of the viewport.
+    pub fn scroll_to(&self, line: usize) {
+        self.requests.update(|r| r.push(Request::ScrollTo(line)));
+    }
+
+    /// Reveal `line` (0-based) the way VS Code reveals a navigation target
+    /// (`revealRangeInCenterIfOutsideViewport`): no scroll when it is already in view,
+    /// else centred in the viewport.
+    pub fn reveal_line(&self, line: usize) {
+        self.requests.update(|r| r.push(Request::Reveal(line)));
+    }
+
+    /// Give the editor keyboard focus.
+    pub fn focus(&self) {
+        self.requests.update(|r| r.push(Request::Focus));
+    }
+
+    /// Run a built-in [`EditorCommand`](crate::EditorCommand) — e.g. on save:
+    /// `TrimTrailingWhitespace` + `InsertFinalNewline` (VS Code `files.*` save actions), or
+    /// any command from a host menu.
+    pub fn run_command(&self, cmd: crate::actions::EditorCommand) {
+        self.requests.update(|r| r.push(Request::Run(cmd)));
+    }
+
+    /// Run a built-in's editing intent (Find, Format, Ctrl+D, …) as if its chord were
+    /// pressed — for a host that resolves keys itself and disabled the defaults.
+    pub fn run_builtin(&self, cmd: crate::keymap::BuiltinCommand) {
+        self.requests.update(|r| r.push(Request::Builtin(cmd)));
+    }
+
+    /// Format on save (VS Code `editor.formatOnSave`): format the document through the
+    /// language service and return a ticket; [`save_ready`](Self::save_ready) becomes that
+    /// ticket once the edits are applied (or right away when there is no formatter, it
+    /// declined, or the reply was dropped because the text changed). Write the file then.
+    pub fn format_for_save(&self) -> u64 {
+        let t = self.ticket.peek() + 1;
+        self.ticket.set(t);
+        self.requests.update(|r| r.push(Request::FormatForSave(t)));
+        t
+    }
+
+    /// Apply LSP text edits (UTF-16 ranges in the current text) to the document as ONE undo
+    /// step, carets mapped through them — how a host applies a workspace edit (rename in
+    /// another file, `workspace/applyEdit`) to an open editor. Overlapping edits after the
+    /// first are skipped, as VS Code does.
+    pub fn apply_edits(&self, edits: Vec<crate::language::TextEdit>) {
+        self.requests.update(|r| r.push(Request::ApplyEdits(edits)));
+    }
+
+    /// Re-request a language feature for the current document even though the text did not
+    /// change (the server asked for a refresh, e.g. after a project reload).
+    pub fn refresh(&self, what: Refresh) {
+        self.requests.update(|r| r.push(Request::Refresh(what)));
+    }
+
+    /// Insert `body` (VS Code / LSP snippet syntax: `$1`, `${1:default}`, `${1|a,b|}`,
+    /// variables, `$0`) over the primary selection and start its tab-stop session — VS Code's
+    /// "Insert Snippet" (`editor.action.insertSnippet`). `$TM_SELECTED_TEXT` is the replaced
+    /// selection.
+    pub fn insert_snippet(&self, body: impl Into<String>) {
+        let body = body.into();
+        self.requests
+            .update(|r| r.push(Request::InsertSnippet(body)));
+    }
+
+    /// The last finished [`format_for_save`](Self::format_for_save) ticket (reactive).
+    pub fn save_ready(&self) -> Signal<u64> {
+        self.save_ready
+    }
+
+    /// The primary caret's `(line, col)` (0-based, char columns) — reactive: reading it with
+    /// `.get()` inside a component re-renders on caret moves (e.g. a "Ln 3, Col 7" status).
+    pub fn cursor(&self) -> Signal<(usize, usize)> {
+        self.cursor
+    }
+
+    /// The editor's effective indentation `(tab size, insert spaces)` — the configured
+    /// values, or the detected ones with `detect_indentation` — what VS Code's status bar
+    /// shows as "Spaces: 4" / "Tab Size: 4". Reactive.
+    pub fn indentation(&self) -> Signal<(usize, bool)> {
+        self.indentation
+    }
+
+    /// The primary caret's 0-based VISUAL column: tabs count up to their tab stop
+    /// (`editor.tabSize`) — what VS Code's status bar shows as "Col" (plus one). Reactive.
+    pub fn visual_col(&self) -> Signal<usize> {
+        self.visual_col
+    }
+}

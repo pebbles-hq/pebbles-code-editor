@@ -59,10 +59,7 @@ fn render_search(p: &SearchProps) -> AnyWidget {
                         row(children![
                             icon(tabler::FILE).size(12.0).color(c.muted_foreground),
                             gap_w(6.0),
-                            text(f.path.clone())
-                                .size(12.0)
-                                .weight(600.0)
-                                .color(c.foreground),
+                            text(f.path.clone()).size(12.0).weight(600.0),
                         ])
                         .cross_axis_alignment(CrossAxisAlignment::Center),
                     )
