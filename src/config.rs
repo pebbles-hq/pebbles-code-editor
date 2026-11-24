@@ -164,6 +164,8 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         match_brackets: true,
         semantic: None,
         completion: None,
+        completion_triggers: Vec::new(),
+        completion_overlay: false,
         language_service: None,
         document_uri: None,
         hover: None,
@@ -270,6 +272,8 @@ pub struct CodeEditor {
     match_brackets: bool,
     semantic: Option<Signal<Vec<Token>>>,
     completion: Option<CompletionProvider>,
+    completion_triggers: Vec<String>,
+    completion_overlay: bool,
     language_service: Option<std::rc::Rc<dyn crate::language::LanguageService>>,
     document_uri: Option<String>,
     hover: Option<HoverProvider>,
@@ -511,6 +515,18 @@ impl CodeEditor {
     /// The autocomplete source (Ctrl+Space, and as you type). See [`CompletionProvider`].
     pub fn completion(mut self, provider: CompletionProvider) -> Self {
         self.completion = Some(provider);
+        self
+    }
+    /// Characters that open the [`completion`](Self::completion) popup as they're typed
+    /// (`.`), when no language service names its own.
+    pub fn completion_triggers(mut self, chars: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.completion_triggers = chars.into_iter().map(Into::into).collect();
+        self
+    }
+    /// Show the completion popup in the window's overlay layer, so an editor shorter than
+    /// the popup (a one-line field) doesn't clip it.
+    pub fn completion_overlay(mut self, on: bool) -> Self {
+        self.completion_overlay = on;
         self
     }
     /// The language intelligence (an LSP client): completion, hover, navigation, edits, …
@@ -1051,6 +1067,8 @@ pub(crate) struct Props {
     pub(crate) match_brackets: bool,
     pub(crate) semantic: Option<Signal<Vec<Token>>>,
     pub(crate) completion: Option<CompletionProvider>,
+    pub(crate) completion_triggers: Vec<String>,
+    pub(crate) completion_overlay: bool,
     pub(crate) language_service: Option<std::rc::Rc<dyn crate::language::LanguageService>>,
     pub(crate) document_uri: String,
     pub(crate) hover: Option<HoverProvider>,
@@ -1193,6 +1211,8 @@ impl From<CodeEditor> for Props {
             match_brackets,
             semantic: e.semantic,
             completion: e.completion,
+            completion_triggers: e.completion_triggers,
+            completion_overlay: e.completion_overlay,
             language_service: e.language_service,
             document_uri: e
                 .document_uri

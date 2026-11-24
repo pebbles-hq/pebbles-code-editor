@@ -763,6 +763,10 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         grab: create_signal(None),
     };
     let completion = create_signal::<Option<completion::Session>>(None); // autocomplete popup
+    // `completion_overlay`: the content's window origin (from the last press) and whether
+    // the popup is up in the window's passive layer (so a short editor doesn't clip it).
+    let overlay_origin = create_signal::<Option<(f64, f64)>>(None);
+    let overlay_shown = create_signal(false);
     // Stale-reply gates for completion / resolve requests (persist across re-renders).
     // The live snippet session (tab stops), if any.
     let snippet = create_signal::<Option<crate::snippet::SnippetSession>>(None);
@@ -1281,7 +1285,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             triggers: host
                 .as_ref()
                 .map(|h| h.completion_trigger_characters())
-                .unwrap_or_default(),
+                .unwrap_or_else(|| p.completion_triggers.clone()),
             host,
             local: crate::snippets::with_snippets(local, snips.clone(), unit.clone()),
             snippets: crate::snippets::with_snippets(None, snips, unit),
@@ -3154,8 +3158,19 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         }
     }
     let mut completion_slot = None;
-    if let Some(sess) = completion.peek() {
-        completion_slot = Some(completion::popup(&sess, &frame));
+    match (completion.peek(), p.completion_overlay.then(|| overlay_origin.peek()).flatten()) {
+        (Some(sess), Some((ox, oy))) => {
+            let (w, x, y) = completion::popup_parts(&sess, &frame);
+            pebbles::widgets::show_passive(w, ox + x, oy + y);
+            overlay_shown.set(true);
+        }
+        (Some(sess), None) => completion_slot = Some(completion::popup(&sess, &frame)),
+        (None, _) => {
+            if overlay_shown.peek() {
+                pebbles::widgets::hide_passive();
+                overlay_shown.set(false);
+            }
+        }
     }
     // Hover (service-driven, shown after the pointer dwells or by Ctrl+K Ctrl+I).
     let hover_slot = lsp_ctl.hover_layer(&frame);
@@ -3507,6 +3522,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         .cursor(text_cursor)
         .on_pointer_down(action_event(move |e| {
             focus.request_focus();
+            overlay_origin.set(Some((e.global.x - e.position.x, e.global.y - e.position.y)));
             let alt = pebbles::core::keyboard::alt_held();
             let shift = pebbles::core::keyboard::shift_held();
             drag_anchor.set(Some(e.position)); // remember where a drag begins

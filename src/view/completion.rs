@@ -647,6 +647,12 @@ fn kind_icon(
 /// details, right-aligned detail) and, beside it, the details + documentation pane for the
 /// highlighted item (Markdown rendered by [`super::markdown`]).
 pub(crate) fn popup(s: &Session, f: &crate::view::Frame) -> AnyWidget {
+    let (w, x, y) = popup_parts(s, f);
+    Positioned::new(w).left(x).top(y).into_widget()
+}
+
+/// The popup's panel and where it goes, in the editor content's coordinates.
+pub(crate) fn popup_parts(s: &Session, f: &crate::view::Frame) -> (AnyWidget, f64, f64) {
     const ROWS: usize = 12;
     let (theme, fs, line_px) = (f.theme, f.fs, f.line_px);
     let line = f.li.line_of(f.src, s.anchor);
@@ -778,15 +784,13 @@ pub(crate) fn popup(s: &Session, f: &crate::view::Frame) -> AnyWidget {
                 .into_widget(),
         );
     }
-    Positioned::new(crate::view::popup_shield(
+    let w = crate::view::popup_shield(
         f,
         row(parts)
             .cross_axis_alignment(CrossAxisAlignment::Start)
             .main_axis_size(MainAxisSize::Min),
-    ))
-    .left(x)
-    .top(y)
-    .into_widget()
+    );
+    (w, x, y)
 }
 
 #[cfg(test)]
