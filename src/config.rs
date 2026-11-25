@@ -158,6 +158,7 @@ pub fn code_editor(code: Signal<String>) -> CodeEditor {
         render_whitespace: false,
         rulers: Vec::new(),
         minimap: false,
+        scrollbars: true,
         sticky_scroll: false,
         folding: true,
         auto_close: true,
@@ -266,6 +267,7 @@ pub struct CodeEditor {
     render_whitespace: bool,
     rulers: Vec<usize>,
     minimap: bool,
+    scrollbars: bool,
     sticky_scroll: bool,
     folding: bool,
     auto_close: bool,
@@ -481,6 +483,12 @@ impl CodeEditor {
     /// Only shown when the editor has a fixed `height`. Default off.
     pub fn minimap(mut self, on: bool) -> Self {
         self.minimap = on;
+        self
+    }
+    /// Scrollbars (default on). Off for one-line inputs, like VS Code's single-line
+    /// editors: no bars and no strip reserved for them; the caret still scrolls the text.
+    pub fn scrollbars(mut self, on: bool) -> Self {
+        self.scrollbars = on;
         self
     }
     /// Pin the enclosing scopes (by indentation) to the top as you scroll — "sticky scroll".
@@ -1061,6 +1069,7 @@ pub(crate) struct Props {
     pub(crate) render_whitespace: bool,
     pub(crate) rulers: Vec<usize>,
     pub(crate) minimap: bool,
+    pub(crate) scrollbars: bool,
     pub(crate) sticky_scroll: bool,
     pub(crate) folding: bool,
     pub(crate) auto_close: bool,
@@ -1205,6 +1214,7 @@ impl From<CodeEditor> for Props {
             render_whitespace,
             rulers: e.rulers,
             minimap: e.minimap,
+            scrollbars: e.scrollbars,
             sticky_scroll: e.sticky_scroll,
             folding: e.folding,
             auto_close,

@@ -2297,7 +2297,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             // The wrap width is the text area: the viewport minus the gutter, the side panels and
             // the vertical scrollbar's strip (text never runs under the bar).
             // (The overview ruler is drawn inside the bar.)
-            let side = scrollbar::SIZE + if p.minimap { 84.0 } else { 0.0 };
+            let side = if p.scrollbars { scrollbar::SIZE } else { 0.0 } + if p.minimap { 84.0 } else { 0.0 };
             (((bounds.width() - gutter_w_est - side - pad_l * 2.0) / advance).floor() as isize)
                 .max(8) as usize
         } else {
@@ -3481,7 +3481,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
         - gutter_w_est
         - if p.minimap { 84.0 } else { 0.0 }
         - 1.0
-        - scrollbar::SIZE)
+        - if p.scrollbars { scrollbar::SIZE } else { 0.0 })
         .max(0.0);
     let content_w = if wrap_cols > 0 {
         None
@@ -3843,7 +3843,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
             // The horizontal bar reads `scroll_left`: its own slice, so a sideways scroll
             // never re-renders the editor (whether it shows doesn't depend on the offset).
             let hb = content_w
-                .filter(|&cw| h_view > 0.0 && cw > h_view + 0.5)
+                .filter(|&cw| p.scrollbars && h_view > 0.0 && cw > h_view + 0.5)
                 .map(|cw| {
                     let (fd, hs) = (fd.clone(), hscroll.clone());
                     slice("hbar", move || {
@@ -3892,7 +3892,7 @@ fn render_editor_body(props: &Rc<Props>) -> AnyWidget {
                 extent,
             )
             .map(|t| Rc::from(t) as Rc<dyn Fn(&mut Canvas<'_>)>);
-            {
+            if p.scrollbars {
                 let (fd, scroll) = (fd.clone(), scroll.clone());
                 parts.push(slice("vbar", move || {
                     let track = track.clone().map(|t| {
