@@ -56,7 +56,7 @@ pub fn bar(ws: Workspace) -> AnyWidget {
                 .into_widget()
         } else {
             icon_button(IconKind::Close)
-                .size(13.0)
+                .icon_size(13.0)
                 .on_pressed(move || ws_close.close_file(idx))
                 .into_widget()
         };

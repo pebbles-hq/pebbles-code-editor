@@ -22,29 +22,22 @@ pub(crate) fn diff(old: &str, new: &str) -> Option<Edit> {
     if old == new {
         return None;
     }
-    let o: Vec<(usize, char)> = old.char_indices().collect();
-    let n: Vec<(usize, char)> = new.char_indices().collect();
-    // Common prefix (in chars).
-    let mut i = 0;
-    while i < o.len() && i < n.len() && o[i].1 == n[i].1 {
-        i += 1;
+    // Byte-level prefix/suffix (chunked slice compares — this runs on every keystroke over
+    // the whole document), then snapped back to char boundaries in BOTH texts. Equal bytes
+    // mean equal chars, so this is the same edit as a char-by-char trim.
+    let (ob, nb) = (old.as_bytes(), new.as_bytes());
+    let mut p = crate::lines::common_prefix(ob, nb);
+    while !(old.is_char_boundary(p) && new.is_char_boundary(p)) {
+        p -= 1;
     }
-    // Common suffix (in chars), not overlapping the prefix.
-    let mut j = 0;
-    while j < (o.len() - i) && j < (n.len() - i) && o[o.len() - 1 - j].1 == n[n.len() - 1 - j].1 {
-        j += 1;
+    let mut s = crate::lines::common_suffix(ob, nb, ob.len().min(nb.len()) - p);
+    while !(old.is_char_boundary(old.len() - s) && new.is_char_boundary(new.len() - s)) {
+        s -= 1;
     }
-    let byte = |v: &[(usize, char)], idx: usize, total_len: usize| {
-        v.get(idx).map(|c| c.0).unwrap_or(total_len)
-    };
-    let from = byte(&o, i, old.len());
-    let to = byte(&o, o.len() - j, old.len());
-    let ins_start = byte(&n, i, new.len());
-    let ins_end = byte(&n, n.len() - j, new.len());
     Some(Edit {
-        from,
-        to,
-        insert: new[ins_start..ins_end].to_string(),
+        from: p,
+        to: old.len() - s,
+        insert: new[p..new.len() - s].to_string(),
     })
 }
 
@@ -63,6 +56,77 @@ pub(crate) fn map_pos(pos: usize, e: &Edit) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The original char-by-char trim, kept as the reference for the byte-level `diff`.
+    fn diff_chars(old: &str, new: &str) -> Option<Edit> {
+        if old == new {
+            return None;
+        }
+        let o: Vec<(usize, char)> = old.char_indices().collect();
+        let n: Vec<(usize, char)> = new.char_indices().collect();
+        let mut i = 0;
+        while i < o.len() && i < n.len() && o[i].1 == n[i].1 {
+            i += 1;
+        }
+        let mut j = 0;
+        while j < (o.len() - i) && j < (n.len() - i) && o[o.len() - 1 - j].1 == n[n.len() - 1 - j].1
+        {
+            j += 1;
+        }
+        let byte = |v: &[(usize, char)], idx: usize, total: usize| {
+            v.get(idx).map(|c| c.0).unwrap_or(total)
+        };
+        let ins_start = byte(&n, i, new.len());
+        let ins_end = byte(&n, n.len() - j, new.len());
+        Some(Edit {
+            from: byte(&o, i, old.len()),
+            to: byte(&o, o.len() - j, old.len()),
+            insert: new[ins_start..ins_end].to_string(),
+        })
+    }
+
+    #[test]
+    fn diff_matches_char_reference_for_random_edits() {
+        let alphabet = ["a", "b", "é", "è", "日", "本", "\n", " ", "🦀"];
+        let mut x: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut rnd = |n: usize| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            (x % n as u64) as usize
+        };
+        for _ in 0..3000 {
+            let mk = |r: &mut dyn FnMut(usize) -> usize| -> String {
+                (0..r(400)).map(|_| alphabet[r(alphabet.len())]).collect()
+            };
+            let base = mk(&mut rnd);
+            let mut a = base.clone();
+            let mut b = base;
+            // Mutate each side a little so they share long prefixes/suffixes.
+            for t in [&mut a, &mut b] {
+                if rnd(2) == 0 {
+                    let cut: Vec<char> = t.chars().collect();
+                    let at = rnd(cut.len() + 1);
+                    let to = (at + rnd(4)).min(cut.len());
+                    let ins = alphabet[rnd(alphabet.len())];
+                    *t = cut[..at].iter().collect::<String>()
+                        + ins
+                        + &cut[to..].iter().collect::<String>();
+                }
+            }
+            assert_eq!(diff(&a, &b), diff_chars(&a, &b), "{a:?} -> {b:?}");
+        }
+        for (a, b) in [
+            ("aéa", "aèa"),
+            ("é", "è"),
+            ("", "x"),
+            ("x", ""),
+            ("ab", "aab"),
+            ("🦀", "日"),
+        ] {
+            assert_eq!(diff(a, b), diff_chars(a, b), "{a:?} -> {b:?}");
+        }
+    }
 
     #[test]
     fn diff_insert_in_middle() {

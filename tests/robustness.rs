@@ -19,6 +19,11 @@ const SIZE: Size = Size {
 
 /// Mount a fully-featured editor (language + height + folding-capable) on `initial`.
 fn editor(initial: &str) -> (Ui, TextEnv, Signal<String>) {
+    editor_in(initial, Box::new(lang::Rust))
+}
+
+/// [`editor`] with a chosen language.
+fn editor_in(initial: &str, language: Box<dyn lang::Language>) -> (Ui, TextEnv, Signal<String>) {
     pebbles::widgets::overlay::init();
     pebbles::core::focus::init();
     pebbles::core::keyboard::set_modifiers(false, false, false, false);
@@ -29,7 +34,7 @@ fn editor(initial: &str) -> (Ui, TextEnv, Signal<String>) {
         View::new(
             white(),
             code_editor(code)
-                .language(Box::new(lang::Rust))
+                .language(language)
                 .theme(EditorTheme::dark())
                 .height(300.0)
                 .soft_wrap(true)
@@ -191,5 +196,43 @@ fn wrapped_and_folded_extremes_survive() {
         ui.dispatch_scroll(Offset::new(100.0, 100.0), 400.0);
         ui.rebuild_if_dirty();
         ui.layout(&mut env, SIZE);
+    }
+}
+
+/// Owner crash 2026-11-01: opening Gravel's Cargo.toml (`# … — …` comments) panicked in the
+/// colour-decorator scanner, which sliced `&str` at a byte inside the em dash on every
+/// paint. Multi-byte text next to and inside colour / link / tag tokens, in every common
+/// language, must render, scroll and edit.
+#[test]
+fn multibyte_around_decorated_tokens_survives_every_language() {
+    let text = "\
+# pebbles — the UI toolkit; colour #fff— and —#00ff00 rgb( — ) rgb(1,2,3)é hsl(—)
+[package]
+name = \"gravel\" # IDE — VS Code–like 日本語 🎉👩\u{200d}💻 e\u{0301} שלום
+url = \"https://exa—mple.com/é?q=日本\" <div>é</div><é></é> </—x>
+—#abc rgba(255, 0, 0, 50%)— hsla(120, 100%, 50%, 0.5)日 #ffffffff€ \u{0}\u{7f}\t\r
+";
+    for name in [
+        "toml",
+        "rust",
+        "json",
+        "html",
+        "css",
+        "markdown",
+        "yaml",
+        "python",
+        "javascript",
+        "typescript",
+        "go",
+        "c",
+        "sh",
+        "plain",
+    ] {
+        let (mut ui, mut env, _c) = editor_in(text, lang::by_name(name));
+        hammer(&mut ui, &mut env);
+        // Type multi-byte text right after every colour-ish prefix.
+        for s in ["#", "—", "rgb(", "é", "<", "</", "🎉"] {
+            key(&mut ui, &mut env, KeyInput::Insert(s.to_string()));
+        }
     }
 }

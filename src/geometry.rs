@@ -50,7 +50,60 @@ pub(crate) fn col_of(src: &str, byte: usize) -> usize {
         .map(|s| s.chars().count())
         .unwrap_or(0)
 }
-/// Length (in chars) of line `line`.
+/// The visual column of `byte` within its line: tabs advance to the next multiple of `ts`
+/// (VS Code `editor.tabSize`); every other char is one column.
+pub(crate) fn vcol_of(src: &str, byte: usize, ts: usize) -> usize {
+    let ls = line_start(src, byte);
+    let ts = ts.max(1);
+    src.get(ls..byte.min(src.len()))
+        .map(|s| {
+            s.chars()
+                .fold(0, |v, c| if c == '\t' { v + ts - v % ts } else { v + 1 })
+        })
+        .unwrap_or(0)
+}
+/// The byte offset on `line` whose visual column (tabs at `ts`) is nearest `v`: a column
+/// inside a tab lands on its nearer side; clamped to the line's end.
+pub(crate) fn byte_at_vcol(src: &str, line: usize, v: usize, ts: usize) -> usize {
+    let start = line_start_of(src, line);
+    let end = line_end(src, start);
+    let ts = ts.max(1);
+    let mut vc = 0;
+    for (i, c) in src[start..end].char_indices() {
+        let w = if c == '\t' { ts - vc % ts } else { 1 };
+        if vc + w > v {
+            return if w > 1 && (v - vc) * 2 >= w {
+                start + i + c.len_utf8()
+            } else {
+                start + i
+            };
+        }
+        vc += w;
+    }
+    end
+}
+/// `line` with each tab replaced by the spaces reaching its tab stop (`ts`).
+pub(crate) fn expand_tabs(line: &str, ts: usize) -> String {
+    if !line.contains('\t') {
+        return line.to_string();
+    }
+    let ts = ts.max(1);
+    let mut out = String::with_capacity(line.len() + ts);
+    let mut v = 0;
+    for c in line.chars() {
+        if c == '\t' {
+            let w = ts - v % ts;
+            out.extend(std::iter::repeat_n(' ', w));
+            v += w;
+        } else {
+            out.push(c);
+            v += 1;
+        }
+    }
+    out
+}
+/// Length (in chars) of line `line` (the reference `crate::lines::LineIndex` is tested against).
+#[cfg(test)]
 pub(crate) fn line_char_len(src: &str, line: usize) -> usize {
     src.split('\n')
         .nth(line)
@@ -96,7 +149,8 @@ pub(crate) fn line_start_of(src: &str, line: usize) -> usize {
 
 /// The byte offset one char before `byte`.
 pub(crate) fn prev_char(src: &str, byte: usize) -> usize {
-    src.get(..byte.min(src.len()))
+    let byte = floor_char_boundary(src, byte);
+    src.get(..byte)
         .and_then(|s| s.chars().next_back())
         .map(|ch| byte - ch.len_utf8())
         .unwrap_or(0)
@@ -232,4 +286,15 @@ pub(crate) fn pos_to_grid(
     let col = (((pos.x - pad_l) / advance).round()).max(0.0) as usize;
     let last = src.split('\n').count().saturating_sub(1);
     (line.min(last), col)
+}
+
+/// `pos` clamped to `src.len()` and moved back to the nearest char boundary, so a stale or
+/// mid-character offset (LSP edit, external change, byte-walking scanner) can always be used
+/// to slice `src` without panicking.
+pub(crate) fn floor_char_boundary(src: &str, pos: usize) -> usize {
+    let mut p = pos.min(src.len());
+    while !src.is_char_boundary(p) {
+        p -= 1;
+    }
+    p
 }
